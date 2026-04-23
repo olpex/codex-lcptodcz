@@ -179,10 +179,11 @@ def save_report_file(report_rows: list[dict], report_type: str, export_format: s
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", size=11)
-    pdf.multi_cell(0, 8, f"Звіт: {report_type}")
+    pdf.cell(0, 8, f"Report: {report_type}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
     for row in report_rows[:200]:
-        pdf.multi_cell(0, 7, "; ".join(f"{k}: {v}" for k, v in row.items()))
+        line = "; ".join(f"{k}: {v}" for k, v in row.items()).replace("_", " ")
+        pdf.cell(0, 7, line[:120], new_x="LMARGIN", new_y="NEXT")
     pdf.output(str(out_file))
     return str(out_file), DocumentType.PDF
 

@@ -9,6 +9,7 @@ from app.models.entities import (
     GroupStatus,
     ImportJob,
     JobStatus,
+    MembershipStatus,
     MailMessage,
     MailStatus,
     OCRResult,
@@ -26,4 +27,3 @@ from app.models.entities import (
     User,
     UserRole,
 )
-
