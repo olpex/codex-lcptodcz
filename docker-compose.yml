@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: suptc_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: suptc
+      POSTGRES_USER: suptc
+      POSTGRES_PASSWORD: suptc
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suptc -d suptc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: suptc_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+    container_name: suptc_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - docs_data:/data/documents
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ./backend
+    container_name: suptc_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - docs_data:/data/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_app.celery_app worker --loglevel=info --queues=mail_ingest,ocr_parse,import_parse,report_export
+
+  beat:
+    build:
+      context: ./backend
+    container_name: suptc_beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - docs_data:/data/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: suptc_frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+
+volumes:
+  pg_data:
+  docs_data:
+
