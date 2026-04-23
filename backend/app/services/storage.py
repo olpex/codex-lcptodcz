@@ -7,6 +7,8 @@ from fastapi import UploadFile
 from app.core.config import settings
 from app.models import DocumentType
 
+_resolved_storage_root: Path | None = None
+
 
 def detect_document_type(filename: str | None) -> DocumentType:
     if not filename or "." not in filename:
@@ -24,9 +26,22 @@ def detect_document_type(filename: str | None) -> DocumentType:
 
 
 def storage_path() -> Path:
-    root = Path(settings.file_storage_path)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    global _resolved_storage_root
+    if _resolved_storage_root is not None:
+        return _resolved_storage_root
+
+    primary = Path(settings.file_storage_path)
+    candidates = [primary, Path("/tmp/documents"), Path("./tmp/documents")]
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            _resolved_storage_root = candidate
+            return candidate
+        except OSError:
+            continue
+
+    raise OSError("Не вдалося ініціалізувати файлове сховище документів")
 
 
 def persist_upload(upload: UploadFile) -> tuple[str, str]:
@@ -44,4 +59,3 @@ def persist_upload(upload: UploadFile) -> tuple[str, str]:
             sha.update(chunk)
             destination.write(chunk)
     return str(out_path), sha.hexdigest()
-

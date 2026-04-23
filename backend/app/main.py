@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -10,6 +8,7 @@ from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
 from app.models import Role, RoleName, Room, Subject, Teacher, User
+from app.services.storage import storage_path
 
 
 def seed_reference_data(db: Session) -> None:
@@ -83,7 +82,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         Base.metadata.create_all(bind=engine)
-        Path(settings.file_storage_path).mkdir(parents=True, exist_ok=True)
+        storage_path()
         db = SessionLocal()
         try:
             seed_reference_data(db)
