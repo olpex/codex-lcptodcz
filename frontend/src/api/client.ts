@@ -37,10 +37,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
         ? payload.message
         : `API помилка ${response.status} (${requestUrl})`;
-    const message =
+    const detail =
       payload && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string"
         ? payload.detail
-        : fallback;
+        : null;
+    const message = detail ? `${detail} (${requestUrl})` : fallback;
     const error = new Error(message) as Error & { status?: number };
     error.status = response.status;
     throw error;
