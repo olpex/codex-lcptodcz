@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, require_roles
 from app.models import DraftStatus, MailMessage, OCRResult, Order, OrderType, RoleName, Trainee
-from app.schemas.api import DraftApproveResponse, DraftResponse, MailMessageResponse
+from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, MailMessageResponse
 from app.services.audit import write_audit
 from app.tasks.worker import poll_mailbox_task, process_ocr_task
 
@@ -38,6 +38,50 @@ def list_mail_messages(db: DbSession, _: CurrentUser) -> list[MailMessageRespons
 def list_drafts(db: DbSession, _: CurrentUser) -> list[DraftResponse]:
     rows = db.query(OCRResult).order_by(OCRResult.created_at.desc()).all()
     return [DraftResponse.model_validate(row) for row in rows]
+
+
+@router.get("/drafts/{draft_id}", response_model=DraftResponse)
+def get_draft(draft_id: int, db: DbSession, _: CurrentUser) -> DraftResponse:
+    row = db.get(OCRResult, draft_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    return DraftResponse.model_validate(row)
+
+
+@router.patch(
+    "/drafts/{draft_id}",
+    response_model=DraftResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def update_draft(
+    draft_id: int,
+    payload: DraftUpdateRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> DraftResponse:
+    draft = db.get(OCRResult, draft_id)
+    if not draft:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    if draft.status == DraftStatus.APPROVED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтверджену чернетку не можна редагувати")
+
+    draft.structured_payload = payload.structured_payload
+    if payload.draft_type:
+        draft.draft_type = payload.draft_type
+    if payload.confidence is not None:
+        draft.confidence = payload.confidence
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="draft.update",
+        entity_type="ocr_result",
+        entity_id=str(draft.id),
+    )
+    return DraftResponse.model_validate(draft)
 
 
 @router.post(
@@ -113,4 +157,3 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
         details={"created_entity": created_entity},
     )
     return DraftApproveResponse(draft_id=draft.id, status=draft.status, created_entity=created_entity)
-

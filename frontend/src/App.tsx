@@ -6,6 +6,7 @@ import { DocumentsPage } from "./pages/DocumentsPage";
 import { DraftsPage } from "./pages/DraftsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { LoginPage } from "./pages/LoginPage";
+import { OrdersPage } from "./pages/OrdersPage";
 import { SchedulePage } from "./pages/SchedulePage";
 import { TraineesPage } from "./pages/TraineesPage";
 import { WorkloadPage } from "./pages/WorkloadPage";
@@ -29,6 +30,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="trainees" element={<TraineesPage />} />
+        <Route path="orders" element={<OrdersPage />} />
         <Route path="schedule" element={<SchedulePage />} />
         <Route path="workload" element={<WorkloadPage />} />
         <Route path="documents" element={<DocumentsPage />} />
@@ -38,4 +40,3 @@ export default function App() {
     </Routes>
   );
 }
-

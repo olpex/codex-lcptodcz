@@ -22,5 +22,6 @@ Thumbs.db
 
 # Data
 backend/data/
+backend/tests/test.db
+backend/tests/_storage/
 tmp/
-

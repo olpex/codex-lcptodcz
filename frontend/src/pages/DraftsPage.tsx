@@ -1,14 +1,48 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import type { Draft, MailMessage } from "../types/api";
 
+type EditablePayload = {
+  first_name?: string;
+  last_name?: string;
+  status?: string;
+  order_number?: string;
+};
+
 export function DraftsPage() {
-  const { request } = useAuth();
+  const { request, user } = useAuth();
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [messages, setMessages] = useState<MailMessage[]>([]);
+  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
+  const [draftType, setDraftType] = useState("trainee_card");
+  const [confidence, setConfidence] = useState(0.75);
+  const [payload, setPayload] = useState<EditablePayload>({});
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const canEdit = useMemo(
+    () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
+    [user]
+  );
+
+  const selectedDraft = useMemo(
+    () => drafts.find((draft) => draft.id === selectedDraftId) || null,
+    [drafts, selectedDraftId]
+  );
+
+  const applyDraftToForm = (draft: Draft) => {
+    const draftPayload = (draft.structured_payload || {}) as EditablePayload;
+    setSelectedDraftId(draft.id);
+    setDraftType(draft.draft_type || "trainee_card");
+    setConfidence(Number.isFinite(draft.confidence) ? draft.confidence : 0.75);
+    setPayload({
+      first_name: typeof draftPayload.first_name === "string" ? draftPayload.first_name : "",
+      last_name: typeof draftPayload.last_name === "string" ? draftPayload.last_name : "",
+      status: typeof draftPayload.status === "string" ? draftPayload.status : "draft",
+      order_number: typeof draftPayload.order_number === "string" ? draftPayload.order_number : ""
+    });
+  };
 
   const load = async () => {
     setError("");
@@ -19,6 +53,13 @@ export function DraftsPage() {
       ]);
       setDrafts(draftRows);
       setMessages(mailRows);
+
+      if (!selectedDraftId && draftRows.length > 0) {
+        applyDraftToForm(draftRows[0]);
+      } else if (selectedDraftId) {
+        const refreshed = draftRows.find((item) => item.id === selectedDraftId);
+        if (refreshed) applyDraftToForm(refreshed);
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -37,10 +78,52 @@ export function DraftsPage() {
     }
   };
 
-  const approveDraft = async (draftId: number) => {
+  const saveDraft = async () => {
+    if (!selectedDraftId) return;
     try {
-      await request(`/drafts/${draftId}/approve`, { method: "POST" });
-      setNotice(`Чернетка ${draftId} підтверджена`);
+      const nextPayload: EditablePayload =
+        draftType === "order"
+          ? {
+              order_number: payload.order_number || `AUTO-${selectedDraftId}`,
+              status: payload.status || "draft"
+            }
+          : {
+              first_name: payload.first_name || "Невідомо",
+              last_name: payload.last_name || "Невідомо",
+              status: payload.status || "active"
+            };
+
+      await request<Draft>(`/drafts/${selectedDraftId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          draft_type: draftType,
+          confidence,
+          structured_payload: nextPayload
+        })
+      });
+      setNotice(`Чернетка ${selectedDraftId} збережена`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const approveDraft = async () => {
+    if (!selectedDraftId) return;
+    try {
+      await request(`/drafts/${selectedDraftId}/approve`, { method: "POST" });
+      setNotice(`Чернетка ${selectedDraftId} підтверджена`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const reprocessDraft = async () => {
+    if (!selectedDraftId) return;
+    try {
+      await request(`/drafts/${selectedDraftId}/reprocess`, { method: "POST" });
+      setNotice(`Чернетка ${selectedDraftId} надіслана на повторний парсинг`);
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -53,9 +136,11 @@ export function DraftsPage() {
       {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
       <Panel title="Вхідна кореспонденція">
         <div className="mb-3 flex items-center gap-3">
-          <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={pollNow}>
-            Опитати пошту зараз
-          </button>
+          {canEdit && (
+            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={pollNow}>
+              Опитати пошту зараз
+            </button>
+          )}
           <button className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
             Оновити
           </button>
@@ -83,40 +168,169 @@ export function DraftsPage() {
           </table>
         </div>
       </Panel>
-      <Panel title="Чернетки OCR">
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">ID</th>
-                <th className="px-2 py-2">Тип</th>
-                <th className="px-2 py-2">Довіра</th>
-                <th className="px-2 py-2">Статус</th>
-                <th className="px-2 py-2">Дія</th>
-              </tr>
-            </thead>
-            <tbody>
-              {drafts.map((draft) => (
-                <tr key={draft.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2">{draft.id}</td>
-                  <td className="px-2 py-2">{draft.draft_type}</td>
-                  <td className="px-2 py-2">{(draft.confidence * 100).toFixed(0)}%</td>
-                  <td className="px-2 py-2">{draft.status}</td>
-                  <td className="px-2 py-2">
-                    <button
-                      disabled={draft.status === "approved"}
-                      className="rounded-lg bg-pine px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                      onClick={() => approveDraft(draft.id)}
-                    >
-                      Підтвердити
-                    </button>
-                  </td>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_1fr]">
+        <Panel title="Чернетки OCR">
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-slate-600">
+                  <th className="px-2 py-2">ID</th>
+                  <th className="px-2 py-2">Тип</th>
+                  <th className="px-2 py-2">Довіра</th>
+                  <th className="px-2 py-2">Статус</th>
+                  <th className="px-2 py-2">Вибір</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
+              </thead>
+              <tbody>
+                {drafts.map((draft) => (
+                  <tr key={draft.id} className="border-b border-slate-100">
+                    <td className="px-2 py-2">{draft.id}</td>
+                    <td className="px-2 py-2">{draft.draft_type}</td>
+                    <td className="px-2 py-2">{(draft.confidence * 100).toFixed(0)}%</td>
+                    <td className="px-2 py-2">{draft.status}</td>
+                    <td className="px-2 py-2">
+                      <button
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                          draft.id === selectedDraftId ? "bg-pine text-white" : "bg-slate-100 text-slate-700"
+                        }`}
+                        onClick={() => applyDraftToForm(draft)}
+                      >
+                        Відкрити
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+
+        <Panel title="Редактор чернетки">
+          {!selectedDraft ? (
+            <p className="text-sm text-slate-600">Оберіть чернетку зі списку.</p>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                ID: <span className="font-semibold text-ink">{selectedDraft.id}</span>
+              </p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Тип</span>
+                  <select
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    value={draftType}
+                    onChange={(event) => setDraftType(event.target.value)}
+                  >
+                    <option value="trainee_card">Картка слухача</option>
+                    <option value="order">Наказ</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Довіра (0..1)
+                  </span>
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                    value={confidence}
+                    onChange={(event) => setConfidence(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+
+              {draftType === "order" ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Номер наказу"
+                    value={payload.order_number || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, order_number: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Статус"
+                    value={payload.status || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, status: event.target.value }))}
+                  />
+                </div>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Ім'я"
+                    value={payload.first_name || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, first_name: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Прізвище"
+                    value={payload.last_name || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, last_name: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2 md:col-span-2"
+                    placeholder="Статус"
+                    value={payload.status || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, status: event.target.value }))}
+                  />
+                </div>
+              )}
+
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  OCR текст (read-only)
+                </span>
+                <textarea
+                  readOnly
+                  className="min-h-28 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm"
+                  value={selectedDraft.extracted_text || ""}
+                />
+              </label>
+
+              <div className="flex flex-wrap gap-2">
+                {canEdit && (
+                  <button
+                    disabled={selectedDraft.status === "approved"}
+                    className="rounded-lg bg-pine px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                    onClick={saveDraft}
+                  >
+                    Зберегти зміни
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    disabled={selectedDraft.status === "approved"}
+                    className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-40"
+                    onClick={approveDraft}
+                  >
+                    Підтвердити
+                  </button>
+                )}
+                {canEdit && (
+                  <button
+                    disabled={selectedDraft.status === "approved"}
+                    className="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 disabled:opacity-40"
+                    onClick={reprocessDraft}
+                  >
+                    Перепарсити OCR
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 }

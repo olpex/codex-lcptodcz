@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{(Path(__file__).parent / 'test.db').as_posix()}")
+runtime_dir = Path(__file__).parents[2] / "tmp" / "pytest"
+runtime_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{(runtime_dir / 'test.db').as_posix()}")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DATA_ENCRYPTION_KEY", "")
-os.environ.setdefault("FILE_STORAGE_PATH", (Path(__file__).parent / "_storage").as_posix())
+os.environ.setdefault("FILE_STORAGE_PATH", (runtime_dir / "storage").as_posix())
 os.environ.setdefault("INITIAL_ADMIN_USERNAME", "admin")
 os.environ.setdefault("INITIAL_ADMIN_PASSWORD", "Admin123!")
 

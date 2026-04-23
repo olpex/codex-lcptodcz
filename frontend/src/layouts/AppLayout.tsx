@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { to: "/", label: uiText.menu.dashboard },
   { to: "/groups", label: uiText.menu.groups },
   { to: "/trainees", label: uiText.menu.trainees },
+  { to: "/orders", label: uiText.menu.orders },
   { to: "/schedule", label: uiText.menu.schedule },
   { to: "/workload", label: uiText.menu.workload },
   { to: "/documents", label: uiText.menu.documents },
@@ -57,4 +58,3 @@ export function AppLayout() {
     </div>
   );
 }
-

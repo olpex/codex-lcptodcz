@@ -5,6 +5,7 @@ export const uiText = {
     dashboard: "Дашборд",
     groups: "Групи",
     trainees: "Слухачі",
+    orders: "Накази",
     schedule: "Розклад",
     workload: "Навантаження",
     documents: "Документи",
@@ -20,4 +21,3 @@ export const uiText = {
     approve: "Підтвердити"
   }
 };
-

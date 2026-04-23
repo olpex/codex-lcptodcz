@@ -79,6 +79,7 @@ export interface Draft {
   draft_type: string;
   status: "pending" | "approved" | "rejected";
   confidence: number;
+  extracted_text: string;
   structured_payload: Record<string, unknown> | null;
 }
 
@@ -91,3 +92,13 @@ export interface MailMessage {
   status: string;
 }
 
+export interface Order {
+  id: number;
+  order_number: string;
+  order_type: "enrollment" | "expulsion" | "internal";
+  order_date: string;
+  status: string;
+  payload_json: Record<string, unknown> | null;
+  created_by: number | null;
+  created_at: string;
+}

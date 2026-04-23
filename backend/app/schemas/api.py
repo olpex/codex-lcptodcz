@@ -258,12 +258,18 @@ class DraftResponse(ORMModel):
     draft_type: str
     status: DraftStatus
     confidence: float
+    extracted_text: str
     structured_payload: dict[str, Any] | None
     created_at: datetime
+
+
+class DraftUpdateRequest(BaseModel):
+    draft_type: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    structured_payload: dict[str, Any]
 
 
 class DraftApproveResponse(BaseModel):
     draft_id: int
     status: DraftStatus
     created_entity: dict[str, Any] | None = None
-
