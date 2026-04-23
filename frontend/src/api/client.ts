@@ -14,18 +14,33 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers
-  });
+  const requestUrl = `${API_URL}${path}`;
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      ...options,
+      headers
+    });
+  } catch {
+    const error = new Error(`Не вдалося підключитися до API (${API_URL})`) as Error & { status?: number };
+    error.status = 0;
+    throw error;
+  }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
-  const payload = await response.json().catch(() => ({}));
+  const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = payload?.detail || "Помилка API";
+    const fallback =
+      payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
+        ? payload.message
+        : `API помилка ${response.status} (${requestUrl})`;
+    const message =
+      payload && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string"
+        ? payload.detail
+        : fallback;
     const error = new Error(message) as Error & { status?: number };
     error.status = response.status;
     throw error;
