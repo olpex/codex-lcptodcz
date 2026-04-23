@@ -7,6 +7,7 @@ import { DraftsPage } from "./pages/DraftsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OrdersPage } from "./pages/OrdersPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { SchedulePage } from "./pages/SchedulePage";
 import { TraineesPage } from "./pages/TraineesPage";
 import { WorkloadPage } from "./pages/WorkloadPage";
@@ -28,6 +29,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<GuardedLayout />}>
         <Route index element={<DashboardPage />} />
+        <Route path="profile" element={<ProfilePage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="trainees" element={<TraineesPage />} />
         <Route path="orders" element={<OrdersPage />} />

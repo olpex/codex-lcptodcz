@@ -4,9 +4,9 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import CurrentUser, DbSession, request_meta, revoke_refresh_token
-from app.core.security import create_access_token, create_refresh_token, decode_token, verify_password
+from app.core.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 from app.models import RefreshToken, User
-from app.schemas.api import LoginRequest, RefreshRequest, TokenPairResponse, UserResponse
+from app.schemas.api import ChangePasswordRequest, LoginRequest, MessageResponse, RefreshRequest, TokenPairResponse, UserResponse
 from app.services.audit import write_audit
 
 router = APIRouter()
@@ -118,3 +118,33 @@ def logout(payload: RefreshRequest, current_user: CurrentUser, db: DbSession) ->
 @router.get("/me", response_model=UserResponse)
 def me(current_user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/change-password", response_model=MessageResponse)
+def change_password(payload: ChangePasswordRequest, current_user: CurrentUser, db: DbSession) -> MessageResponse:
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Поточний пароль невірний")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Новий пароль має відрізнятися від поточного")
+
+    current_user.password_hash = hash_password(payload.new_password)
+    db.add(current_user)
+
+    active_refresh_tokens = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id == current_user.id, RefreshToken.revoked_at.is_(None))
+        .all()
+    )
+    for token in active_refresh_tokens:
+        token.revoked_at = datetime.now(timezone.utc)
+        db.add(token)
+
+    db.commit()
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="auth.change_password",
+        entity_type="user",
+        entity_id=str(current_user.id),
+    )
+    return MessageResponse(message="Пароль успішно змінено")

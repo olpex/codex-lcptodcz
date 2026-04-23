@@ -4,6 +4,7 @@ import { uiText } from "../i18n/uk";
 
 const NAV_ITEMS = [
   { to: "/", label: uiText.menu.dashboard },
+  { to: "/profile", label: uiText.menu.profile },
   { to: "/groups", label: uiText.menu.groups },
   { to: "/trainees", label: uiText.menu.trainees },
   { to: "/orders", label: uiText.menu.orders },

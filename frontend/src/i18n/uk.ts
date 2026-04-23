@@ -3,6 +3,7 @@ export const uiText = {
   appSubtitle: "Система управління професійно-технічним центром",
   menu: {
     dashboard: "Дашборд",
+    profile: "Профіль",
     groups: "Групи",
     trainees: "Слухачі",
     orders: "Накази",
