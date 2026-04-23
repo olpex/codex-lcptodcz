@@ -12,10 +12,16 @@ const ORDER_TYPES = [
 export function OrdersPage() {
   const { request, user } = useAuth();
   const [rows, setRows] = useState<Order[]>([]);
+  const [notice, setNotice] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderType, setOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [status, setStatus] = useState("draft");
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editOrderNumber, setEditOrderNumber] = useState("");
+  const [editOrderDate, setEditOrderDate] = useState(new Date().toISOString().slice(0, 10));
+  const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
+  const [editStatus, setEditStatus] = useState("draft");
   const [error, setError] = useState("");
 
   const canEdit = useMemo(
@@ -28,6 +34,14 @@ export function OrdersPage() {
     try {
       const data = await request<Order[]>("/orders");
       setRows(data);
+      if (editId) {
+        const current = data.find((item) => item.id === editId);
+        if (current) {
+          beginEdit(current);
+        } else {
+          resetEdit();
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -53,6 +67,57 @@ export function OrdersPage() {
       });
       setOrderNumber("");
       setStatus("draft");
+      setNotice("Наказ створено");
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const beginEdit = (row: Order) => {
+    setEditId(row.id);
+    setEditOrderNumber(row.order_number);
+    setEditOrderDate(row.order_date.slice(0, 10));
+    setEditOrderType(row.order_type);
+    setEditStatus(row.status);
+  };
+
+  const resetEdit = () => {
+    setEditId(null);
+    setEditOrderNumber("");
+    setEditOrderDate(new Date().toISOString().slice(0, 10));
+    setEditOrderType("internal");
+    setEditStatus("draft");
+  };
+
+  const saveEdit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canEdit || !editId) return;
+    try {
+      await request<Order>(`/orders/${editId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          order_number: editOrderNumber,
+          order_type: editOrderType,
+          order_date: editOrderDate,
+          status: editStatus
+        })
+      });
+      setNotice(`Наказ ${editOrderNumber} оновлено`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const deleteOrder = async (orderId: number) => {
+    if (!canEdit) return;
+    try {
+      await request<void>(`/orders/${orderId}`, { method: "DELETE" });
+      setNotice(`Наказ #${orderId} видалено`);
+      if (editId === orderId) {
+        resetEdit();
+      }
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -62,6 +127,7 @@ export function OrdersPage() {
   return (
     <div className="space-y-5">
       {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
+      {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
       {canEdit && (
         <Panel title="Створити наказ">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={createOrder}>
@@ -101,6 +167,54 @@ export function OrdersPage() {
           </form>
         </Panel>
       )}
+      {canEdit && editId && (
+        <Panel title={`Редагувати наказ #${editId}`}>
+          <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={saveEdit}>
+            <input
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Номер наказу"
+              value={editOrderNumber}
+              onChange={(event) => setEditOrderNumber(event.target.value)}
+              required
+            />
+            <select
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              value={editOrderType}
+              onChange={(event) => setEditOrderType(event.target.value as (typeof ORDER_TYPES)[number]["value"])}
+            >
+              {ORDER_TYPES.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              value={editOrderDate}
+              onChange={(event) => setEditOrderDate(event.target.value)}
+              required
+            />
+            <input
+              className="rounded-lg border border-slate-300 px-3 py-2"
+              placeholder="Статус"
+              value={editStatus}
+              onChange={(event) => setEditStatus(event.target.value)}
+              required
+            />
+            <div className="flex gap-2">
+              <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">Зберегти</button>
+              <button
+                type="button"
+                className="rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-700"
+                onClick={resetEdit}
+              >
+                Скасувати
+              </button>
+            </div>
+          </form>
+        </Panel>
+      )}
       <Panel title="Реєстр наказів">
         <button className="mb-3 rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
           Оновити
@@ -114,6 +228,7 @@ export function OrdersPage() {
                 <th className="px-2 py-2">Дата</th>
                 <th className="px-2 py-2">Статус</th>
                 <th className="px-2 py-2">Створено</th>
+                {canEdit && <th className="px-2 py-2">Дії</th>}
               </tr>
             </thead>
             <tbody>
@@ -124,6 +239,24 @@ export function OrdersPage() {
                   <td className="px-2 py-2">{new Date(row.order_date).toLocaleDateString("uk-UA")}</td>
                   <td className="px-2 py-2">{row.status}</td>
                   <td className="px-2 py-2">{new Date(row.created_at).toLocaleString("uk-UA")}</td>
+                  {canEdit && (
+                    <td className="px-2 py-2">
+                      <div className="flex gap-2">
+                        <button
+                          className="rounded-lg bg-pine px-3 py-1.5 text-xs font-semibold text-white"
+                          onClick={() => beginEdit(row)}
+                        >
+                          Редагувати
+                        </button>
+                        <button
+                          className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700"
+                          onClick={() => deleteOrder(row.id)}
+                        >
+                          Видалити
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -133,4 +266,3 @@ export function OrdersPage() {
     </div>
   );
 }
-
