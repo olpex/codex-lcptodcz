@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import CurrentUser, DbSession, request_meta, revoke_refresh_token
 from app.core.security import create_access_token, create_refresh_token, decode_token, verify_password
@@ -13,7 +14,13 @@ router = APIRouter()
 
 @router.post("/login", response_model=TokenPairResponse)
 def login(payload: LoginRequest, request: Request, db: DbSession) -> TokenPairResponse:
-    user = db.query(User).filter(User.username == payload.username).first()
+    try:
+        user = db.query(User).filter(User.username == payload.username).first()
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="База даних недоступна. Перевірте DATABASE_URL.",
+        ) from exc
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Невірний логін або пароль")
     if not user.is_active:
