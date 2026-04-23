@@ -32,6 +32,16 @@ def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
             return "inline_failed"
 
 
+def _with_dispatch_notice(job: JobResponse, dispatch_mode: str) -> JobResponse:
+    if dispatch_mode == "inline":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга тимчасово недоступна. Операцію виконано одразу в API.{suffix}"
+    elif dispatch_mode == "inline_failed":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга недоступна, а inline-виконання завершилось помилкою.{suffix}"
+    return job
+
+
 @router.post(
     "/import",
     response_model=JobResponse,
@@ -86,7 +96,7 @@ def import_document(
         entity_id=str(job.id),
         details={"document_id": document.id, "file_name": document.file_name, "dispatch_mode": dispatch_mode},
     )
-    return JobResponse.model_validate(job)
+    return _with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode)
 
 
 @router.post(
@@ -127,4 +137,4 @@ def export_report(
         entity_id=str(job.id),
         details={"report_type": payload.report_type, "format": payload.export_format, "dispatch_mode": dispatch_mode},
     )
-    return JobResponse.model_validate(job)
+    return _with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode)
