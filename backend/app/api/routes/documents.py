@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from celery.utils.log import get_task_logger
 
 from app.api.deps import CurrentUser, DbSession, require_roles
 from app.models import Document, ExportJob, ImportJob, JobStatus, RoleName
@@ -10,6 +11,25 @@ from app.services.storage import detect_document_type, persist_upload
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
 router = APIRouter()
+logger = get_task_logger(__name__)
+
+
+def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
+    """
+    Try queue-first dispatch. If broker is unavailable (common in serverless),
+    run synchronously in-process to avoid API 500 on import/export actions.
+    """
+    try:
+        task.delay(job_id)
+        return "queued"
+    except Exception as queue_exc:
+        logger.warning("Queue dispatch failed for %s job %s: %s", job_kind, job_id, queue_exc)
+        try:
+            task.run(job_id)
+            return "inline"
+        except Exception as inline_exc:
+            logger.exception("Inline execution failed for %s job %s: %s", job_kind, job_id, inline_exc)
+            return "inline_failed"
 
 
 @router.post(
@@ -56,14 +76,15 @@ def import_document(
     db.commit()
     db.refresh(job)
 
-    process_import_job_task.delay(job.id)
+    dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "import")
+    db.refresh(job)
     write_audit(
         db,
         actor_user_id=current_user.id,
         action="documents.import.create_job",
         entity_type="import_job",
         entity_id=str(job.id),
-        details={"document_id": document.id, "file_name": document.file_name},
+        details={"document_id": document.id, "file_name": document.file_name, "dispatch_mode": dispatch_mode},
     )
     return JobResponse.model_validate(job)
 
@@ -96,14 +117,14 @@ def export_report(
     db.commit()
     db.refresh(job)
 
-    process_export_job_task.delay(job.id)
+    dispatch_mode = _dispatch_with_fallback(process_export_job_task, job.id, "export")
+    db.refresh(job)
     write_audit(
         db,
         actor_user_id=current_user.id,
         action="documents.export.create_job",
         entity_type="export_job",
         entity_id=str(job.id),
-        details={"report_type": payload.report_type, "format": payload.export_format},
+        details={"report_type": payload.report_type, "format": payload.export_format, "dispatch_mode": dispatch_mode},
     )
     return JobResponse.model_validate(job)
-
