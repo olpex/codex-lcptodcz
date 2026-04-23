@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     initial_admin_username: str = Field(default="admin")
     initial_admin_password: str = Field(default="Admin123!")
     initial_admin_full_name: str = Field(default="Системний адміністратор")
+    admin_password_reset_token: str = Field(default="")
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -58,4 +59,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

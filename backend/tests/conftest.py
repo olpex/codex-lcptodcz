@@ -12,6 +12,7 @@ os.environ.setdefault("DATA_ENCRYPTION_KEY", "")
 os.environ.setdefault("FILE_STORAGE_PATH", (runtime_dir / "storage").as_posix())
 os.environ.setdefault("INITIAL_ADMIN_USERNAME", "admin")
 os.environ.setdefault("INITIAL_ADMIN_PASSWORD", "Admin123!")
+os.environ.setdefault("ADMIN_PASSWORD_RESET_TOKEN", "test-admin-reset-token")
 
 from app.db.session import Base, SessionLocal, engine  # noqa: E402
 from app.main import app, seed_reference_data  # noqa: E402

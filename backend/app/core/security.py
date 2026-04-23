@@ -8,14 +8,25 @@ from passlib.context import CryptContext
 from app.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+MAX_BCRYPT_PASSWORD_BYTES = 72
+
+
+def validate_password_length(password: str) -> None:
+    if len(password.encode("utf-8")) > MAX_BCRYPT_PASSWORD_BYTES:
+        raise ValueError("Пароль має бути не довший за 72 байти у кодуванні UTF-8")
 
 
 def hash_password(password: str) -> str:
+    validate_password_length(password)
     return pwd_context.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+    try:
+        validate_password_length(password)
+        return pwd_context.verify(password, password_hash)
+    except ValueError:
+        return False
 
 
 def create_access_token(subject: str, extra_claims: Dict[str, Any] | None = None) -> tuple[str, datetime]:
@@ -48,4 +59,3 @@ def create_refresh_token(subject: str, jti: str | None = None) -> tuple[str, dat
 
 def decode_token(token: str) -> Dict[str, Any]:
     return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
-

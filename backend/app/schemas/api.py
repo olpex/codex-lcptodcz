@@ -20,8 +20,14 @@ class RefreshRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(min_length=1, max_length=255)
-    new_password: str = Field(min_length=8, max_length=255)
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(min_length=8, max_length=72)
+
+
+class AdminResetPasswordRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100, default="admin")
+    reset_token: str = Field(min_length=1, max_length=255)
+    new_password: str = Field(min_length=8, max_length=72)
 
 
 class MessageResponse(BaseModel):

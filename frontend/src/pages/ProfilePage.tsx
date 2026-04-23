@@ -24,6 +24,10 @@ export function ProfilePage() {
       setError("Новий пароль має містити щонайменше 8 символів");
       return;
     }
+    if (newPassword.length > 72) {
+      setError("Новий пароль має містити не більше 72 символів");
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setError("Підтвердження пароля не співпадає");
       return;
@@ -74,6 +78,7 @@ export function ProfilePage() {
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
+              maxLength={72}
               required
             />
           </label>
@@ -85,6 +90,7 @@ export function ProfilePage() {
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               minLength={8}
+              maxLength={72}
               required
             />
           </label>
@@ -96,6 +102,7 @@ export function ProfilePage() {
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               minLength={8}
+              maxLength={72}
               required
             />
           </label>
@@ -115,4 +122,3 @@ export function ProfilePage() {
     </div>
   );
 }
-

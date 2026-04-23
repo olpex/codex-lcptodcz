@@ -1,12 +1,22 @@
 from datetime import datetime, timezone
+from hmac import compare_digest
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import CurrentUser, DbSession, request_meta, revoke_refresh_token
+from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 from app.models import RefreshToken, User
-from app.schemas.api import ChangePasswordRequest, LoginRequest, MessageResponse, RefreshRequest, TokenPairResponse, UserResponse
+from app.schemas.api import (
+    AdminResetPasswordRequest,
+    ChangePasswordRequest,
+    LoginRequest,
+    MessageResponse,
+    RefreshRequest,
+    TokenPairResponse,
+    UserResponse,
+)
 from app.services.audit import write_audit
 
 router = APIRouter()
@@ -118,6 +128,54 @@ def logout(payload: RefreshRequest, current_user: CurrentUser, db: DbSession) ->
 @router.get("/me", response_model=UserResponse)
 def me(current_user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/admin-reset-password", response_model=MessageResponse)
+def admin_reset_password(payload: AdminResetPasswordRequest, request: Request, db: DbSession) -> MessageResponse:
+    configured_reset_token = settings.admin_password_reset_token.strip()
+    if not configured_reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Скидання пароля не налаштовано. Вкажіть ADMIN_PASSWORD_RESET_TOKEN.",
+        )
+
+    if not compare_digest(payload.reset_token, configured_reset_token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Невірний токен скидання")
+
+    target_username = payload.username.strip()
+    if target_username != settings.initial_admin_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Дозволено скидання лише для користувача {settings.initial_admin_username}",
+        )
+
+    target_user = db.query(User).filter(User.username == target_username).first()
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Користувач не знайдений")
+
+    target_user.password_hash = hash_password(payload.new_password)
+    db.add(target_user)
+
+    active_refresh_tokens = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id == target_user.id, RefreshToken.revoked_at.is_(None))
+        .all()
+    )
+    for token in active_refresh_tokens:
+        token.revoked_at = datetime.now(timezone.utc)
+        db.add(token)
+
+    db.commit()
+    user_agent, ip = request_meta(request)
+    write_audit(
+        db,
+        actor_user_id=None,
+        action="auth.admin_reset_password",
+        entity_type="user",
+        entity_id=str(target_user.id),
+        details={"username": target_username, "ip": ip, "user_agent": user_agent},
+    )
+    return MessageResponse(message="Пароль адміністратора скинуто. Увійдіть з новим паролем.")
 
 
 @router.post("/change-password", response_model=MessageResponse)
