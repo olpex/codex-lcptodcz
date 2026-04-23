@@ -34,3 +34,25 @@
    - новий пароль.
 
 Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
+
+## Тестування
+
+- Backend unit/integration/contracts:
+  - `pytest backend/tests -q`
+- Frontend e2e (Playwright):
+  - `cd frontend && npm run test:e2e`
+- Інтеграційний стек із реальними PostgreSQL + Redis:
+  - `docker compose -f infra/tests/docker-compose.integration.yml up --build --abort-on-container-exit`
+
+Покриття включає:
+- RBAC/Auth/JWT/refresh,
+- OCR-чернетки та їх підтвердження,
+- контракти імпорту `.xlsx/.pdf/.docx` і структури експорту `.xlsx/.pdf/.csv`,
+- базовий perf-test KPI endpoint.
+
+## Production на Vercel
+
+Для черг Celery (`worker`, `beat`) потрібен окремий хостинг процесів поза Vercel.
+
+- Інструкція: `infra/vercel/README.md`
+- Compose-файл: `infra/vercel/docker-compose.workers.yml`

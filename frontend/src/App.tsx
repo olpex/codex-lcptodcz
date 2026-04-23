@@ -23,6 +23,22 @@ function GuardedLayout() {
   return <AppLayout />;
 }
 
+function RoleGuard({
+  allowedRoles,
+  children
+}: {
+  allowedRoles: Array<"admin" | "methodist" | "teacher">;
+  children: JSX.Element;
+}) {
+  const { user } = useAuth();
+  const userRoles = user?.roles.map((role) => role.name) ?? [];
+  const hasAccess = allowedRoles.some((role) => userRoles.includes(role));
+  if (!hasAccess) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -30,13 +46,62 @@ export default function App() {
       <Route path="/" element={<GuardedLayout />}>
         <Route index element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
-        <Route path="groups" element={<GroupsPage />} />
-        <Route path="trainees" element={<TraineesPage />} />
-        <Route path="orders" element={<OrdersPage />} />
-        <Route path="schedule" element={<SchedulePage />} />
-        <Route path="workload" element={<WorkloadPage />} />
-        <Route path="documents" element={<DocumentsPage />} />
-        <Route path="drafts" element={<DraftsPage />} />
+        <Route
+          path="groups"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <GroupsPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="trainees"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <TraineesPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="orders"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <OrdersPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="schedule"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <SchedulePage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="workload"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <WorkloadPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="documents"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <DocumentsPage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="drafts"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <DraftsPage />
+            </RoleGuard>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

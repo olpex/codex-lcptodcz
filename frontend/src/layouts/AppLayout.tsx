@@ -3,20 +3,22 @@ import { useAuth } from "../context/AuthContext";
 import { uiText } from "../i18n/uk";
 
 const NAV_ITEMS = [
-  { to: "/", label: uiText.menu.dashboard },
-  { to: "/profile", label: uiText.menu.profile },
-  { to: "/groups", label: uiText.menu.groups },
-  { to: "/trainees", label: uiText.menu.trainees },
-  { to: "/orders", label: uiText.menu.orders },
-  { to: "/schedule", label: uiText.menu.schedule },
-  { to: "/workload", label: uiText.menu.workload },
-  { to: "/documents", label: uiText.menu.documents },
-  { to: "/drafts", label: uiText.menu.drafts }
+  { to: "/", label: uiText.menu.dashboard, roles: ["admin", "methodist", "teacher"] as const },
+  { to: "/profile", label: uiText.menu.profile, roles: ["admin", "methodist", "teacher"] as const },
+  { to: "/groups", label: uiText.menu.groups, roles: ["admin", "methodist"] as const },
+  { to: "/trainees", label: uiText.menu.trainees, roles: ["admin", "methodist"] as const },
+  { to: "/orders", label: uiText.menu.orders, roles: ["admin", "methodist"] as const },
+  { to: "/schedule", label: uiText.menu.schedule, roles: ["admin", "methodist", "teacher"] as const },
+  { to: "/workload", label: uiText.menu.workload, roles: ["admin", "methodist", "teacher"] as const },
+  { to: "/documents", label: uiText.menu.documents, roles: ["admin", "methodist"] as const },
+  { to: "/drafts", label: uiText.menu.drafts, roles: ["admin", "methodist"] as const }
 ];
 
 export function AppLayout() {
   const { user, logout } = useAuth();
-  const roles = user?.roles.map((role) => role.name).join(", ") || "—";
+  const userRoles = user?.roles.map((role) => role.name) || [];
+  const roles = userRoles.join(", ") || "—";
+  const visibleItems = NAV_ITEMS.filter((item) => item.roles.some((role) => userRoles.includes(role)));
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
       <header className="border-b border-pine/10 bg-white/80 backdrop-blur">
@@ -37,7 +39,7 @@ export function AppLayout() {
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-4 py-6 md:grid-cols-[220px_1fr]">
         <aside className="rounded-2xl bg-white p-3 shadow-card">
           <nav className="space-y-1">
-            {NAV_ITEMS.map((item) => (
+            {visibleItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

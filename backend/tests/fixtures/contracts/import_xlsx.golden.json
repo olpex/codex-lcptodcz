@@ -1,0 +1,20 @@
+{
+  "rows": 2,
+  "headers": [
+    "first_name",
+    "last_name",
+    "status"
+  ],
+  "data": [
+    {
+      "first_name": "Іван",
+      "last_name": "Петренко",
+      "status": "active"
+    },
+    {
+      "first_name": "Марина",
+      "last_name": "Іваненко",
+      "status": "completed"
+    }
+  ]
+}

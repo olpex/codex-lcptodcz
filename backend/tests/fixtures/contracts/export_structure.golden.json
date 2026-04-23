@@ -1,0 +1,23 @@
+{
+  "trainees": [
+    "id",
+    "first_name",
+    "last_name",
+    "status",
+    "created_at"
+  ],
+  "teacher_workload": [
+    "teacher_id",
+    "teacher_name",
+    "total_hours",
+    "amount_uah"
+  ],
+  "kpi": [
+    "metric",
+    "value"
+  ],
+  "form_1pa": [
+    "field",
+    "value"
+  ]
+}

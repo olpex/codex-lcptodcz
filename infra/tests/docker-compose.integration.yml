@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: suptc_test
+      POSTGRES_USER: suptc
+      POSTGRES_PASSWORD: suptc
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suptc -d suptc_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  integration-tests:
+    build:
+      context: ../../backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://suptc:suptc@postgres:5432/suptc_test
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: test-secret-key
+      DATA_ENCRYPTION_KEY: ""
+      FILE_STORAGE_PATH: /tmp/test-docs
+      INITIAL_ADMIN_USERNAME: admin
+      INITIAL_ADMIN_PASSWORD: Admin123!
+      ADMIN_PASSWORD_RESET_TOKEN: test-admin-reset-token
+      IMAP_HOST: imap.example.com
+      IMAP_PORT: "993"
+      IMAP_USER: inbox@example.com
+      IMAP_PASSWORD: secret
+    command: pytest tests/integration tests/contracts tests/perf -q

@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  worker:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      # У production використовуємо зовнішню БД (наприклад Supabase).
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - docs_data:/data/documents
+    depends_on:
+      - redis
+    command: celery -A app.celery_app.celery_app worker --loglevel=info --queues=mail_ingest,ocr_parse,import_parse,report_export
+
+  beat:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - docs_data:/data/documents
+    depends_on:
+      - redis
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
+
+volumes:
+  docs_data:

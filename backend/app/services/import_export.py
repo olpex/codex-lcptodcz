@@ -26,6 +26,11 @@ from app.models import (
 from app.services.storage import storage_path
 
 
+def _safe_pdf_text(value: str) -> str:
+    # Built-in FPDF fonts only support latin-1; replace unsupported chars to avoid runtime crash.
+    return value.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     if doc_type == DocumentType.XLSX:
         workbook = load_workbook(file_path, data_only=True)
@@ -179,11 +184,11 @@ def save_report_file(report_rows: list[dict], report_type: str, export_format: s
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", size=11)
-    pdf.cell(0, 8, f"Report: {report_type}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, _safe_pdf_text(f"Report: {report_type}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
     for row in report_rows[:200]:
         line = "; ".join(f"{k}: {v}" for k, v in row.items()).replace("_", " ")
-        pdf.cell(0, 7, line[:120], new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 7, _safe_pdf_text(line[:120]), new_x="LMARGIN", new_y="NEXT")
     pdf.output(str(out_file))
     return str(out_file), DocumentType.PDF
 
