@@ -1,8 +1,9 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
 import { Panel } from "../components/Panel";
+import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
@@ -14,6 +15,22 @@ type JobStatusPayload = {
 };
 
 type NoticeTone = "info" | "success" | "error";
+type KnownJobType = "import" | "export";
+type KnownJobStatus = Job["status"];
+
+type KnownJob = {
+  jobType: KnownJobType;
+  status: KnownJobStatus;
+};
+
+type DiagnosticsSnapshot = {
+  total: number;
+  active: number;
+  succeeded: number;
+  failed: number;
+};
+
+const DIAGNOSTICS_HISTORY_LIMIT = 12;
 
 export function DocumentsPage() {
   const { request, accessToken } = useAuth();
@@ -30,6 +47,42 @@ export function DocumentsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [, setKnownJobs] = useState<Record<number, KnownJob>>({});
+  const [diagnosticsHistory, setDiagnosticsHistory] = useState<DiagnosticsSnapshot[]>([]);
+
+  const buildSnapshot = (registry: Record<number, KnownJob>): DiagnosticsSnapshot => {
+    let active = 0;
+    let succeeded = 0;
+    let failed = 0;
+    for (const item of Object.values(registry)) {
+      if (item.status === "queued" || item.status === "running") active += 1;
+      if (item.status === "succeeded") succeeded += 1;
+      if (item.status === "failed") failed += 1;
+    }
+    return {
+      total: Object.keys(registry).length,
+      active,
+      succeeded,
+      failed
+    };
+  };
+
+  const appendSnapshot = (registry: Record<number, KnownJob>) => {
+    const snapshot = buildSnapshot(registry);
+    setDiagnosticsHistory((prev) => {
+      const next = [...prev, snapshot];
+      if (next.length <= DIAGNOSTICS_HISTORY_LIMIT) return next;
+      return next.slice(next.length - DIAGNOSTICS_HISTORY_LIMIT);
+    });
+  };
+
+  const upsertKnownJob = (jobId: number, jobType: KnownJobType, status: KnownJobStatus) => {
+    setKnownJobs((prev) => {
+      const next = { ...prev, [jobId]: { jobType, status } };
+      appendSnapshot(next);
+      return next;
+    });
+  };
 
   const extractOutputDocumentId = (job: Job): number | null => {
     if (!job.result_payload || typeof job.result_payload !== "object") {
@@ -55,6 +108,7 @@ export function DocumentsPage() {
         method: "POST",
         body: formData
       });
+      upsertKnownJob(job.id, "import", job.status);
       setActiveJobId(job.id);
       setActiveJobType("import");
       setActiveJobStatus(job.status);
@@ -77,6 +131,7 @@ export function DocumentsPage() {
         method: "POST",
         body: JSON.stringify({ report_type: reportType, export_format: exportFormat })
       });
+      upsertKnownJob(job.id, "export", job.status);
       setActiveJobId(job.id);
       setActiveJobType("export");
       setActiveJobStatus(job.status);
@@ -97,6 +152,7 @@ export function DocumentsPage() {
     setIsCheckingStatus(true);
     try {
       const response = await request<JobStatusPayload>(`/jobs/${activeJobId}`);
+      upsertKnownJob(response.job.id, response.job_type, response.job.status);
       setActiveJobType(response.job_type);
       setActiveJobStatus(response.job.status);
       setOutputDocumentId(extractOutputDocumentId(response.job));
@@ -153,6 +209,16 @@ export function DocumentsPage() {
       setIsDownloading(false);
     }
   };
+
+  const seriesByKey = useMemo(
+    () => ({
+      total: diagnosticsHistory.map((item) => item.total),
+      active: diagnosticsHistory.map((item) => item.active),
+      succeeded: diagnosticsHistory.map((item) => item.succeeded),
+      failed: diagnosticsHistory.map((item) => item.failed)
+    }),
+    [diagnosticsHistory]
+  );
 
   return (
     <div className="space-y-5">
@@ -217,6 +283,28 @@ export function DocumentsPage() {
       </Panel>
       <Panel title="Статус job">
         {notice && <InlineNotice className="mb-3" tone={notice.tone} text={notice.text} />}
+        <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            { key: "total", title: "Усього задач", series: seriesByKey.total },
+            { key: "active", title: "Активні задачі", series: seriesByKey.active },
+            { key: "succeeded", title: "Успішні задачі", series: seriesByKey.succeeded },
+            { key: "failed", title: "Помилки задач", series: seriesByKey.failed }
+          ].map((item) => {
+            const current = item.series.length ? item.series[item.series.length - 1] : 0;
+            const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;
+            const delta = previous == null ? null : current - previous;
+            return (
+              <TrendStatCard
+                key={item.key}
+                title={item.title}
+                valueLabel={String(current)}
+                delta={delta}
+                series={item.series}
+                sparklineLabel={`${item.title}: тренд за останні оновлення`}
+              />
+            );
+          })}
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <p>
             ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
