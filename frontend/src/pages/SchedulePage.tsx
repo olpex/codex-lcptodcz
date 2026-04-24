@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { ScheduleSlot } from "../types/api";
@@ -13,10 +14,77 @@ type GroupedSchedule = {
   totalHours: number;
 };
 
+type ScheduleSnapshot = {
+  totalLessons: number;
+  totalHours: number;
+  uniqueGroups: number;
+  uniqueTeachers: number;
+  conflicts: number;
+};
+
+const STATS_HISTORY_LIMIT = 12;
+
+function toSlotHours(slot: ScheduleSlot): number {
+  if (typeof slot.academic_hours === "number" && Number.isFinite(slot.academic_hours)) {
+    return slot.academic_hours;
+  }
+  const starts = new Date(slot.starts_at).getTime();
+  const ends = new Date(slot.ends_at).getTime();
+  if (!Number.isFinite(starts) || !Number.isFinite(ends) || ends <= starts) {
+    return 0;
+  }
+  return (ends - starts) / 3_600_000;
+}
+
+function countOverlapInIntervals(intervals: Array<{ start: number; end: number }>): number {
+  if (intervals.length < 2) return 0;
+  const sorted = [...intervals].sort((a, b) => a.start - b.start);
+  let overlaps = 0;
+  let currentEnd = sorted[0].end;
+  for (let index = 1; index < sorted.length; index += 1) {
+    const next = sorted[index];
+    if (next.start < currentEnd) {
+      overlaps += 1;
+      currentEnd = Math.max(currentEnd, next.end);
+    } else {
+      currentEnd = next.end;
+    }
+  }
+  return overlaps;
+}
+
+function countScheduleConflicts(slots: ScheduleSlot[]): number {
+  const teacherMap = new Map<string, Array<{ start: number; end: number }>>();
+  const roomMap = new Map<string, Array<{ start: number; end: number }>>();
+
+  for (const slot of slots) {
+    const start = new Date(slot.starts_at).getTime();
+    const end = new Date(slot.ends_at).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      continue;
+    }
+    const dateKey = slot.starts_at.slice(0, 10);
+    const teacherKey = `${dateKey}:teacher:${slot.teacher_id}`;
+    const roomKey = `${dateKey}:room:${slot.room_id}`;
+    teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), { start, end }]);
+    roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), { start, end }]);
+  }
+
+  let overlaps = 0;
+  for (const intervals of teacherMap.values()) {
+    overlaps += countOverlapInIntervals(intervals);
+  }
+  for (const intervals of roomMap.values()) {
+    overlaps += countOverlapInIntervals(intervals);
+  }
+  return overlaps;
+}
+
 export function SchedulePage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
+  const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [days, setDays] = useState(5);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
@@ -26,11 +94,31 @@ export function SchedulePage() {
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
+  const appendSnapshot = (data: ScheduleSlot[]) => {
+    const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
+    const uniqueGroups = new Set(data.map((slot) => slot.group_id)).size;
+    const uniqueTeachers = new Set(data.map((slot) => slot.teacher_id)).size;
+    const conflicts = countScheduleConflicts(data);
+    const snapshot: ScheduleSnapshot = {
+      totalLessons: data.length,
+      totalHours,
+      uniqueGroups,
+      uniqueTeachers,
+      conflicts
+    };
+    setStatsHistory((prev) => {
+      const next = [...prev, snapshot];
+      if (next.length <= STATS_HISTORY_LIMIT) return next;
+      return next.slice(next.length - STATS_HISTORY_LIMIT);
+    });
+  };
+
   const fetchSchedule = async () => {
     setIsLoading(true);
     try {
       const data = await request<ScheduleSlot[]>("/schedule");
       setSlots(data);
+      appendSnapshot(data);
       setLoadError(null);
     } catch (error) {
       const message = (error as Error).message;
@@ -126,6 +214,17 @@ export function SchedulePage() {
     );
   }, [slots, sortDirection]);
 
+  const seriesByKey = useMemo(
+    () => ({
+      totalLessons: statsHistory.map((item) => item.totalLessons),
+      totalHours: statsHistory.map((item) => item.totalHours),
+      uniqueGroups: statsHistory.map((item) => item.uniqueGroups),
+      uniqueTeachers: statsHistory.map((item) => item.uniqueTeachers),
+      conflicts: statsHistory.map((item) => item.conflicts)
+    }),
+    [statsHistory]
+  );
+
   useEffect(() => {
     if (!groupedSchedule.length) {
       setExpandedDates({});
@@ -197,6 +296,31 @@ export function SchedulePage() {
         </Panel>
       )}
       <Panel title="Поточний розклад">
+        <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            { key: "totalLessons", title: "Заплановані заняття", series: seriesByKey.totalLessons, suffix: "" },
+            { key: "totalHours", title: "Навчальні години", series: seriesByKey.totalHours, suffix: " год" },
+            { key: "uniqueGroups", title: "Унікальні групи", series: seriesByKey.uniqueGroups, suffix: "" },
+            { key: "uniqueTeachers", title: "Унікальні викладачі", series: seriesByKey.uniqueTeachers, suffix: "" },
+            { key: "conflicts", title: "Конфлікти (викл./ауд.)", series: seriesByKey.conflicts, suffix: "" }
+          ].map((item) => {
+            const current = item.series.length ? item.series[item.series.length - 1] : 0;
+            const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;
+            const delta = previous == null ? null : Number((current - previous).toFixed(1));
+            const valueLabel = `${current.toLocaleString("uk-UA")}${item.suffix}`;
+            return (
+              <TrendStatCard
+                key={item.key}
+                title={item.title}
+                valueLabel={valueLabel}
+                delta={delta}
+                deltaSuffix={item.suffix}
+                series={item.series}
+                sparklineLabel={`${item.title}: тренд за останні оновлення`}
+              />
+            );
+          })}
+        </div>
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={fetchSchedule}>
             Оновити
