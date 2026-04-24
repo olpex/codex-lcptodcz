@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
+import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Draft, MailMessage } from "../types/api";
@@ -11,6 +12,16 @@ type EditablePayload = {
   status?: string;
   order_number?: string;
 };
+
+type DraftStatsSnapshot = {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  avgConfidencePct: number;
+};
+
+const STATS_HISTORY_LIMIT = 12;
 
 export function DraftsPage() {
   const { request, user } = useAuth();
@@ -23,6 +34,37 @@ export function DraftsPage() {
   const [payload, setPayload] = useState<EditablePayload>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [statsHistory, setStatsHistory] = useState<DraftStatsSnapshot[]>([]);
+
+  const buildSnapshot = (draftRows: Draft[]): DraftStatsSnapshot => {
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    let confidenceSum = 0;
+    for (const row of draftRows) {
+      if (row.status === "pending") pending += 1;
+      if (row.status === "approved") approved += 1;
+      if (row.status === "rejected") rejected += 1;
+      confidenceSum += row.confidence || 0;
+    }
+    const avgConfidencePct = draftRows.length ? Number(((confidenceSum / draftRows.length) * 100).toFixed(1)) : 0;
+    return {
+      total: draftRows.length,
+      pending,
+      approved,
+      rejected,
+      avgConfidencePct
+    };
+  };
+
+  const appendSnapshot = (draftRows: Draft[]) => {
+    const snapshot = buildSnapshot(draftRows);
+    setStatsHistory((prev) => {
+      const next = [...prev, snapshot];
+      if (next.length <= STATS_HISTORY_LIMIT) return next;
+      return next.slice(next.length - STATS_HISTORY_LIMIT);
+    });
+  };
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -130,6 +172,7 @@ export function DraftsPage() {
       ]);
       setDrafts(draftRows);
       setMessages(mailRows);
+      appendSnapshot(draftRows);
       setLoadError(null);
 
       if (!selectedDraftId && draftRows.length > 0) {
@@ -155,6 +198,7 @@ export function DraftsPage() {
     try {
       await request("/mail/poll-now", { method: "POST" });
       showSuccess("Опитування поштової скриньки запущено");
+      await load();
     } catch (error) {
       showError((error as Error).message);
     }
@@ -212,6 +256,17 @@ export function DraftsPage() {
     }
   };
 
+  const seriesByKey = useMemo(
+    () => ({
+      total: statsHistory.map((item) => item.total),
+      pending: statsHistory.map((item) => item.pending),
+      approved: statsHistory.map((item) => item.approved),
+      rejected: statsHistory.map((item) => item.rejected),
+      avgConfidencePct: statsHistory.map((item) => item.avgConfidencePct)
+    }),
+    [statsHistory]
+  );
+
   return (
     <div className="space-y-5">
       <Panel title="Вхідна кореспонденція">
@@ -243,6 +298,31 @@ export function DraftsPage() {
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_1fr]">
         <Panel title="Чернетки OCR">
+          <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {[
+              { key: "total", title: "Усього чернеток", series: seriesByKey.total, suffix: "" },
+              { key: "pending", title: "Очікують підтвердження", series: seriesByKey.pending, suffix: "" },
+              { key: "approved", title: "Підтверджені", series: seriesByKey.approved, suffix: "" },
+              { key: "rejected", title: "Відхилені", series: seriesByKey.rejected, suffix: "" },
+              { key: "avgConfidencePct", title: "Середня довіра OCR", series: seriesByKey.avgConfidencePct, suffix: "%" }
+            ].map((item) => {
+              const current = item.series.length ? item.series[item.series.length - 1] : 0;
+              const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;
+              const delta = previous == null ? null : Number((current - previous).toFixed(1));
+              const valueLabel = `${current.toLocaleString("uk-UA")}${item.suffix}`;
+              return (
+                <TrendStatCard
+                  key={item.key}
+                  title={item.title}
+                  valueLabel={valueLabel}
+                  delta={delta}
+                  deltaSuffix={item.suffix === "%" ? " п.п." : ""}
+                  series={item.series}
+                  sparklineLabel={`${item.title}: тренд за останні оновлення`}
+                />
+              );
+            })}
+          </div>
           <DataTable
             data={drafts}
             columns={draftColumns}
