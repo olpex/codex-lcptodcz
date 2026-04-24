@@ -48,6 +48,13 @@ export interface ScheduleSlot {
   room_id: number;
   starts_at: string;
   ends_at: string;
+  pair_number?: number | null;
+  academic_hours?: number;
+  group_code?: string | null;
+  group_name?: string | null;
+  teacher_name?: string | null;
+  subject_name?: string | null;
+  room_name?: string | null;
 }
 
 export interface Workload {

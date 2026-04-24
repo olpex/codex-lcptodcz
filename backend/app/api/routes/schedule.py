@@ -10,6 +10,48 @@ from app.services.audit import write_audit
 router = APIRouter()
 
 
+def _to_schedule_responses(db: DbSession, slots: list[ScheduleSlot]) -> list[ScheduleSlotResponse]:
+    if not slots:
+        return []
+
+    group_ids = sorted({slot.group_id for slot in slots})
+    teacher_ids = sorted({slot.teacher_id for slot in slots})
+    subject_ids = sorted({slot.subject_id for slot in slots})
+    room_ids = sorted({slot.room_id for slot in slots})
+
+    groups = {item.id: item for item in db.query(Group).filter(Group.id.in_(group_ids)).all()}
+    teachers = {item.id: item for item in db.query(Teacher).filter(Teacher.id.in_(teacher_ids)).all()}
+    subjects = {item.id: item for item in db.query(Subject).filter(Subject.id.in_(subject_ids)).all()}
+    rooms = {item.id: item for item in db.query(Room).filter(Room.id.in_(room_ids)).all()}
+
+    responses: list[ScheduleSlotResponse] = []
+    for slot in slots:
+        group = groups.get(slot.group_id)
+        teacher = teachers.get(slot.teacher_id)
+        subject = subjects.get(slot.subject_id)
+        room = rooms.get(slot.room_id)
+        responses.append(
+            ScheduleSlotResponse(
+                id=slot.id,
+                group_id=slot.group_id,
+                teacher_id=slot.teacher_id,
+                subject_id=slot.subject_id,
+                room_id=slot.room_id,
+                starts_at=slot.starts_at,
+                ends_at=slot.ends_at,
+                pair_number=slot.pair_number,
+                academic_hours=float(slot.academic_hours or 0.0),
+                group_code=group.code if group else None,
+                group_name=group.name if group else None,
+                teacher_name=f"{teacher.last_name} {teacher.first_name}" if teacher else None,
+                subject_name=subject.name if subject else None,
+                room_name=room.name if room else None,
+                generated_by=slot.generated_by,
+            )
+        )
+    return responses
+
+
 @router.post(
     "/generate",
     response_model=list[ScheduleSlotResponse],
@@ -57,7 +99,7 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
             0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600
         )
 
-    day_hours = [9, 11, 13, 15]
+    day_hours = [(1, 9), (2, 11), (3, 13), (4, 15)]
     created: list[ScheduleSlot] = []
     for idx_group, group in enumerate(groups):
         for day in range(payload.days):
@@ -65,7 +107,7 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
             subject = subjects[(idx_group + day) % len(subjects)]
 
             assigned = False
-            for hour in day_hours:
+            for pair_number, hour in day_hours:
                 slot_start = datetime.combine(base_day, time(hour=hour), tzinfo=timezone.utc)
                 slot_end = slot_start + timedelta(hours=2)
 
@@ -83,6 +125,8 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
                     room_id=room.id,
                     starts_at=slot_start,
                     ends_at=slot_end,
+                    pair_number=pair_number,
+                    academic_hours=2.0,
                     generated_by=current_user.id,
                 )
                 db.add(slot)
@@ -108,7 +152,7 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
         entity_id=f"{len(created)}",
         details={"start_date": payload.start_date.isoformat(), "days": payload.days},
     )
-    return [ScheduleSlotResponse.model_validate(slot) for slot in created]
+    return _to_schedule_responses(db, created)
 
 
 @router.get("", response_model=list[ScheduleSlotResponse])
@@ -132,4 +176,4 @@ def list_schedule(
         query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
     slots = query.order_by(ScheduleSlot.starts_at.asc()).all()
-    return [ScheduleSlotResponse.model_validate(slot) for slot in slots]
+    return _to_schedule_responses(db, slots)

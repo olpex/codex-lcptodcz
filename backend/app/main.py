@@ -26,6 +26,8 @@ def ensure_runtime_schema() -> None:
             ("mail_messages", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("ocr_results", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("performances", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("schedule_slots", "pair_number", "INTEGER NULL"),
+            ("schedule_slots", "academic_hours", "FLOAT NOT NULL DEFAULT 2.0"),
         ]
         for table_name, column_name, ddl in column_plan:
             if table_name not in existing_tables:

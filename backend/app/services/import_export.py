@@ -118,7 +118,10 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[d
             total_hours = 0.0
             for slot in slots:
                 if slot.teacher_id == teacher.id:
-                    total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+                    if slot.academic_hours is not None:
+                        total_hours += float(slot.academic_hours)
+                    else:
+                        total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
             rows.append(
                 {
                     "teacher_id": teacher.id,
@@ -199,7 +202,10 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[d
             total_hours = 0.0
             for slot in slots:
                 if slot.teacher_id == teacher.id:
-                    total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+                    if slot.academic_hours is not None:
+                        total_hours += float(slot.academic_hours)
+                    else:
+                        total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
             amount = round(total_hours * teacher.hourly_rate, 2)
             total_amount += amount
             rows.append(

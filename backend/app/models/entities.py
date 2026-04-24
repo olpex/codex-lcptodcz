@@ -240,6 +240,8 @@ class ScheduleSlot(Base):
     room_id: Mapped[int] = mapped_column(ForeignKey("rooms.id"), nullable=False, index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pair_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    academic_hours: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
     generated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 

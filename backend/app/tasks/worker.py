@@ -17,6 +17,7 @@ from app.services.import_export import (
 )
 from app.services.mail_ingest import ingest_mailbox
 from app.services.ocr import guess_draft_from_text
+from app.services.schedule_import import import_schedule_docx
 
 logger = get_task_logger(__name__)
 
@@ -49,6 +50,13 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:
             import_result = try_import_trainees(db, parsed, job.branch_id)
+        elif job.document.file_type.value == "docx":
+            import_result = import_schedule_docx(
+                db,
+                job.document.file_path,
+                branch_id=job.branch_id,
+                actor_user_id=job.document.created_by,
+            )
 
         payload = {
             "parsed": parsed,
@@ -61,6 +69,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         return {"status": "ok", "job_id": import_job_id}
     except Exception as exc:
         logger.exception("Import job failed: %s", exc)
+        db.rollback()
         job = db.get(ImportJob, import_job_id)
         if job:
             mark_job_failed(job, str(exc))
@@ -116,6 +125,7 @@ def process_export_job_task(self, export_job_id: int) -> dict:
         return {"status": "ok", "job_id": export_job_id}
     except Exception as exc:
         logger.exception("Export job failed: %s", exc)
+        db.rollback()
         job = db.get(ExportJob, export_job_id)
         if job:
             mark_job_failed(job, str(exc))

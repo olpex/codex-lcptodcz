@@ -216,6 +216,13 @@ class ScheduleSlotResponse(ORMModel):
     room_id: int
     starts_at: datetime
     ends_at: datetime
+    pair_number: int | None = None
+    academic_hours: float = 0.0
+    group_code: str | None = None
+    group_name: str | None = None
+    teacher_name: str | None = None
+    subject_name: str | None = None
+    room_name: str | None = None
     generated_by: int | None
 
 

@@ -34,7 +34,10 @@ def get_workload(
     totals: dict[int, float] = {}
     for slot in slots:
         totals.setdefault(slot.teacher_id, 0.0)
-        totals[slot.teacher_id] += max(0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600)
+        if slot.academic_hours is not None:
+            totals[slot.teacher_id] += float(slot.academic_hours)
+        else:
+            totals[slot.teacher_id] += max(0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600)
 
     result = []
     for teacher_id, total_hours in totals.items():

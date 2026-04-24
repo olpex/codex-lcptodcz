@@ -73,23 +73,29 @@ export function SchedulePage() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-slate-600">
+                <th className="px-2 py-2">Дата</th>
+                <th className="px-2 py-2">Пара</th>
                 <th className="px-2 py-2">Група</th>
-                <th className="px-2 py-2">Викладач</th>
                 <th className="px-2 py-2">Предмет</th>
-                <th className="px-2 py-2">Аудиторія</th>
+                <th className="px-2 py-2">Викладач</th>
+                <th className="px-2 py-2">Тривалість, год</th>
                 <th className="px-2 py-2">Початок</th>
                 <th className="px-2 py-2">Кінець</th>
+                <th className="px-2 py-2">Аудиторія</th>
               </tr>
             </thead>
             <tbody>
               {slots.map((slot) => (
                 <tr key={slot.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2">{slot.group_id}</td>
-                  <td className="px-2 py-2">{slot.teacher_id}</td>
-                  <td className="px-2 py-2">{slot.subject_id}</td>
-                  <td className="px-2 py-2">{slot.room_id}</td>
-                  <td className="px-2 py-2">{new Date(slot.starts_at).toLocaleString("uk-UA")}</td>
-                  <td className="px-2 py-2">{new Date(slot.ends_at).toLocaleString("uk-UA")}</td>
+                  <td className="px-2 py-2">{new Date(slot.starts_at).toLocaleDateString("uk-UA")}</td>
+                  <td className="px-2 py-2">{slot.pair_number ?? "—"}</td>
+                  <td className="px-2 py-2">{slot.group_code ? `${slot.group_code} (${slot.group_name || ""})` : slot.group_id}</td>
+                  <td className="px-2 py-2">{slot.subject_name || slot.subject_id}</td>
+                  <td className="px-2 py-2">{slot.teacher_name || slot.teacher_id}</td>
+                  <td className="px-2 py-2">{slot.academic_hours ?? "—"}</td>
+                  <td className="px-2 py-2">{new Date(slot.starts_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}</td>
+                  <td className="px-2 py-2">{new Date(slot.ends_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}</td>
+                  <td className="px-2 py-2">{slot.room_name || slot.room_id}</td>
                 </tr>
               ))}
             </tbody>
@@ -99,4 +105,3 @@ export function SchedulePage() {
     </div>
   );
 }
-
