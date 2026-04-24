@@ -21,6 +21,8 @@ type DataTableProps<T> = {
   columns: DataTableColumn<T>[];
   rowKey: (row: T) => string | number;
   rowClassName?: (row: T) => string | undefined;
+  caption?: string;
+  ariaLabel?: string;
   isLoading?: boolean;
   errorText?: string | null;
   onRetry?: (() => void) | null;
@@ -52,6 +54,8 @@ export function DataTable<T>({
   columns,
   rowKey,
   rowClassName,
+  caption,
+  ariaLabel,
   isLoading = false,
   errorText = null,
   onRetry = null,
@@ -139,6 +143,7 @@ export function DataTable<T>({
           <input
             className="min-w-[220px] flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
             placeholder={search.placeholder || "Пошук"}
+            aria-label={search.placeholder || "Пошук по таблиці"}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -182,15 +187,18 @@ export function DataTable<T>({
       )}
 
       <div className="overflow-auto">
-        <table className="min-w-full text-sm">
+        <table className="min-w-full text-sm" aria-label={ariaLabel}>
+          {caption && <caption className="sr-only">{caption}</caption>}
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-600">
               {columns.map((column) => {
                 const isSortable = sortableColumns.includes(column.key);
                 const isActive = sortState?.columnKey === column.key;
                 const direction = isActive ? sortState?.direction : null;
+                const ariaSort: React.AriaAttributes["aria-sort"] =
+                  direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none";
                 return (
-                  <th key={column.key} className={clsx("px-2 py-2", column.headerClassName)}>
+                  <th key={column.key} scope="col" aria-sort={ariaSort} className={clsx("px-2 py-2", column.headerClassName)}>
                     {isSortable ? (
                       <button
                         type="button"

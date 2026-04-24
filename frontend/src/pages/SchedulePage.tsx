@@ -123,6 +123,7 @@ export function SchedulePage() {
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [days, setDays] = useState(5);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [showConflictsOnly, setShowConflictsOnly] = useState(false);
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -262,6 +263,19 @@ export function SchedulePage() {
     );
   }, [slots, sortDirection]);
 
+  const visibleGroupedSchedule = useMemo(() => {
+    if (!showConflictsOnly) {
+      return groupedSchedule;
+    }
+    return groupedSchedule
+      .map((group) => {
+        const conflictSlots = group.slots.filter((slot) => conflictAnalysis.conflictSlotIds.has(slot.id));
+        const totalHours = conflictSlots.reduce((acc, slot) => acc + (slot.academic_hours ?? 0), 0);
+        return { ...group, slots: conflictSlots, totalHours: Number(totalHours.toFixed(2)) };
+      })
+      .filter((group) => group.slots.length > 0);
+  }, [groupedSchedule, showConflictsOnly, conflictAnalysis.conflictSlotIds]);
+
   const seriesByKey = useMemo(
     () => ({
       totalLessons: statsHistory.map((item) => item.totalLessons),
@@ -274,22 +288,28 @@ export function SchedulePage() {
   );
 
   useEffect(() => {
-    if (!groupedSchedule.length) {
+    if (!visibleGroupedSchedule.length) {
       setExpandedDates({});
       return;
     }
-    const hasExpanded = Object.values(expandedDates).some(Boolean);
-    if (!hasExpanded) {
-      setExpandedDates({ [groupedSchedule[0].dateKey]: true });
-    }
-  }, [groupedSchedule]);
+    const allowedDates = new Set(visibleGroupedSchedule.map((group) => group.dateKey));
+    setExpandedDates((prev) => {
+      const filteredEntries = Object.entries(prev).filter(([key]) => allowedDates.has(key));
+      const filteredState = Object.fromEntries(filteredEntries) as Record<string, boolean>;
+      const hasExpanded = Object.values(filteredState).some(Boolean);
+      if (hasExpanded) {
+        return filteredState;
+      }
+      return { ...filteredState, [visibleGroupedSchedule[0].dateKey]: true };
+    });
+  }, [visibleGroupedSchedule]);
 
   const toggleDate = (dateKey: string) => {
     setExpandedDates((prev) => ({ ...prev, [dateKey]: !prev[dateKey] }));
   };
 
   const expandAll = () => {
-    const nextState = Object.fromEntries(groupedSchedule.map((group) => [group.dateKey, true]));
+    const nextState = Object.fromEntries(visibleGroupedSchedule.map((group) => [group.dateKey, true]));
     setExpandedDates(nextState);
   };
 
@@ -387,6 +407,14 @@ export function SchedulePage() {
           <button className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" onClick={collapseAll}>
             Згорнути все
           </button>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={showConflictsOnly}
+              onChange={(event) => setShowConflictsOnly(event.target.checked)}
+            />
+            Лише конфлікти
+          </label>
         </div>
         {conflictAnalysis.overlapCount > 0 && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -406,10 +434,14 @@ export function SchedulePage() {
           </div>
         )}
 
-        {!groupedSchedule.length && <p className="text-sm text-slate-600">Занять у розкладі поки немає.</p>}
+        {!visibleGroupedSchedule.length && (
+          <p className="text-sm text-slate-600">
+            {showConflictsOnly ? "Конфліктних занять не знайдено." : "Занять у розкладі поки немає."}
+          </p>
+        )}
 
         <div className="space-y-3">
-          {groupedSchedule.map((group) => {
+          {visibleGroupedSchedule.map((group) => {
             const isExpanded = Boolean(expandedDates[group.dateKey]);
             const dayConflictCount = conflictAnalysis.conflictSlotCountByDate.get(group.dateKey) || 0;
             return (
@@ -417,12 +449,17 @@ export function SchedulePage() {
                 <button
                   className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
                   onClick={() => toggleDate(group.dateKey)}
+                  aria-expanded={isExpanded}
+                  aria-controls={`schedule-day-${group.dateKey}`}
                 >
                   <div>
                     <p className="font-semibold capitalize text-ink">{group.label}</p>
                     <p className="text-xs text-slate-600">
                       Занять: {group.slots.length} | Годин: {group.totalHours}
-                      {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}
+                      {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}{" "}
+                      {dayConflictCount > 0 && (
+                        <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">⚠ Увага</span>
+                      )}
                     </p>
                   </div>
                   <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
@@ -431,7 +468,7 @@ export function SchedulePage() {
                 </button>
 
                 {isExpanded && (
-                  <div className="border-t border-slate-200 px-3 py-2">
+                  <div id={`schedule-day-${group.dateKey}`} className="border-t border-slate-200 px-3 py-2">
                     <DataTable
                       data={group.slots}
                       columns={slotColumns}
@@ -439,6 +476,8 @@ export function SchedulePage() {
                       rowClassName={(slot) =>
                         conflictAnalysis.conflictSlotIds.has(slot.id) ? "bg-amber-50/70" : undefined
                       }
+                      caption={`Розклад на ${group.label}`}
+                      ariaLabel={`Таблиця розкладу на ${group.label}`}
                       isLoading={isLoading}
                       emptyText="Занять за цю дату немає"
                       initialPageSize={20}
