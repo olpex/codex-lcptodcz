@@ -1,27 +1,26 @@
 import { useEffect, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Workload } from "../types/api";
 
 export function WorkloadPage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Workload[]>([]);
   const [annualLoadDrafts, setAnnualLoadDrafts] = useState<Record<number, string>>({});
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
   const canEditAnnualLoad =
     user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
   const load = async () => {
-    setError("");
     try {
       const data = await request<Workload[]>("/teacher-workload");
       setRows(data);
       setAnnualLoadDrafts(
         Object.fromEntries(data.map((row) => [row.teacher_id, String(row.annual_load_hours ?? 0)]))
       );
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -30,12 +29,10 @@ export function WorkloadPage() {
   }, []);
 
   const saveAnnualLoad = async (teacherId: number) => {
-    setError("");
-    setNotice("");
     const draftValue = annualLoadDrafts[teacherId];
     const value = Number(draftValue);
     if (!Number.isFinite(value) || value < 0) {
-      setError("Річне педнавантаження має бути невід'ємним числом");
+      showError("Річне педнавантаження має бути невід'ємним числом");
       return;
     }
     try {
@@ -43,17 +40,15 @@ export function WorkloadPage() {
         method: "PUT",
         body: JSON.stringify({ annual_load_hours: value })
       });
-      setNotice("Річне педнавантаження оновлено");
+      showSuccess("Річне педнавантаження оновлено");
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
       <Panel title="Навантаження викладачів">
         <button className="mb-3 rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={load}>
           Оновити

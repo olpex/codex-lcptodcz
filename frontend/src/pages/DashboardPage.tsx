@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { KPI } from "../types/api";
 
 const EMPTY_KPI: KPI = {
@@ -15,16 +16,21 @@ const EMPTY_KPI: KPI = {
 
 export function DashboardPage() {
   const { request } = useAuth();
+  const { showError } = useToast();
   const [kpi, setKpi] = useState<KPI>(EMPTY_KPI);
-  const [error, setError] = useState("");
+  const lastErrorMessageRef = useRef("");
 
   const fetchKpi = async () => {
-    setError("");
     try {
       const data = await request<KPI>("/dashboard/kpi");
       setKpi(data);
-    } catch (e) {
-      setError((e as Error).message);
+      lastErrorMessageRef.current = "";
+    } catch (error) {
+      const message = (error as Error).message;
+      if (message !== lastErrorMessageRef.current) {
+        showError(message);
+        lastErrorMessageRef.current = message;
+      }
     }
   };
 
@@ -43,7 +49,6 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Panel title="Активні групи">
           <p className="text-4xl font-heading font-bold text-pine">{kpi.active_groups}</p>

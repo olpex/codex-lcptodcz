@@ -1,17 +1,18 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Trainee } from "../types/api";
 
 export function TraineesPage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [trainees, setTrainees] = useState<Trainee[]>([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [search, setSearch] = useState("");
-  const [error, setError] = useState("");
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -19,13 +20,12 @@ export function TraineesPage() {
   );
 
   const fetchTrainees = async (term = "") => {
-    setError("");
     try {
       const query = term ? `?search=${encodeURIComponent(term)}` : "";
       const data = await request<Trainee[]>(`/trainees${query}`);
       setTrainees(data);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -52,14 +52,14 @@ export function TraineesPage() {
       setEmail("");
       setPhone("");
       await fetchTrainees(search);
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess("Слухача додано");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
       <Panel title="Пошук слухачів">
         <div className="flex flex-wrap gap-3">
           <input
@@ -137,4 +137,3 @@ export function TraineesPage() {
     </div>
   );
 }
-

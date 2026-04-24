@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Order } from "../types/api";
 
 const ORDER_TYPES = [
@@ -11,8 +12,8 @@ const ORDER_TYPES = [
 
 export function OrdersPage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Order[]>([]);
-  const [notice, setNotice] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderType, setOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
@@ -22,7 +23,6 @@ export function OrdersPage() {
   const [editOrderDate, setEditOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
-  const [error, setError] = useState("");
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -30,7 +30,6 @@ export function OrdersPage() {
   );
 
   const load = async () => {
-    setError("");
     try {
       const data = await request<Order[]>("/orders");
       setRows(data);
@@ -42,8 +41,8 @@ export function OrdersPage() {
           resetEdit();
         }
       }
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -67,10 +66,10 @@ export function OrdersPage() {
       });
       setOrderNumber("");
       setStatus("draft");
-      setNotice("Наказ створено");
+      showSuccess("Наказ створено");
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -103,10 +102,10 @@ export function OrdersPage() {
           status: editStatus
         })
       });
-      setNotice(`Наказ ${editOrderNumber} оновлено`);
+      showSuccess(`Наказ ${editOrderNumber} оновлено`);
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -114,20 +113,18 @@ export function OrdersPage() {
     if (!canEdit) return;
     try {
       await request<void>(`/orders/${orderId}`, { method: "DELETE" });
-      setNotice(`Наказ #${orderId} видалено`);
+      showSuccess(`Наказ #${orderId} видалено`);
       if (editId === orderId) {
         resetEdit();
       }
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
       {canEdit && (
         <Panel title="Створити наказ">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={createOrder}>

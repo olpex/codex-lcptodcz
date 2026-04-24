@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { ScheduleSlot } from "../types/api";
 
 type GroupedSchedule = {
@@ -12,22 +13,21 @@ type GroupedSchedule = {
 
 export function SchedulePage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [days, setDays] = useState(5);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
-  const [error, setError] = useState("");
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
   const fetchSchedule = async () => {
-    setError("");
     try {
       const data = await request<ScheduleSlot[]>("/schedule");
       setSlots(data);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -100,14 +100,14 @@ export function SchedulePage() {
         })
       });
       await fetchSchedule();
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess("Розклад успішно згенеровано");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
       {canGenerate && (
         <Panel title="Генерація розкладу">
           <div className="flex flex-wrap items-center gap-3">

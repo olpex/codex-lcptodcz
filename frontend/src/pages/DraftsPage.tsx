@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Draft, MailMessage } from "../types/api";
 
 type EditablePayload = {
@@ -12,14 +13,13 @@ type EditablePayload = {
 
 export function DraftsPage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [draftType, setDraftType] = useState("trainee_card");
   const [confidence, setConfidence] = useState(0.75);
   const [payload, setPayload] = useState<EditablePayload>({});
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -45,7 +45,6 @@ export function DraftsPage() {
   };
 
   const load = async () => {
-    setError("");
     try {
       const [draftRows, mailRows] = await Promise.all([
         request<Draft[]>("/drafts"),
@@ -60,8 +59,8 @@ export function DraftsPage() {
         const refreshed = draftRows.find((item) => item.id === selectedDraftId);
         if (refreshed) applyDraftToForm(refreshed);
       }
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -72,9 +71,9 @@ export function DraftsPage() {
   const pollNow = async () => {
     try {
       await request("/mail/poll-now", { method: "POST" });
-      setNotice("Опитування поштової скриньки запущено");
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess("Опитування поштової скриньки запущено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -101,10 +100,10 @@ export function DraftsPage() {
           structured_payload: nextPayload
         })
       });
-      setNotice(`Чернетка ${selectedDraftId} збережена`);
+      showSuccess(`Чернетка ${selectedDraftId} збережена`);
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -112,10 +111,10 @@ export function DraftsPage() {
     if (!selectedDraftId) return;
     try {
       await request(`/drafts/${selectedDraftId}/approve`, { method: "POST" });
-      setNotice(`Чернетка ${selectedDraftId} підтверджена`);
+      showSuccess(`Чернетка ${selectedDraftId} підтверджена`);
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -123,17 +122,15 @@ export function DraftsPage() {
     if (!selectedDraftId) return;
     try {
       await request(`/drafts/${selectedDraftId}/reprocess`, { method: "POST" });
-      setNotice(`Чернетка ${selectedDraftId} надіслана на повторний парсинг`);
+      showSuccess(`Чернетка ${selectedDraftId} надіслана на повторний парсинг`);
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
       <Panel title="Вхідна кореспонденція">
         <div className="mb-3 flex items-center gap-3">
           {canEdit && (
@@ -334,4 +331,3 @@ export function DraftsPage() {
     </div>
   );
 }
-

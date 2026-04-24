@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Group, Performance, Trainee } from "../types/api";
 
 type PerformancePayload = {
@@ -21,13 +22,12 @@ const DEFAULT_FORM: PerformancePayload = {
 
 export function PerformancePage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Performance[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [trainees, setTrainees] = useState<Trainee[]>([]);
   const [form, setForm] = useState<PerformancePayload>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
 
   const canDelete = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -35,7 +35,6 @@ export function PerformancePage() {
   );
 
   const load = async () => {
-    setError("");
     try {
       const [performanceRows, groupRows, traineeRows] = await Promise.all([
         request<Performance[]>("/performance"),
@@ -45,8 +44,8 @@ export function PerformancePage() {
       setRows(performanceRows);
       setGroups(groupRows);
       setTrainees(traineeRows);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -56,8 +55,6 @@ export function PerformancePage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setError("");
-    setNotice("");
     const payload = {
       ...form,
       trainee_id: Number(form.trainee_id),
@@ -66,7 +63,7 @@ export function PerformancePage() {
       attendance_pct: Number(form.attendance_pct)
     };
     if (!payload.trainee_id || !payload.group_id) {
-      setError("Оберіть слухача та групу");
+      showError("Оберіть слухача та групу");
       return;
     }
     try {
@@ -79,19 +76,19 @@ export function PerformancePage() {
             employment_flag: payload.employment_flag
           })
         });
-        setNotice("Запис успішності оновлено");
+        showSuccess("Запис успішності оновлено");
       } else {
         await request<Performance>("/performance", {
           method: "POST",
           body: JSON.stringify(payload)
         });
-        setNotice("Запис успішності створено");
+        showSuccess("Запис успішності створено");
       }
       setForm(DEFAULT_FORM);
       setEditingId(null);
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -107,26 +104,21 @@ export function PerformancePage() {
   };
 
   const remove = async (id: number) => {
-    setError("");
-    setNotice("");
     try {
       await request<void>(`/performance/${id}`, { method: "DELETE" });
-      setNotice("Запис видалено");
+      showSuccess("Запис видалено");
       if (editingId === id) {
         setEditingId(null);
         setForm(DEFAULT_FORM);
       }
       await load();
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-      {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
-
       <Panel title={editingId ? "Редагування успішності" : "Нова оцінка успішності"}>
         <form className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" onSubmit={submit}>
           <select

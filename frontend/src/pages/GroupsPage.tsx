@@ -1,27 +1,27 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import type { Group } from "../types/api";
 
 export function GroupsPage() {
   const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
-  const [error, setError] = useState("");
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
 
   const loadGroups = async () => {
-    setError("");
     try {
       const data = await request<Group[]>("/groups");
       setGroups(data);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
@@ -46,14 +46,14 @@ export function GroupsPage() {
       setCode("");
       setCapacity(25);
       await loadGroups();
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess("Групу створено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
       {canEdit && (
         <Panel title="Створити групу">
           <form className="grid gap-3 md:grid-cols-4" onSubmit={createGroup}>
@@ -110,4 +110,3 @@ export function GroupsPage() {
     </div>
   );
 }
-
