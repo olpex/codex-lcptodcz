@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -31,6 +32,7 @@ export function PerformancePage() {
   const [form, setForm] = useState<PerformancePayload>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [performanceToDelete, setPerformanceToDelete] = useState<Performance | null>(null);
 
   const canDelete = useMemo(
@@ -82,6 +84,7 @@ export function PerformancePage() {
       showError("Оберіть слухача та групу");
       return;
     }
+    setIsSubmitting(true);
     try {
       if (editingId) {
         await request<Performance>(`/performance/${editingId}`, {
@@ -105,6 +108,8 @@ export function PerformancePage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -207,68 +212,79 @@ export function PerformancePage() {
     <div className="space-y-5">
       <Panel title={editingId ? "Редагування успішності" : "Нова оцінка успішності"}>
         <form className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" onSubmit={submit}>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            value={form.group_id || ""}
-            onChange={(event) => setForm((prev) => ({ ...prev, group_id: Number(event.target.value) }))}
-            required
-            disabled={Boolean(editingId)}
-          >
-            <option value="">Оберіть групу</option>
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.code} - {group.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            value={form.trainee_id || ""}
-            onChange={(event) => setForm((prev) => ({ ...prev, trainee_id: Number(event.target.value) }))}
-            required
-            disabled={Boolean(editingId)}
-          >
-            <option value="">Оберіть слухача</option>
-            {trainees.map((trainee) => (
-              <option key={trainee.id} value={trainee.id}>
-                {trainee.last_name} {trainee.first_name}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            min={0}
-            max={100}
-            step={0.1}
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            placeholder="Прогрес, %"
-            value={form.progress_pct}
-            onChange={(event) => setForm((prev) => ({ ...prev, progress_pct: Number(event.target.value) }))}
-            required
-          />
-          <input
-            type="number"
-            min={0}
-            max={100}
-            step={0.1}
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            placeholder="Відвідуваність, %"
-            value={form.attendance_pct}
-            onChange={(event) => setForm((prev) => ({ ...prev, attendance_pct: Number(event.target.value) }))}
-            required
-          />
-          <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2">
+          <FormField label="Група" required>
+            <select
+              className={formControlClass}
+              value={form.group_id || ""}
+              onChange={(event) => setForm((prev) => ({ ...prev, group_id: Number(event.target.value) }))}
+              required
+              disabled={Boolean(editingId)}
+            >
+              <option value="">Оберіть групу</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.code} - {group.name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="Слухач" required>
+            <select
+              className={formControlClass}
+              value={form.trainee_id || ""}
+              onChange={(event) => setForm((prev) => ({ ...prev, trainee_id: Number(event.target.value) }))}
+              required
+              disabled={Boolean(editingId)}
+            >
+              <option value="">Оберіть слухача</option>
+              {trainees.map((trainee) => (
+                <option key={trainee.id} value={trainee.id}>
+                  {trainee.last_name} {trainee.first_name}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="Прогрес, %" required helperText="Значення від 0 до 100">
             <input
-              type="checkbox"
-              checked={form.employment_flag}
-              onChange={(event) => setForm((prev) => ({ ...prev, employment_flag: event.target.checked }))}
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              className={formControlClass}
+              value={form.progress_pct}
+              onChange={(event) => setForm((prev) => ({ ...prev, progress_pct: Number(event.target.value) }))}
+              required
             />
-            Працевлаштований
-          </label>
+          </FormField>
+          <FormField label="Відвідуваність, %" required helperText="Значення від 0 до 100">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              className={formControlClass}
+              value={form.attendance_pct}
+              onChange={(event) => setForm((prev) => ({ ...prev, attendance_pct: Number(event.target.value) }))}
+              required
+            />
+          </FormField>
+          <FormField label="Статус працевлаштування">
+            <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.employment_flag}
+                onChange={(event) => setForm((prev) => ({ ...prev, employment_flag: event.target.checked }))}
+              />
+              Працевлаштований
+            </label>
+          </FormField>
           <div className="flex flex-wrap items-center gap-2">
-            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">
-              {editingId ? "Оновити" : "Створити"}
-            </button>
+            <FormSubmitButton
+              isLoading={isSubmitting}
+              idleLabel={editingId ? "Оновити" : "Створити"}
+              loadingLabel={editingId ? "Оновлюємо..." : "Створюємо..."}
+              className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+            />
             {editingId && (
               <button
                 type="button"

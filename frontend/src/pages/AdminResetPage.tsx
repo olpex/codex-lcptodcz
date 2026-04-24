@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { apiRequest } from "../api/client";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { uiText } from "../i18n/uk";
@@ -73,59 +74,56 @@ export function AdminResetPage() {
         </p>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Логін</span>
+          <FormField label="Логін" required helperText="Логін облікового запису адміністратора">
             <input
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
+              autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               required
             />
-          </label>
+          </FormField>
 
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Службовий токен</span>
+          <FormField label="Службовий токен" required helperText="Змінна середовища ADMIN_PASSWORD_RESET_TOKEN">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={resetToken}
               onChange={(event) => setResetToken(event.target.value)}
               required
             />
-          </label>
+          </FormField>
 
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Новий пароль</span>
+          <FormField label="Новий пароль" required helperText="Мінімум 8 символів, максимум 72">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               minLength={8}
               maxLength={72}
               required
             />
-          </label>
+          </FormField>
 
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Підтвердження нового пароля</span>
+          <FormField label="Підтвердження нового пароля" required helperText="Повторіть новий пароль без помилок">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               minLength={8}
               maxLength={72}
               required
             />
-          </label>
+          </FormField>
 
-          <button
-            disabled={submitting}
-            className="w-full rounded-lg border border-pine bg-white px-4 py-2.5 font-semibold text-pine disabled:opacity-50"
-          >
-            {submitting ? "Скидаємо..." : "Скинути пароль адміністратора"}
-          </button>
+          <FormSubmitButton
+            isLoading={submitting}
+            idleLabel="Скинути пароль адміністратора"
+            loadingLabel="Скидаємо..."
+            className="w-full rounded-lg border border-pine bg-white px-4 py-2.5 font-semibold text-pine"
+          />
         </form>
 
         <Link className="mt-4 inline-block text-sm font-semibold text-pine hover:underline" to="/login">

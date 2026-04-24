@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
+import { FormField, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -122,38 +123,41 @@ export function DocumentsPage() {
     <div className="space-y-5">
       <Panel title="Імпорт документів (.xlsx, .pdf, .docx)">
         <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport}>
-          <input
-            type="file"
-            accept=".xlsx,.pdf,.docx"
-            onChange={(event) => setFile(event.target.files?.[0] || null)}
-            required
-          />
+          <FormField label="Файл для імпорту" required helperText="Підтримуються .xlsx, .pdf, .docx">
+            <input
+              type="file"
+              className={formControlClass}
+              accept=".xlsx,.pdf,.docx"
+              onChange={(event) => setFile(event.target.files?.[0] || null)}
+              required
+            />
+          </FormField>
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">Завантажити</button>
         </form>
       </Panel>
       <Panel title="Експорт звітів (.xlsx, .pdf, .csv)">
         <div className="flex flex-wrap items-center gap-3">
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            value={reportType}
-            onChange={(event) => setReportType(event.target.value)}
-          >
-            <option value="kpi">KPI</option>
-            <option value="trainees">Слухачі</option>
-            <option value="teacher_workload">Навантаження викладачів</option>
-            <option value="employment">Працевлаштування</option>
-            <option value="financial">Фінансовий звіт</option>
-            <option value="form_1pa">Форма 1-ПА</option>
-          </select>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-2"
-            value={exportFormat}
-            onChange={(event) => setExportFormat(event.target.value)}
-          >
-            <option value="xlsx">XLSX</option>
-            <option value="pdf">PDF</option>
-            <option value="csv">CSV</option>
-          </select>
+          <FormField label="Тип звіту">
+            <select className={formControlClass} value={reportType} onChange={(event) => setReportType(event.target.value)}>
+              <option value="kpi">KPI</option>
+              <option value="trainees">Слухачі</option>
+              <option value="teacher_workload">Навантаження викладачів</option>
+              <option value="employment">Працевлаштування</option>
+              <option value="financial">Фінансовий звіт</option>
+              <option value="form_1pa">Форма 1-ПА</option>
+            </select>
+          </FormField>
+          <FormField label="Формат">
+            <select
+              className={formControlClass}
+              value={exportFormat}
+              onChange={(event) => setExportFormat(event.target.value)}
+            >
+              <option value="xlsx">XLSX</option>
+              <option value="pdf">PDF</option>
+              <option value="csv">CSV</option>
+            </select>
+          </FormField>
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={runExport}>
             Згенерувати
           </button>

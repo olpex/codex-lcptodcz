@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -70,48 +71,45 @@ export function ProfilePage() {
 
       <Panel title="Змінити пароль">
         <form className="space-y-3" onSubmit={handleSubmit}>
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Поточний пароль</span>
+          <FormField label="Поточний пароль" required helperText="Потрібен для підтвердження зміни">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={currentPassword}
               onChange={(event) => setCurrentPassword(event.target.value)}
               maxLength={72}
               required
             />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Новий пароль</span>
+          </FormField>
+          <FormField label="Новий пароль" required helperText="Мінімум 8 символів, максимум 72">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               minLength={8}
               maxLength={72}
               required
             />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Підтвердження нового пароля</span>
+          </FormField>
+          <FormField label="Підтвердження нового пароля" required helperText="Повторіть новий пароль">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               minLength={8}
               maxLength={72}
               required
             />
-          </label>
+          </FormField>
 
-          <button
-            disabled={submitting}
-            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
-          >
-            {submitting ? "Зберігаємо..." : "Змінити пароль"}
-          </button>
+          <FormSubmitButton
+            isLoading={submitting}
+            idleLabel="Змінити пароль"
+            loadingLabel="Зберігаємо..."
+            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+          />
           <p className="text-xs text-slate-500">Після зміни пароля ви будете автоматично розлогінені.</p>
         </form>
       </Panel>

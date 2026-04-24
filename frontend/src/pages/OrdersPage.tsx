@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -26,6 +27,8 @@ export function OrdersPage() {
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
 
   const canEdit = useMemo(
@@ -60,6 +63,7 @@ export function OrdersPage() {
   const createOrder = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    setIsCreating(true);
     try {
       await request<Order>("/orders", {
         method: "POST",
@@ -77,6 +81,8 @@ export function OrdersPage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -99,6 +105,7 @@ export function OrdersPage() {
   const saveEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || !editId) return;
+    setIsSavingEdit(true);
     try {
       await request<Order>(`/orders/${editId}`, {
         method: "PUT",
@@ -113,6 +120,8 @@ export function OrdersPage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -204,79 +213,107 @@ export function OrdersPage() {
       {canEdit && (
         <Panel title="Створити наказ">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={createOrder}>
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Номер наказу"
-              value={orderNumber}
-              onChange={(event) => setOrderNumber(event.target.value)}
-              required
-            />
-            <select
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={orderType}
-              onChange={(event) => setOrderType(event.target.value as (typeof ORDER_TYPES)[number]["value"])}
-            >
-              {ORDER_TYPES.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="date"
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={orderDate}
-              onChange={(event) => setOrderDate(event.target.value)}
-              required
-            />
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Статус"
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
-              required
-            />
-            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">Створити</button>
+            <FormField label="Номер наказу" required helperText="Наприклад: 167-25">
+              <input
+                className={formControlClass}
+                placeholder="167-25"
+                value={orderNumber}
+                onChange={(event) => setOrderNumber(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Тип наказу">
+              <select
+                className={formControlClass}
+                value={orderType}
+                onChange={(event) => setOrderType(event.target.value as (typeof ORDER_TYPES)[number]["value"])}
+              >
+                {ORDER_TYPES.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Дата наказу" required>
+              <input
+                type="date"
+                className={formControlClass}
+                value={orderDate}
+                onChange={(event) => setOrderDate(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Статус" required helperText="draft, approved, archived тощо">
+              <input
+                className={formControlClass}
+                placeholder="draft"
+                value={status}
+                onChange={(event) => setStatus(event.target.value)}
+                required
+              />
+            </FormField>
+            <div className="flex items-end">
+              <FormSubmitButton
+                isLoading={isCreating}
+                idleLabel="Створити"
+                loadingLabel="Створюємо..."
+                className="w-full rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+              />
+            </div>
           </form>
         </Panel>
       )}
       {canEdit && editId && (
         <Panel title={`Редагувати наказ #${editId}`}>
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={saveEdit}>
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Номер наказу"
-              value={editOrderNumber}
-              onChange={(event) => setEditOrderNumber(event.target.value)}
-              required
-            />
-            <select
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={editOrderType}
-              onChange={(event) => setEditOrderType(event.target.value as (typeof ORDER_TYPES)[number]["value"])}
-            >
-              {ORDER_TYPES.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="date"
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={editOrderDate}
-              onChange={(event) => setEditOrderDate(event.target.value)}
-              required
-            />
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Статус"
-              value={editStatus}
-              onChange={(event) => setEditStatus(event.target.value)}
-              required
-            />
+            <FormField label="Номер наказу" required>
+              <input
+                className={formControlClass}
+                placeholder="Номер наказу"
+                value={editOrderNumber}
+                onChange={(event) => setEditOrderNumber(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Тип наказу">
+              <select
+                className={formControlClass}
+                value={editOrderType}
+                onChange={(event) => setEditOrderType(event.target.value as (typeof ORDER_TYPES)[number]["value"])}
+              >
+                {ORDER_TYPES.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <FormField label="Дата наказу" required>
+              <input
+                type="date"
+                className={formControlClass}
+                value={editOrderDate}
+                onChange={(event) => setEditOrderDate(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Статус" required>
+              <input
+                className={formControlClass}
+                placeholder="Статус"
+                value={editStatus}
+                onChange={(event) => setEditStatus(event.target.value)}
+                required
+              />
+            </FormField>
             <div className="flex gap-2">
-              <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">Зберегти</button>
+              <FormSubmitButton
+                isLoading={isSavingEdit}
+                idleLabel="Зберегти"
+                loadingLabel="Зберігаємо..."
+                className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+              />
               <button
                 type="button"
                 className="rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-700"

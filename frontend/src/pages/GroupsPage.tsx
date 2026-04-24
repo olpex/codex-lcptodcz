@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -13,6 +14,7 @@ export function GroupsPage() {
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
@@ -67,6 +69,7 @@ export function GroupsPage() {
   const createGroup = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    setIsSubmitting(true);
     try {
       await request<Group>("/groups", {
         method: "POST",
@@ -84,6 +87,8 @@ export function GroupsPage() {
       showSuccess("Групу створено");
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -92,29 +97,42 @@ export function GroupsPage() {
       {canEdit && (
         <Panel title="Створити групу">
           <form className="grid gap-3 md:grid-cols-4" onSubmit={createGroup}>
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Код групи"
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              required
-            />
-            <input
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              placeholder="Назва групи"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-            />
-            <input
-              type="number"
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={capacity}
-              min={1}
-              max={200}
-              onChange={(event) => setCapacity(Number(event.target.value))}
-            />
-            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white">Створити</button>
+            <FormField label="Код групи" required helperText="Наприклад: М-2026-01">
+              <input
+                className={formControlClass}
+                placeholder="Код групи"
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Назва групи" required helperText="Повна назва навчальної групи">
+              <input
+                className={formControlClass}
+                placeholder="Назва групи"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </FormField>
+            <FormField label="Місткість" helperText="Від 1 до 200 слухачів">
+              <input
+                type="number"
+                className={formControlClass}
+                value={capacity}
+                min={1}
+                max={200}
+                onChange={(event) => setCapacity(Number(event.target.value))}
+              />
+            </FormField>
+            <div className="flex items-end">
+              <FormSubmitButton
+                isLoading={isSubmitting}
+                idleLabel="Створити"
+                loadingLabel="Створюємо..."
+                className="w-full rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+              />
+            </div>
           </form>
         </Panel>
       )}

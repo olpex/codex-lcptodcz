@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { uiText } from "../i18n/uk";
@@ -44,33 +45,31 @@ export function LoginPage() {
         <p className="mb-6 mt-2 text-sm text-slate-600">{uiText.appSubtitle}</p>
 
         <form onSubmit={onSubmit}>
-          <label className="mb-4 block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Логін</span>
+          <FormField className="mb-4" label="Логін" required helperText="Ваш обліковий запис у системі">
             <input
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               required
             />
-          </label>
-          <label className="mb-5 block">
-            <span className="mb-1 block text-sm font-semibold text-slate-700">Пароль</span>
+          </FormField>
+          <FormField className="mb-5" label="Пароль" required helperText="Має містити від 8 до 72 символів">
             <input
               type="password"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              className={formControlClass}
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
             />
-          </label>
-          <button
-            disabled={submitting}
-            className="w-full rounded-lg bg-pine px-4 py-2.5 font-semibold text-white disabled:opacity-50"
-          >
-            {submitting ? "Виконується..." : uiText.actions.login}
-          </button>
+          </FormField>
+          <FormSubmitButton
+            isLoading={submitting}
+            idleLabel={uiText.actions.login}
+            loadingLabel="Виконується..."
+            className="w-full rounded-lg bg-pine px-4 py-2.5 font-semibold text-white"
+          />
         </form>
 
         <div className="mt-6 border-t border-slate-200 pt-4">

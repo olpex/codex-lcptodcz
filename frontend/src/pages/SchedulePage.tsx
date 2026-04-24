@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { FormField, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -167,20 +168,24 @@ export function SchedulePage() {
       {canGenerate && (
         <Panel title="Генерація розкладу">
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="date"
-              className="rounded-lg border border-slate-300 px-3 py-2"
-              value={startDate}
-              onChange={(event) => setStartDate(event.target.value)}
-            />
-            <input
-              type="number"
-              min={1}
-              max={30}
-              className="w-24 rounded-lg border border-slate-300 px-3 py-2"
-              value={days}
-              onChange={(event) => setDays(Number(event.target.value))}
-            />
+            <FormField label="Дата старту">
+              <input
+                type="date"
+                className={formControlClass}
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+              />
+            </FormField>
+            <FormField label="Кількість днів" helperText="Від 1 до 30">
+              <input
+                type="number"
+                min={1}
+                max={30}
+                className={formControlClass}
+                value={days}
+                onChange={(event) => setDays(Number(event.target.value))}
+              />
+            </FormField>
             <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={generate}>
               Згенерувати
             </button>
