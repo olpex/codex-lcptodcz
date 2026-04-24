@@ -20,6 +20,7 @@ type DataTableProps<T> = {
   data: T[];
   columns: DataTableColumn<T>[];
   rowKey: (row: T) => string | number;
+  rowClassName?: (row: T) => string | undefined;
   isLoading?: boolean;
   errorText?: string | null;
   onRetry?: (() => void) | null;
@@ -50,6 +51,7 @@ export function DataTable<T>({
   data,
   columns,
   rowKey,
+  rowClassName,
   isLoading = false,
   errorText = null,
   onRetry = null,
@@ -221,7 +223,7 @@ export function DataTable<T>({
               </tr>
             ) : (
               paginatedData.map((row) => (
-                <tr key={rowKey(row)} className="border-b border-slate-100">
+                <tr key={rowKey(row)} className={clsx("border-b border-slate-100", rowClassName?.(row))}>
                   {columns.map((column) => (
                     <td key={column.key} className={clsx("px-2 py-2", column.className)}>
                       {column.render(row)}

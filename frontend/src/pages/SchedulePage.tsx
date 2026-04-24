@@ -23,6 +23,18 @@ type ScheduleSnapshot = {
 };
 
 const STATS_HISTORY_LIMIT = 12;
+type ConflictInterval = {
+  slotId: number;
+  start: number;
+  end: number;
+  dateKey: string;
+};
+
+type ConflictAnalysis = {
+  overlapCount: number;
+  conflictSlotIds: Set<number>;
+  conflictSlotCountByDate: Map<string, number>;
+};
 
 function toSlotHours(slot: ScheduleSlot): number {
   if (typeof slot.academic_hours === "number" && Number.isFinite(slot.academic_hours)) {
@@ -36,26 +48,36 @@ function toSlotHours(slot: ScheduleSlot): number {
   return (ends - starts) / 3_600_000;
 }
 
-function countOverlapInIntervals(intervals: Array<{ start: number; end: number }>): number {
+function detectOverlapsInIntervals(
+  intervals: ConflictInterval[],
+  conflictSlotIds: Set<number>,
+  conflictSlotIdsByDate: Map<string, Set<number>>
+): number {
   if (intervals.length < 2) return 0;
   const sorted = [...intervals].sort((a, b) => a.start - b.start);
   let overlaps = 0;
-  let currentEnd = sorted[0].end;
-  for (let index = 1; index < sorted.length; index += 1) {
-    const next = sorted[index];
-    if (next.start < currentEnd) {
+  for (let index = 0; index < sorted.length; index += 1) {
+    const left = sorted[index];
+    for (let compareIndex = index + 1; compareIndex < sorted.length; compareIndex += 1) {
+      const right = sorted[compareIndex];
+      if (right.start >= left.end) {
+        break;
+      }
       overlaps += 1;
-      currentEnd = Math.max(currentEnd, next.end);
-    } else {
-      currentEnd = next.end;
+      conflictSlotIds.add(left.slotId);
+      conflictSlotIds.add(right.slotId);
+      const dateSet = conflictSlotIdsByDate.get(left.dateKey) || new Set<number>();
+      dateSet.add(left.slotId);
+      dateSet.add(right.slotId);
+      conflictSlotIdsByDate.set(left.dateKey, dateSet);
     }
   }
   return overlaps;
 }
 
-function countScheduleConflicts(slots: ScheduleSlot[]): number {
-  const teacherMap = new Map<string, Array<{ start: number; end: number }>>();
-  const roomMap = new Map<string, Array<{ start: number; end: number }>>();
+function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
+  const teacherMap = new Map<string, ConflictInterval[]>();
+  const roomMap = new Map<string, ConflictInterval[]>();
 
   for (const slot of slots) {
     const start = new Date(slot.starts_at).getTime();
@@ -66,18 +88,31 @@ function countScheduleConflicts(slots: ScheduleSlot[]): number {
     const dateKey = slot.starts_at.slice(0, 10);
     const teacherKey = `${dateKey}:teacher:${slot.teacher_id}`;
     const roomKey = `${dateKey}:room:${slot.room_id}`;
-    teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), { start, end }]);
-    roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), { start, end }]);
+    const interval: ConflictInterval = { slotId: slot.id, start, end, dateKey };
+    teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), interval]);
+    roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), interval]);
   }
 
-  let overlaps = 0;
+  const conflictSlotIds = new Set<number>();
+  const conflictSlotIdsByDate = new Map<string, Set<number>>();
+  let overlapCount = 0;
   for (const intervals of teacherMap.values()) {
-    overlaps += countOverlapInIntervals(intervals);
+    overlapCount += detectOverlapsInIntervals(intervals, conflictSlotIds, conflictSlotIdsByDate);
   }
   for (const intervals of roomMap.values()) {
-    overlaps += countOverlapInIntervals(intervals);
+    overlapCount += detectOverlapsInIntervals(intervals, conflictSlotIds, conflictSlotIdsByDate);
   }
-  return overlaps;
+
+  const conflictSlotCountByDate = new Map<string, number>();
+  for (const [dateKey, ids] of conflictSlotIdsByDate.entries()) {
+    conflictSlotCountByDate.set(dateKey, ids.size);
+  }
+
+  return {
+    overlapCount,
+    conflictSlotIds,
+    conflictSlotCountByDate
+  };
 }
 
 export function SchedulePage() {
@@ -98,7 +133,7 @@ export function SchedulePage() {
     const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
     const uniqueGroups = new Set(data.map((slot) => slot.group_id)).size;
     const uniqueTeachers = new Set(data.map((slot) => slot.teacher_id)).size;
-    const conflicts = countScheduleConflicts(data);
+    const conflicts = analyzeScheduleConflicts(data).overlapCount;
     const snapshot: ScheduleSnapshot = {
       totalLessons: data.length,
       totalHours,
@@ -112,6 +147,8 @@ export function SchedulePage() {
       return next.slice(next.length - STATS_HISTORY_LIMIT);
     });
   };
+
+  const conflictAnalysis = useMemo(() => analyzeScheduleConflicts(slots), [slots]);
 
   const fetchSchedule = async () => {
     setIsLoading(true);
@@ -131,6 +168,17 @@ export function SchedulePage() {
 
   const slotColumns = useMemo<DataTableColumn<ScheduleSlot>[]>(
     () => [
+      {
+        key: "conflict",
+        header: "⚠",
+        render: (slot) =>
+          conflictAnalysis.conflictSlotIds.has(slot.id) ? (
+            <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Конфлікт</span>
+          ) : (
+            "—"
+          ),
+        sortAccessor: (slot) => (conflictAnalysis.conflictSlotIds.has(slot.id) ? 1 : 0)
+      },
       {
         key: "pair",
         header: "Пара",
@@ -177,7 +225,7 @@ export function SchedulePage() {
         sortAccessor: (slot) => slot.room_name || String(slot.room_id)
       }
     ],
-    []
+    [conflictAnalysis]
   );
 
   useEffect(() => {
@@ -340,6 +388,11 @@ export function SchedulePage() {
             Згорнути все
           </button>
         </div>
+        {conflictAnalysis.overlapCount > 0 && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Виявлено конфлікти у розкладі: {conflictAnalysis.overlapCount}. Конфліктні рядки підсвічено нижче.
+          </div>
+        )}
         {loadError && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
             <p className="text-sm text-red-700">{loadError}</p>
@@ -358,6 +411,7 @@ export function SchedulePage() {
         <div className="space-y-3">
           {groupedSchedule.map((group) => {
             const isExpanded = Boolean(expandedDates[group.dateKey]);
+            const dayConflictCount = conflictAnalysis.conflictSlotCountByDate.get(group.dateKey) || 0;
             return (
               <div key={group.dateKey} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <button
@@ -368,6 +422,7 @@ export function SchedulePage() {
                     <p className="font-semibold capitalize text-ink">{group.label}</p>
                     <p className="text-xs text-slate-600">
                       Занять: {group.slots.length} | Годин: {group.totalHours}
+                      {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}
                     </p>
                   </div>
                   <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
@@ -381,6 +436,9 @@ export function SchedulePage() {
                       data={group.slots}
                       columns={slotColumns}
                       rowKey={(slot) => slot.id}
+                      rowClassName={(slot) =>
+                        conflictAnalysis.conflictSlotIds.has(slot.id) ? "bg-amber-50/70" : undefined
+                      }
                       isLoading={isLoading}
                       emptyText="Занять за цю дату немає"
                       initialPageSize={20}
