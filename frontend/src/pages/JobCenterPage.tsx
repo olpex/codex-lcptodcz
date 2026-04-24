@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
+import { TrendStatCard } from "../components/TrendStatCard";
 import { API_URL } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -15,6 +16,15 @@ type JobTypeFilter = "all" | "import" | "export";
 type JobStatusFilter = "all" | "queued" | "running" | "succeeded" | "failed";
 
 const REFRESH_INTERVAL_MS = 8000;
+const STATS_HISTORY_LIMIT = 12;
+
+type JobStatsSnapshot = {
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+};
 
 function toIsoDateRangeStart(value: string): string {
   return `${value}T00:00:00Z`;
@@ -35,6 +45,33 @@ export function JobCenterPage() {
   const [dateTo, setDateTo] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [statsHistory, setStatsHistory] = useState<JobStatsSnapshot[]>([]);
+
+  const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
+    const snapshot: JobStatsSnapshot = {
+      total: data.length,
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0
+    };
+    for (const item of data) {
+      if (item.job.status === "queued") snapshot.queued += 1;
+      if (item.job.status === "running") snapshot.running += 1;
+      if (item.job.status === "succeeded") snapshot.succeeded += 1;
+      if (item.job.status === "failed") snapshot.failed += 1;
+    }
+    return snapshot;
+  };
+
+  const appendSnapshot = (data: JobListItem[]) => {
+    const snapshot = buildSnapshot(data);
+    setStatsHistory((prev) => {
+      const next = [...prev, snapshot];
+      if (next.length <= STATS_HISTORY_LIMIT) return next;
+      return next.slice(next.length - STATS_HISTORY_LIMIT);
+    });
+  };
 
   const buildJobsPath = () => {
     const params = new URLSearchParams();
@@ -57,6 +94,7 @@ export function JobCenterPage() {
     try {
       const data = await request<JobListItem[]>(buildJobsPath());
       setRows(data);
+      appendSnapshot(data);
       setLoadError(null);
       if (showToast) {
         showSuccess("Список задач оновлено");
@@ -71,6 +109,7 @@ export function JobCenterPage() {
   };
 
   useEffect(() => {
+    setStatsHistory([]);
     loadJobs();
   }, [jobType, jobStatus, dateFrom, dateTo]);
 
@@ -85,8 +124,8 @@ export function JobCenterPage() {
   const refreshOne = async (item: JobListItem) => {
     try {
       const status = await request<JobStatusPayload>(`/jobs/${item.job.id}`);
-      setRows((prev) =>
-        prev.map((row) =>
+      setRows((prev) => {
+        const nextRows = prev.map((row) =>
           row.job.id === item.job.id
             ? {
                 ...row,
@@ -94,8 +133,10 @@ export function JobCenterPage() {
                 job: status.job
               }
             : row
-        )
-      );
+        );
+        appendSnapshot(nextRows);
+        return nextRows;
+      });
       showSuccess(`Задачу #${item.job.id} оновлено`);
     } catch (error) {
       showError((error as Error).message);
@@ -201,7 +242,18 @@ export function JobCenterPage() {
         )
       }
     ],
-    [accessToken, rows]
+    [accessToken]
+  );
+
+  const seriesByKey = useMemo(
+    () => ({
+      total: statsHistory.map((item) => item.total),
+      queued: statsHistory.map((item) => item.queued),
+      running: statsHistory.map((item) => item.running),
+      succeeded: statsHistory.map((item) => item.succeeded),
+      failed: statsHistory.map((item) => item.failed)
+    }),
+    [statsHistory]
   );
 
   return (
@@ -265,6 +317,30 @@ export function JobCenterPage() {
               Автооновлення
             </label>
           </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {[
+            { key: "total", title: "Усього задач", series: seriesByKey.total },
+            { key: "queued", title: "У черзі", series: seriesByKey.queued },
+            { key: "running", title: "Виконуються", series: seriesByKey.running },
+            { key: "succeeded", title: "Успішні", series: seriesByKey.succeeded },
+            { key: "failed", title: "Помилки", series: seriesByKey.failed }
+          ].map((item) => {
+            const current = item.series.length ? item.series[item.series.length - 1] : 0;
+            const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;
+            const delta = previous == null ? null : current - previous;
+            const valueLabel = isLoading && item.series.length === 0 ? "…" : String(current);
+            return (
+              <TrendStatCard
+                key={item.key}
+                title={item.title}
+                valueLabel={valueLabel}
+                delta={delta}
+                series={item.series}
+                sparklineLabel={`${item.title}: тренд за останні оновлення`}
+              />
+            );
+          })}
         </div>
       </Panel>
 
