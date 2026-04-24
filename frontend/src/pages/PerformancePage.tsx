@@ -32,6 +32,7 @@ export function PerformancePage() {
   const [form, setForm] = useState<PerformancePayload>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [performanceToDelete, setPerformanceToDelete] = useState<Performance | null>(null);
 
@@ -60,8 +61,11 @@ export function PerformancePage() {
       setRows(performanceRows);
       setGroups(groupRows);
       setTrainees(traineeRows);
+      setLoadError(null);
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -307,6 +311,8 @@ export function PerformancePage() {
           columns={columns}
           rowKey={(item) => item.id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={load}
           emptyText="Записи успішності відсутні"
           search={{
             placeholder: "Пошук за групою, слухачем або ID",

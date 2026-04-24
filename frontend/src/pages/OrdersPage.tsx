@@ -27,6 +27,7 @@ export function OrdersPage() {
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
@@ -41,6 +42,7 @@ export function OrdersPage() {
     try {
       const data = await request<Order[]>("/orders");
       setRows(data);
+      setLoadError(null);
       if (editId) {
         const current = data.find((item) => item.id === editId);
         if (current) {
@@ -50,7 +52,9 @@ export function OrdersPage() {
         }
       }
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -334,6 +338,8 @@ export function OrdersPage() {
           columns={columns}
           rowKey={(row) => row.id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={load}
           emptyText="Накази відсутні"
           search={{
             placeholder: "Пошук за номером, типом або статусом",

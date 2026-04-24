@@ -21,6 +21,9 @@ type DataTableProps<T> = {
   columns: DataTableColumn<T>[];
   rowKey: (row: T) => string | number;
   isLoading?: boolean;
+  errorText?: string | null;
+  onRetry?: (() => void) | null;
+  retryLabel?: string;
   emptyText?: string;
   pageSizeOptions?: number[];
   initialPageSize?: number;
@@ -48,6 +51,9 @@ export function DataTable<T>({
   columns,
   rowKey,
   isLoading = false,
+  errorText = null,
+  onRetry = null,
+  retryLabel = "Повторити",
   emptyText = "Дані відсутні",
   pageSizeOptions = [10, 20, 50],
   initialPageSize = 10,
@@ -157,6 +163,21 @@ export function DataTable<T>({
           </label>
         </div>
       </div>
+
+      {errorText && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+          <p className="text-sm text-red-700">{errorText}</p>
+          {onRetry && (
+            <button
+              type="button"
+              className="rounded border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-700"
+              onClick={onRetry}
+            >
+              {retryLabel}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="overflow-auto">
         <table className="min-w-full text-sm">

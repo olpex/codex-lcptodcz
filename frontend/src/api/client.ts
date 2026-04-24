@@ -15,6 +15,37 @@ function mapStatusToMessage(status: number): string {
   return `Помилка запиту (${status}).`;
 }
 
+function sanitizeTechnicalMessage(rawMessage: string, status: number): string {
+  const trimmed = rawMessage.trim();
+  if (!trimmed) {
+    return mapStatusToMessage(status);
+  }
+
+  const withoutApiPath = trimmed
+    .replace(/\s*\(\/api\/[^)]+\)\s*$/i, "")
+    .replace(/\s*request url:\s*\/api\/\S+/gi, "")
+    .trim();
+
+  if (!withoutApiPath) {
+    return mapStatusToMessage(status);
+  }
+
+  if (/^not found$/i.test(withoutApiPath)) {
+    return mapStatusToMessage(404);
+  }
+  if (/^unauthorized$/i.test(withoutApiPath)) {
+    return mapStatusToMessage(401);
+  }
+  if (/^forbidden$/i.test(withoutApiPath)) {
+    return mapStatusToMessage(403);
+  }
+  if (/^internal server error$/i.test(withoutApiPath)) {
+    return mapStatusToMessage(500);
+  }
+
+  return withoutApiPath;
+}
+
 function parsePayloadMessage(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -59,7 +90,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = parsePayloadMessage(payload) || mapStatusToMessage(response.status);
+    const payloadMessage = parsePayloadMessage(payload);
+    const message = payloadMessage
+      ? sanitizeTechnicalMessage(payloadMessage, response.status)
+      : mapStatusToMessage(response.status);
     const error = new Error(message) as Error & { status?: number };
     error.status = response.status;
     throw error;

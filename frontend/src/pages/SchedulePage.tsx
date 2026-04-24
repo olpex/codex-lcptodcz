@@ -22,6 +22,7 @@ export function SchedulePage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
@@ -30,8 +31,11 @@ export function SchedulePage() {
     try {
       const data = await request<ScheduleSlot[]>("/schedule");
       setSlots(data);
+      setLoadError(null);
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -212,6 +216,18 @@ export function SchedulePage() {
             Згорнути все
           </button>
         </div>
+        {loadError && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+            <p className="text-sm text-red-700">{loadError}</p>
+            <button
+              type="button"
+              className="rounded border border-red-300 bg-white px-2.5 py-1 text-xs font-semibold text-red-700"
+              onClick={fetchSchedule}
+            >
+              Повторити
+            </button>
+          </div>
+        )}
 
         {!groupedSchedule.length && <p className="text-sm text-slate-600">Занять у розкладі поки немає.</p>}
 

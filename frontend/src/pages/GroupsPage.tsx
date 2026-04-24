@@ -14,6 +14,7 @@ export function GroupsPage() {
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -55,8 +56,11 @@ export function GroupsPage() {
     try {
       const data = await request<Group[]>("/groups");
       setGroups(data);
+      setLoadError(null);
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -142,6 +146,8 @@ export function GroupsPage() {
           columns={columns}
           rowKey={(group) => group.id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={loadGroups}
           emptyText="Групи відсутні"
           search={{
             placeholder: "Пошук за кодом, назвою або статусом",

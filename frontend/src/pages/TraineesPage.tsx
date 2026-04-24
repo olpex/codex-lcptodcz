@@ -16,6 +16,7 @@ export function TraineesPage() {
   const [phone, setPhone] = useState("");
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const canEdit = useMemo(
@@ -63,8 +64,11 @@ export function TraineesPage() {
       const query = term ? `?search=${encodeURIComponent(term)}` : "";
       const data = await request<Trainee[]>(`/trainees${query}`);
       setTrainees(data);
+      setLoadError(null);
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -179,6 +183,8 @@ export function TraineesPage() {
           columns={columns}
           rowKey={(trainee) => trainee.id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={() => fetchTrainees(search)}
           emptyText="Слухачі відсутні"
         />
       </Panel>

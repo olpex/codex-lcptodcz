@@ -22,6 +22,7 @@ export function DraftsPage() {
   const [confidence, setConfidence] = useState(0.75);
   const [payload, setPayload] = useState<EditablePayload>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -129,6 +130,7 @@ export function DraftsPage() {
       ]);
       setDrafts(draftRows);
       setMessages(mailRows);
+      setLoadError(null);
 
       if (!selectedDraftId && draftRows.length > 0) {
         applyDraftToForm(draftRows[0]);
@@ -137,7 +139,9 @@ export function DraftsPage() {
         if (refreshed) applyDraftToForm(refreshed);
       }
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -226,6 +230,8 @@ export function DraftsPage() {
           columns={mailColumns}
           rowKey={(message) => message.id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={load}
           emptyText="Листи відсутні"
           search={{
             placeholder: "Пошук за відправником або темою",
@@ -242,6 +248,8 @@ export function DraftsPage() {
             columns={draftColumns}
             rowKey={(draft) => draft.id}
             isLoading={isLoading}
+            errorText={loadError}
+            onRetry={load}
             emptyText="Чернетки відсутні"
             search={{
               placeholder: "Пошук за типом або статусом",

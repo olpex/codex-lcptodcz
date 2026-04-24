@@ -11,6 +11,7 @@ export function WorkloadPage() {
   const [rows, setRows] = useState<Workload[]>([]);
   const [annualLoadDrafts, setAnnualLoadDrafts] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const canEditAnnualLoad =
     user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
@@ -19,11 +20,14 @@ export function WorkloadPage() {
     try {
       const data = await request<Workload[]>("/teacher-workload");
       setRows(data);
+      setLoadError(null);
       setAnnualLoadDrafts(
         Object.fromEntries(data.map((row) => [row.teacher_id, String(row.annual_load_hours ?? 0)]))
       );
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -124,6 +128,8 @@ export function WorkloadPage() {
           columns={columns}
           rowKey={(row) => row.teacher_id}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={load}
           emptyText="Дані педнавантаження відсутні"
           search={{
             placeholder: "Пошук викладача",

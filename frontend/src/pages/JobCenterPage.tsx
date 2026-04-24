@@ -34,6 +34,7 @@ export function JobCenterPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const buildJobsPath = () => {
     const params = new URLSearchParams();
@@ -56,11 +57,14 @@ export function JobCenterPage() {
     try {
       const data = await request<JobListItem[]>(buildJobsPath());
       setRows(data);
+      setLoadError(null);
       if (showToast) {
         showSuccess("Список задач оновлено");
       }
     } catch (error) {
-      showError((error as Error).message);
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
     } finally {
       setIsLoading(false);
     }
@@ -270,6 +274,8 @@ export function JobCenterPage() {
           columns={columns}
           rowKey={(item) => `${item.job_type}-${item.job.id}`}
           isLoading={isLoading}
+          errorText={loadError}
+          onRetry={() => loadJobs(true)}
           emptyText="Задачі не знайдено"
           search={{
             placeholder: "Пошук за ID, типом, статусом або повідомленням",
