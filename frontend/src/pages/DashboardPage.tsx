@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { InlineNotice } from "../components/InlineNotice";
+import { KpiBarChart } from "../components/KpiBarChart";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -90,16 +90,8 @@ export function DashboardPage() {
             Завантаження KPI...
           </div>
         ) : (
-          <div className="h-72 w-full">
-            <ResponsiveContainer>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" fill="#1d4f47" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <KpiBarChart items={chartData} />
           </div>
         )}
       </Panel>
