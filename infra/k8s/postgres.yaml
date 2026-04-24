@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: suptc-postgres
+  namespace: suptc
+spec:
+  selector:
+    app: suptc-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: suptc-postgres
+  namespace: suptc
+spec:
+  serviceName: suptc-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: suptc-postgres
+  template:
+    metadata:
+      labels:
+        app: suptc-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: suptc
+            - name: POSTGRES_USER
+              value: suptc
+            - name: POSTGRES_PASSWORD
+              value: suptc
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

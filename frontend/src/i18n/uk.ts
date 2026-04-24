@@ -9,6 +9,7 @@ export const uiText = {
     orders: "Накази",
     schedule: "Розклад",
     workload: "Навантаження",
+    performance: "Успішність",
     documents: "Документи",
     drafts: "Чернетки OCR"
   },

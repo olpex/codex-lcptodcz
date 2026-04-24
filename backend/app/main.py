@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.api.middleware import RBACContextMiddleware
@@ -9,6 +10,30 @@ from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
 from app.models import Role, RoleName, Room, Subject, Teacher, User
 from app.services.storage import storage_path
+
+
+def ensure_runtime_schema() -> None:
+    """
+    Minimal runtime schema alignment for already-deployed databases
+    when Alembic migrations are not available in MVP.
+    """
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        existing_tables = set(inspector.get_table_names())
+        column_plan = [
+            ("import_jobs", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("export_jobs", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("mail_messages", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("ocr_results", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("performances", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+        ]
+        for table_name, column_name, ddl in column_plan:
+            if table_name not in existing_tables:
+                continue
+            current_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if column_name in current_columns:
+                continue
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
 
 
 def seed_reference_data(db: Session) -> None:
@@ -82,6 +107,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         Base.metadata.create_all(bind=engine)
+        ensure_runtime_schema()
         storage_path()
         db = SessionLocal()
         try:

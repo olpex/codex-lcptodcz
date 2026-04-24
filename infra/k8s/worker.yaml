@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suptc-worker
+  namespace: suptc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: suptc-worker
+  template:
+    metadata:
+      labels:
+        app: suptc-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/suptc-backend:latest
+          imagePullPolicy: Always
+          command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--queues=mail_ingest,ocr_parse,import_parse,report_export"]
+          envFrom:
+            - configMapRef:
+                name: suptc-config
+            - secretRef:
+                name: suptc-secrets
+          volumeMounts:
+            - name: documents
+              mountPath: /tmp/documents
+      volumes:
+        - name: documents
+          emptyDir: {}

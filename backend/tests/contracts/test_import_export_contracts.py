@@ -78,7 +78,7 @@ def test_export_contract_structures(db_session):
     db_session.commit()
 
     for report_type, expected_headers in golden.items():
-        rows = collect_report_rows(db_session, report_type)
+        rows = collect_report_rows(db_session, report_type, "main")
         assert rows, f"empty rows for {report_type}"
 
         csv_path, csv_type = save_report_file(rows, report_type, "csv")

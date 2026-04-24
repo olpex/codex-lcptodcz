@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     imap_user: str = Field(default="")
     imap_password: str = Field(default="")
     imap_mailbox: str = Field(default="INBOX")
+    imap_branch_id: str = Field(default="main")
     imap_poll_interval_seconds: int = Field(default=300)
 
     smtp_host: str = Field(default="")
@@ -40,6 +41,9 @@ class Settings(BaseSettings):
 
     ocr_language: str = Field(default="ukr+eng")
     tesseract_cmd: str = Field(default="")
+    openai_api_key: str = Field(default="")
+    openai_model: str = Field(default="gpt-4o-mini")
+    openai_ocr_enabled: bool = Field(default=False)
 
     cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
 

@@ -1,7 +1,5 @@
 import csv
-import io
 from datetime import date, datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 from docx import Document as DocxDocument
@@ -14,6 +12,7 @@ from app.models import (
     Document,
     DocumentType,
     ExportJob,
+    Group,
     GroupMembership,
     ImportJob,
     JobStatus,
@@ -67,7 +66,7 @@ def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     return {"rows": 0, "data": []}
 
 
-def try_import_trainees(db: Session, parsed: dict) -> dict:
+def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
     headers = [str(h).lower() for h in parsed.get("headers", [])]
     required = {"first_name", "last_name"}
     if not required.issubset(set(headers)):
@@ -81,6 +80,7 @@ def try_import_trainees(db: Session, parsed: dict) -> dict:
         if not first_name or not last_name:
             continue
         trainee = Trainee(
+            branch_id=branch_id,
             first_name=first_name,
             last_name=last_name,
             status=str(keymap.get("status") or "active"),
@@ -91,9 +91,9 @@ def try_import_trainees(db: Session, parsed: dict) -> dict:
     return {"inserted": inserted}
 
 
-def collect_report_rows(db: Session, report_type: str) -> list[dict]:
+def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[dict]:
     if report_type == "trainees":
-        trainees = db.query(Trainee).all()
+        trainees = db.query(Trainee).filter(Trainee.branch_id == branch_id).all()
         return [
             {
                 "id": trainee.id,
@@ -106,8 +106,13 @@ def collect_report_rows(db: Session, report_type: str) -> list[dict]:
         ]
 
     if report_type == "teacher_workload":
-        teachers = db.query(Teacher).all()
-        slots = db.query(ScheduleSlot).all()
+        teachers = db.query(Teacher).filter(Teacher.branch_id == branch_id).all()
+        slots = (
+            db.query(ScheduleSlot)
+            .join(Group, Group.id == ScheduleSlot.group_id)
+            .filter(Group.branch_id == branch_id)
+            .all()
+        )
         rows = []
         for teacher in teachers:
             total_hours = 0.0
@@ -127,10 +132,12 @@ def collect_report_rows(db: Session, report_type: str) -> list[dict]:
     if report_type == "kpi":
         active_groups = (
             db.query(GroupMembership)
+            .join(Group, Group.id == GroupMembership.group_id)
             .filter(GroupMembership.status == MembershipStatus.ACTIVE)
+            .filter(Group.branch_id == branch_id)
             .count()
         )
-        progress = db.query(Performance).all()
+        progress = db.query(Performance).filter(Performance.branch_id == branch_id).all()
         avg_progress = round(sum(record.progress_pct for record in progress) / len(progress), 2) if progress else 0.0
         return [
             {"metric": "active_memberships", "value": active_groups},
@@ -139,14 +146,81 @@ def collect_report_rows(db: Session, report_type: str) -> list[dict]:
         ]
 
     if report_type == "form_1pa":
-        trainees_total = db.query(Trainee).count()
-        completed = db.query(Trainee).filter(Trainee.status == "completed").count()
+        trainees_total = db.query(Trainee).filter(Trainee.branch_id == branch_id).count()
+        completed = (
+            db.query(Trainee)
+            .filter(Trainee.branch_id == branch_id, Trainee.status == "completed")
+            .count()
+        )
+        employed = (
+            db.query(Performance)
+            .filter(Performance.branch_id == branch_id, Performance.employment_flag.is_(True))
+            .count()
+        )
         return [
             {"field": "period", "value": date.today().isoformat()},
             {"field": "trainees_total", "value": trainees_total},
             {"field": "trainees_completed", "value": completed},
-            {"field": "employment_rate_estimate", "value": 0.76},
+            {"field": "employed_after_training", "value": employed},
+            {"field": "employment_rate_estimate", "value": round((employed / max(completed, 1)) * 100, 2)},
         ]
+
+    if report_type == "employment":
+        rows = (
+            db.query(Performance, Trainee, Group)
+            .join(Trainee, Trainee.id == Performance.trainee_id)
+            .join(Group, Group.id == Performance.group_id)
+            .filter(Performance.branch_id == branch_id, Group.branch_id == branch_id, Trainee.branch_id == branch_id)
+            .all()
+        )
+        return [
+            {
+                "trainee_id": performance.trainee_id,
+                "trainee_name": f"{trainee.last_name} {trainee.first_name}",
+                "group_code": group.code,
+                "progress_pct": performance.progress_pct,
+                "attendance_pct": performance.attendance_pct,
+                "employment_flag": performance.employment_flag,
+            }
+            for performance, trainee, group in rows
+        ]
+
+    if report_type == "financial":
+        teachers = db.query(Teacher).filter(Teacher.branch_id == branch_id).all()
+        slots = (
+            db.query(ScheduleSlot)
+            .join(Group, Group.id == ScheduleSlot.group_id)
+            .filter(Group.branch_id == branch_id)
+            .all()
+        )
+        rows: list[dict] = []
+        total_amount = 0.0
+        for teacher in teachers:
+            total_hours = 0.0
+            for slot in slots:
+                if slot.teacher_id == teacher.id:
+                    total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+            amount = round(total_hours * teacher.hourly_rate, 2)
+            total_amount += amount
+            rows.append(
+                {
+                    "teacher_id": teacher.id,
+                    "teacher_name": f"{teacher.last_name} {teacher.first_name}",
+                    "hourly_rate": teacher.hourly_rate,
+                    "total_hours": round(total_hours, 2),
+                    "amount_uah": amount,
+                }
+            )
+        rows.append(
+            {
+                "teacher_id": "",
+                "teacher_name": "TOTAL",
+                "hourly_rate": "",
+                "total_hours": "",
+                "amount_uah": round(total_amount, 2),
+            }
+        )
+        return rows
 
     return []
 

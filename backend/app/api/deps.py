@@ -38,6 +38,21 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def apply_branch_scope(query, model, branch_id: str):
+    if hasattr(model, "branch_id"):
+        return query.filter(model.branch_id == branch_id)
+    return query
+
+
+def ensure_same_branch(current_user: User, entity, entity_name: str = "Сутність") -> None:
+    entity_branch = getattr(entity, "branch_id", None)
+    if entity_branch is not None and entity_branch != current_user.branch_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{entity_name} не знайдено",
+        )
+
+
 def require_roles(*allowed_roles: RoleName) -> Callable:
     allowed = {role.value if isinstance(role, RoleName) else str(role) for role in allowed_roles}
 
@@ -69,4 +84,3 @@ def request_meta(request: Request) -> tuple[str | None, str | None]:
     forwarded_for = request.headers.get("x-forwarded-for")
     ip = forwarded_for.split(",")[0].strip() if forwarded_for else request.client.host if request.client else None
     return user_agent, ip
-

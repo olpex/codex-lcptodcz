@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Group, GroupStatus, RoleName, Room, ScheduleSlot, Subject, Teacher
 from app.schemas.api import ScheduleGenerateRequest, ScheduleSlotResponse
 from app.services.audit import write_audit
@@ -16,36 +16,86 @@ router = APIRouter()
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_user: CurrentUser) -> list[ScheduleSlotResponse]:
-    groups = db.query(Group).filter(Group.status.in_([GroupStatus.ACTIVE, GroupStatus.PLANNED])).all()
-    teachers = db.query(Teacher).filter(Teacher.is_active.is_(True)).all()
-    rooms = db.query(Room).all()
-    subjects = db.query(Subject).all()
+    groups = (
+        apply_branch_scope(db.query(Group), Group, current_user.branch_id)
+        .filter(Group.status.in_([GroupStatus.ACTIVE, GroupStatus.PLANNED]))
+        .order_by(Group.id.asc())
+        .all()
+    )
+    teachers = (
+        apply_branch_scope(db.query(Teacher), Teacher, current_user.branch_id)
+        .filter(Teacher.is_active.is_(True))
+        .order_by(Teacher.id.asc())
+        .all()
+    )
+    rooms = apply_branch_scope(db.query(Room), Room, current_user.branch_id).order_by(Room.id.asc()).all()
+    subjects = apply_branch_scope(db.query(Subject), Subject, current_user.branch_id).order_by(Subject.id.asc()).all()
     if not groups or not teachers or not rooms or not subjects:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Недостатньо даних для генерації (групи/викладачі/аудиторії/предмети)",
         )
 
+    window_start = datetime.combine(payload.start_date, time.min, tzinfo=timezone.utc)
+    window_end = datetime.combine(payload.start_date + timedelta(days=payload.days), time.max, tzinfo=timezone.utc)
+    existing_slots = (
+        db.query(ScheduleSlot)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .filter(
+            Group.branch_id == current_user.branch_id,
+            ScheduleSlot.starts_at >= window_start,
+            ScheduleSlot.starts_at <= window_end,
+        )
+        .all()
+    )
+
+    teacher_busy = {(slot.teacher_id, slot.starts_at) for slot in existing_slots}
+    room_busy = {(slot.room_id, slot.starts_at) for slot in existing_slots}
+    teacher_hours: dict[int, float] = {teacher.id: 0.0 for teacher in teachers}
+    for slot in existing_slots:
+        teacher_hours[slot.teacher_id] = teacher_hours.get(slot.teacher_id, 0.0) + max(
+            0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600
+        )
+
+    day_hours = [9, 11, 13, 15]
     created: list[ScheduleSlot] = []
     for idx_group, group in enumerate(groups):
         for day in range(payload.days):
             base_day = payload.start_date + timedelta(days=day)
-            slot_start = datetime.combine(base_day, time(hour=9 + (idx_group % 4) * 2), tzinfo=timezone.utc)
-            slot_end = slot_start + timedelta(hours=2)
-            teacher = teachers[(idx_group + day) % len(teachers)]
-            room = rooms[(idx_group + day) % len(rooms)]
             subject = subjects[(idx_group + day) % len(subjects)]
-            slot = ScheduleSlot(
-                group_id=group.id,
-                teacher_id=teacher.id,
-                subject_id=subject.id,
-                room_id=room.id,
-                starts_at=slot_start,
-                ends_at=slot_end,
-                generated_by=current_user.id,
-            )
-            db.add(slot)
-            created.append(slot)
+
+            assigned = False
+            for hour in day_hours:
+                slot_start = datetime.combine(base_day, time(hour=hour), tzinfo=timezone.utc)
+                slot_end = slot_start + timedelta(hours=2)
+
+                ordered_teachers = sorted(teachers, key=lambda teacher: (teacher_hours.get(teacher.id, 0.0), teacher.id))
+                teacher = next((candidate for candidate in ordered_teachers if (candidate.id, slot_start) not in teacher_busy), None)
+                room = next((candidate for candidate in rooms if (candidate.id, slot_start) not in room_busy), None)
+
+                if not teacher or not room:
+                    continue
+
+                slot = ScheduleSlot(
+                    group_id=group.id,
+                    teacher_id=teacher.id,
+                    subject_id=subject.id,
+                    room_id=room.id,
+                    starts_at=slot_start,
+                    ends_at=slot_end,
+                    generated_by=current_user.id,
+                )
+                db.add(slot)
+                created.append(slot)
+                teacher_busy.add((teacher.id, slot_start))
+                room_busy.add((room.id, slot_start))
+                teacher_hours[teacher.id] = teacher_hours.get(teacher.id, 0.0) + 2.0
+                assigned = True
+                break
+
+            if not assigned:
+                # If no slot is available for this group/day, continue generation for others.
+                continue
     db.commit()
     for slot in created:
         db.refresh(slot)
@@ -64,13 +114,17 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
 @router.get("", response_model=list[ScheduleSlotResponse])
 def list_schedule(
     db: DbSession,
-    _: CurrentUser,
+    current_user: CurrentUser,
     group_id: int | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
 ) -> list[ScheduleSlotResponse]:
-    query = db.query(ScheduleSlot)
+    query = db.query(ScheduleSlot).join(Group, Group.id == ScheduleSlot.group_id).filter(Group.branch_id == current_user.branch_id)
     if group_id:
+        group = db.get(Group, group_id)
+        if not group:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+        ensure_same_branch(current_user, group, "Групу")
         query = query.filter(ScheduleSlot.group_id == group_id)
     if date_from:
         query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
@@ -79,4 +133,3 @@ def list_schedule(
 
     slots = query.order_by(ScheduleSlot.starts_at.asc()).all()
     return [ScheduleSlotResponse.model_validate(slot) for slot in slots]
-

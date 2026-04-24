@@ -143,10 +143,13 @@ class Trainee(Base):
 
 class Group(Base):
     __tablename__ = "groups"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "code", name="uq_group_branch_code"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
-    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     capacity: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
     status: Mapped[GroupStatus] = mapped_column(
@@ -201,10 +204,13 @@ class Teacher(Base):
 
 class Subject(Base):
     __tablename__ = "subjects"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "name", name="uq_subject_branch_name"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     hours_total: Mapped[int] = mapped_column(Integer, default=72, nullable=False)
 
     schedule_slots: Mapped[list["ScheduleSlot"]] = relationship(back_populates="subject")
@@ -212,10 +218,13 @@ class Subject(Base):
 
 class Room(Base):
     __tablename__ = "rooms"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "name", name="uq_room_branch_name"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     capacity: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
 
     schedule_slots: Mapped[list["ScheduleSlot"]] = relationship(back_populates="room")
@@ -247,6 +256,7 @@ class Performance(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
     trainee_id: Mapped[int] = mapped_column(ForeignKey("trainees.id"), nullable=False, index=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), nullable=False, index=True)
     progress_pct: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -300,6 +310,7 @@ class ImportJob(Base):
     __tablename__ = "import_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(150), unique=True, nullable=False, index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
     status: Mapped[JobStatus] = mapped_column(
@@ -322,6 +333,7 @@ class ExportJob(Base):
     __tablename__ = "export_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(150), unique=True, nullable=False, index=True)
     report_type: Mapped[str] = mapped_column(String(100), nullable=False)
     export_format: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -344,9 +356,13 @@ class ExportJob(Base):
 
 class MailMessage(Base):
     __tablename__ = "mail_messages"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "message_id", name="uq_mail_message_branch_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    message_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    message_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sender: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -364,6 +380,7 @@ class OCRResult(Base):
     __tablename__ = "ocr_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
     structured_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -389,4 +406,3 @@ class AuditLog(Base):
     entity_id: Mapped[str] = mapped_column(String(100), nullable=False)
     details_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-

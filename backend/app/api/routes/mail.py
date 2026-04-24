@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import DraftStatus, MailMessage, OCRResult, Order, OrderType, RoleName, Trainee
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, MailMessageResponse
 from app.services.audit import write_audit
@@ -29,22 +29,31 @@ def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
 
 
 @router.get("/mail/messages", response_model=list[MailMessageResponse])
-def list_mail_messages(db: DbSession, _: CurrentUser) -> list[MailMessageResponse]:
-    rows = db.query(MailMessage).order_by(MailMessage.received_at.desc()).all()
+def list_mail_messages(db: DbSession, current_user: CurrentUser) -> list[MailMessageResponse]:
+    rows = (
+        apply_branch_scope(db.query(MailMessage), MailMessage, current_user.branch_id)
+        .order_by(MailMessage.received_at.desc())
+        .all()
+    )
     return [MailMessageResponse.model_validate(row) for row in rows]
 
 
 @router.get("/drafts", response_model=list[DraftResponse])
-def list_drafts(db: DbSession, _: CurrentUser) -> list[DraftResponse]:
-    rows = db.query(OCRResult).order_by(OCRResult.created_at.desc()).all()
+def list_drafts(db: DbSession, current_user: CurrentUser) -> list[DraftResponse]:
+    rows = (
+        apply_branch_scope(db.query(OCRResult), OCRResult, current_user.branch_id)
+        .order_by(OCRResult.created_at.desc())
+        .all()
+    )
     return [DraftResponse.model_validate(row) for row in rows]
 
 
 @router.get("/drafts/{draft_id}", response_model=DraftResponse)
-def get_draft(draft_id: int, db: DbSession, _: CurrentUser) -> DraftResponse:
+def get_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> DraftResponse:
     row = db.get(OCRResult, draft_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    ensure_same_branch(current_user, row, "Чернетку")
     return DraftResponse.model_validate(row)
 
 
@@ -62,6 +71,7 @@ def update_draft(
     draft = db.get(OCRResult, draft_id)
     if not draft:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    ensure_same_branch(current_user, draft, "Чернетку")
     if draft.status == DraftStatus.APPROVED:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтверджену чернетку не можна редагувати")
 
@@ -93,6 +103,7 @@ def reprocess_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> 
     row = db.get(OCRResult, draft_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    ensure_same_branch(current_user, row, "Чернетку")
     task = process_ocr_task.delay(draft_id)
     write_audit(
         db,
@@ -115,6 +126,7 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
     draft = db.get(OCRResult, draft_id)
     if not draft:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Чернетку не знайдено")
+    ensure_same_branch(current_user, draft, "Чернетку")
     if draft.status == DraftStatus.APPROVED:
         return DraftApproveResponse(draft_id=draft.id, status=draft.status, created_entity=None)
 
@@ -122,6 +134,7 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
     created_entity: dict | None = None
     if draft.draft_type == "order":
         order = Order(
+            branch_id=current_user.branch_id,
             order_number=str(payload.get("order_number") or f"AUTO-{draft.id}"),
             order_type=OrderType.INTERNAL,
             order_date=date.today(),
@@ -134,6 +147,7 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
         created_entity = {"type": "order", "id": order.id}
     else:
         trainee = Trainee(
+            branch_id=current_user.branch_id,
             first_name=str(payload.get("first_name") or "Невідомо"),
             last_name=str(payload.get("last_name") or "Невідомо"),
             status=str(payload.get("status") or "active"),

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import RoleName, Teacher
 from app.schemas.api import TeacherCreate, TeacherResponse, TeacherUpdate
 from app.services.audit import write_audit
@@ -9,8 +9,8 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[TeacherResponse])
-def list_teachers(db: DbSession, _: CurrentUser) -> list[TeacherResponse]:
-    teachers = db.query(Teacher).order_by(Teacher.created_at.desc()).all()
+def list_teachers(db: DbSession, current_user: CurrentUser) -> list[TeacherResponse]:
+    teachers = apply_branch_scope(db.query(Teacher), Teacher, current_user.branch_id).order_by(Teacher.created_at.desc()).all()
     return [TeacherResponse.model_validate(teacher) for teacher in teachers]
 
 
@@ -21,7 +21,7 @@ def list_teachers(db: DbSession, _: CurrentUser) -> list[TeacherResponse]:
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def create_teacher(payload: TeacherCreate, db: DbSession, current_user: CurrentUser) -> TeacherResponse:
-    teacher = Teacher(**payload.model_dump())
+    teacher = Teacher(**payload.model_dump(), branch_id=current_user.branch_id)
     db.add(teacher)
     db.commit()
     db.refresh(teacher)
@@ -44,6 +44,7 @@ def update_teacher(teacher_id: int, payload: TeacherUpdate, db: DbSession, curre
     teacher = db.get(Teacher, teacher_id)
     if not teacher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Викладача не знайдено")
+    ensure_same_branch(current_user, teacher, "Викладача")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(teacher, key, value)
     db.add(teacher)
@@ -68,6 +69,7 @@ def delete_teacher(teacher_id: int, db: DbSession, current_user: CurrentUser) ->
     teacher = db.get(Teacher, teacher_id)
     if not teacher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Викладача не знайдено")
+    ensure_same_branch(current_user, teacher, "Викладача")
     db.delete(teacher)
     db.commit()
     write_audit(
@@ -77,4 +79,3 @@ def delete_teacher(teacher_id: int, db: DbSession, current_user: CurrentUser) ->
         entity_type="teacher",
         entity_id=str(teacher_id),
     )
-

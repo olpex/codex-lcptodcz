@@ -48,7 +48,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         parsed = parse_document_content(job.document.file_path, job.document.file_type)
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:
-            import_result = try_import_trainees(db, parsed)
+            import_result = try_import_trainees(db, parsed, job.branch_id)
 
         payload = {
             "parsed": parsed,
@@ -91,7 +91,7 @@ def process_export_job_task(self, export_job_id: int) -> dict:
         db.add(job)
         db.commit()
 
-        rows = collect_report_rows(db, job.report_type)
+        rows = collect_report_rows(db, job.report_type, job.branch_id)
         file_path, doc_type = save_report_file(rows, job.report_type, job.export_format)
 
         document = Document(
@@ -100,6 +100,7 @@ def process_export_job_task(self, export_job_id: int) -> dict:
             file_type=doc_type,
             source="export",
             mime_type=f"application/{job.export_format}",
+            branch_id=job.branch_id,
         )
         db.add(document)
         db.flush()
@@ -161,4 +162,3 @@ def process_ocr_task(self, ocr_result_id: int) -> dict:
         return {"status": "ok", "ocr_result_id": ocr_result_id}
     finally:
         db.close()
-

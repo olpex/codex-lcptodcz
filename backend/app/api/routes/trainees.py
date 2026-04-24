@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
 from app.models import RoleName, Trainee
 from app.schemas.api import TraineeCreate, TraineeResponse, TraineeUpdate
@@ -29,10 +29,10 @@ def _to_response(trainee: Trainee) -> TraineeResponse:
 @router.get("", response_model=list[TraineeResponse])
 def list_trainees(
     db: DbSession,
-    _: CurrentUser,
+    current_user: CurrentUser,
     search: str | None = Query(default=None),
 ) -> list[TraineeResponse]:
-    query = db.query(Trainee)
+    query = apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
     if search:
         query = query.filter(
             or_(
@@ -52,6 +52,7 @@ def list_trainees(
 )
 def create_trainee(payload: TraineeCreate, db: DbSession, current_user: CurrentUser) -> TraineeResponse:
     trainee = Trainee(
+        branch_id=current_user.branch_id,
         first_name=payload.first_name.strip(),
         last_name=payload.last_name.strip(),
         birth_date=payload.birth_date,
@@ -75,10 +76,11 @@ def create_trainee(payload: TraineeCreate, db: DbSession, current_user: CurrentU
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)
-def get_trainee(trainee_id: int, db: DbSession, _: CurrentUser) -> TraineeResponse:
+def get_trainee(trainee_id: int, db: DbSession, current_user: CurrentUser) -> TraineeResponse:
     trainee = db.get(Trainee, trainee_id)
     if not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухача не знайдено")
+    ensure_same_branch(current_user, trainee, "Слухача")
     return _to_response(trainee)
 
 
@@ -96,6 +98,7 @@ def update_trainee(
     trainee = db.get(Trainee, trainee_id)
     if not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухача не знайдено")
+    ensure_same_branch(current_user, trainee, "Слухача")
 
     data = payload.model_dump(exclude_unset=True)
     for field in ("first_name", "last_name", "birth_date", "status"):
@@ -131,6 +134,7 @@ def delete_trainee(trainee_id: int, db: DbSession, current_user: CurrentUser) ->
     trainee = db.get(Trainee, trainee_id)
     if not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухача не знайдено")
+    ensure_same_branch(current_user, trainee, "Слухача")
     db.delete(trainee)
     db.commit()
     write_audit(
@@ -140,4 +144,3 @@ def delete_trainee(trainee_id: int, db: DbSession, current_user: CurrentUser) ->
         entity_type="trainee",
         entity_id=str(trainee_id),
     )
-

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suptc-config
+  namespace: suptc
+data:
+  APP_NAME: "СУПТЦ"
+  API_V1_PREFIX: "/api/v1"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+  REFRESH_TOKEN_EXPIRE_MINUTES: "10080"
+  JWT_ALGORITHM: "HS256"
+  REDIS_URL: "redis://suptc-redis:6379/0"
+  FILE_STORAGE_PATH: "/tmp/documents"
+  CORS_ORIGINS: "https://app.example.com,http://localhost:5173"
+  IMAP_MAILBOX: "INBOX"
+  IMAP_BRANCH_ID: "main"
+  IMAP_POLL_INTERVAL_SECONDS: "300"
+  OCR_LANGUAGE: "ukr+eng"
+  OPENAI_MODEL: "gpt-4o-mini"
+  OPENAI_OCR_ENABLED: "false"
+  VITE_API_URL: "https://api.example.com/api/v1"

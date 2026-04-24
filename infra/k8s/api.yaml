@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: suptc-api
+  namespace: suptc
+spec:
+  selector:
+    app: suptc-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: suptc-api
+  namespace: suptc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: suptc-api
+  template:
+    metadata:
+      labels:
+        app: suptc-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/your-org/suptc-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          envFrom:
+            - configMapRef:
+                name: suptc-config
+            - secretRef:
+                name: suptc-secrets
+          volumeMounts:
+            - name: documents
+              mountPath: /tmp/documents
+      volumes:
+        - name: documents
+          emptyDir: {}

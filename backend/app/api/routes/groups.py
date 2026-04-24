@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Group, GroupMembership, MembershipStatus, RoleName, Trainee
 from app.schemas.api import (
     EnrollRequest,
@@ -18,8 +18,8 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[GroupResponse])
-def list_groups(db: DbSession, _: CurrentUser) -> list[GroupResponse]:
-    groups = db.query(Group).order_by(Group.created_at.desc()).all()
+def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]:
+    groups = apply_branch_scope(db.query(Group), Group, current_user.branch_id).order_by(Group.created_at.desc()).all()
     return [GroupResponse.model_validate(group) for group in groups]
 
 
@@ -30,10 +30,14 @@ def list_groups(db: DbSession, _: CurrentUser) -> list[GroupResponse]:
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def create_group(payload: GroupCreate, db: DbSession, current_user: CurrentUser) -> GroupResponse:
-    existing = db.query(Group).filter(Group.code == payload.code).first()
+    existing = (
+        apply_branch_scope(db.query(Group), Group, current_user.branch_id)
+        .filter(Group.code == payload.code)
+        .first()
+    )
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Група з таким кодом вже існує")
-    group = Group(**payload.model_dump())
+    group = Group(**payload.model_dump(), branch_id=current_user.branch_id)
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -48,10 +52,11 @@ def create_group(payload: GroupCreate, db: DbSession, current_user: CurrentUser)
 
 
 @router.get("/{group_id}", response_model=GroupResponse)
-def get_group(group_id: int, db: DbSession, _: CurrentUser) -> GroupResponse:
+def get_group(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupResponse:
     group = db.get(Group, group_id)
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
     return GroupResponse.model_validate(group)
 
 
@@ -64,6 +69,7 @@ def update_group(group_id: int, payload: GroupUpdate, db: DbSession, current_use
     group = db.get(Group, group_id)
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(group, key, value)
     db.add(group)
@@ -88,6 +94,7 @@ def delete_group(group_id: int, db: DbSession, current_user: CurrentUser) -> Non
     group = db.get(Group, group_id)
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
     db.delete(group)
     db.commit()
     write_audit(
@@ -100,7 +107,11 @@ def delete_group(group_id: int, db: DbSession, current_user: CurrentUser) -> Non
 
 
 @router.get("/{group_id}/members", response_model=list[MembershipResponse])
-def list_group_members(group_id: int, db: DbSession, _: CurrentUser) -> list[MembershipResponse]:
+def list_group_members(group_id: int, db: DbSession, current_user: CurrentUser) -> list[MembershipResponse]:
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
     memberships = db.query(GroupMembership).filter(GroupMembership.group_id == group_id).all()
     return [MembershipResponse.model_validate(membership) for membership in memberships]
 
@@ -121,6 +132,8 @@ def enroll_trainee(
     trainee = db.get(Trainee, payload.trainee_id)
     if not group or not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Група або слухач не знайдені")
+    ensure_same_branch(current_user, group, "Групу")
+    ensure_same_branch(current_user, trainee, "Слухача")
 
     active_count = (
         db.query(GroupMembership)
@@ -168,6 +181,10 @@ def expel_trainee(
     db: DbSession,
     current_user: CurrentUser,
 ) -> MembershipResponse:
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
     membership = (
         db.query(GroupMembership)
         .filter(GroupMembership.group_id == group_id, GroupMembership.trainee_id == trainee_id)
@@ -190,4 +207,3 @@ def expel_trainee(
         details={"reason": payload.reason},
     )
     return MembershipResponse.model_validate(membership)
-

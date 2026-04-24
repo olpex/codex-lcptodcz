@@ -19,5 +19,5 @@ def test_parse_xlsx_and_import_trainees(tmp_path: Path, db_session):
     assert parsed["rows"] == 2
     assert "first_name" in [h.lower() for h in parsed["headers"]]
 
-    result = try_import_trainees(db_session, parsed)
+    result = try_import_trainees(db_session, parsed, "main")
     assert result["inserted"] == 2

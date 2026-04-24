@@ -56,3 +56,9 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 - Інструкція: `infra/vercel/README.md`
 - Compose-файл: `infra/vercel/docker-compose.workers.yml`
+
+## Kubernetes
+
+Додатково доступні маніфести для розгортання у Kubernetes:
+
+- `infra/k8s/README.md`

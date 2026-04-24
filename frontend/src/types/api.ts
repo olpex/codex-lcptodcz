@@ -71,6 +71,10 @@ export interface Job {
   status: "queued" | "running" | "succeeded" | "failed";
   message: string | null;
   result_payload: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Draft {
@@ -101,4 +105,16 @@ export interface Order {
   payload_json: Record<string, unknown> | null;
   created_by: number | null;
   created_at: string;
+}
+
+export interface Performance {
+  id: number;
+  branch_id: string;
+  trainee_id: number;
+  group_id: number;
+  progress_pct: number;
+  attendance_pct: number;
+  employment_flag: boolean;
+  created_at: string;
+  updated_at: string;
 }

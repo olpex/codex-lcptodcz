@@ -30,6 +30,8 @@ export function DashboardPage() {
 
   useEffect(() => {
     fetchKpi();
+    const timer = window.setInterval(fetchKpi, 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const chartData = [
@@ -72,4 +74,3 @@ export function DashboardPage() {
     </div>
   );
 }
-

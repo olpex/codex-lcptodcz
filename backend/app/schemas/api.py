@@ -235,8 +235,38 @@ class DashboardKPIResponse(BaseModel):
     forecast_employment: int
 
 
+class PerformanceBase(BaseModel):
+    trainee_id: int
+    group_id: int
+    progress_pct: float = Field(ge=0, le=100)
+    attendance_pct: float = Field(ge=0, le=100)
+    employment_flag: bool = False
+
+
+class PerformanceCreate(PerformanceBase):
+    pass
+
+
+class PerformanceUpdate(BaseModel):
+    progress_pct: float | None = Field(default=None, ge=0, le=100)
+    attendance_pct: float | None = Field(default=None, ge=0, le=100)
+    employment_flag: bool | None = None
+
+
+class PerformanceResponse(ORMModel):
+    id: int
+    branch_id: str
+    trainee_id: int
+    group_id: int
+    progress_pct: float
+    attendance_pct: float
+    employment_flag: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class ExportRequest(BaseModel):
-    report_type: str = Field(pattern="^(trainees|teacher_workload|kpi|form_1pa)$")
+    report_type: str = Field(pattern="^(trainees|teacher_workload|kpi|form_1pa|employment|financial)$")
     export_format: str = Field(pattern="^(xlsx|pdf|csv)$")
 
 

@@ -42,6 +42,7 @@ def ingest_mailbox(db: Session) -> dict:
     if not settings.imap_host or not settings.imap_user or not settings.imap_password:
         return {"processed": 0, "message": "IMAP не налаштовано"}
 
+    branch_id = settings.imap_branch_id or "main"
     processed = 0
     mailbox = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port)
     mailbox.login(settings.imap_user, settings.imap_password)
@@ -61,7 +62,11 @@ def ingest_mailbox(db: Session) -> dict:
         parsed = email.message_from_bytes(raw)
         message_id = parsed.get("Message-ID", f"local-{uuid4().hex}")
 
-        existing = db.query(MailMessage).filter(MailMessage.message_id == message_id).first()
+        existing = (
+            db.query(MailMessage)
+            .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == message_id)
+            .first()
+        )
         if existing:
             continue
 
@@ -80,6 +85,7 @@ def ingest_mailbox(db: Session) -> dict:
                     break
 
         record = MailMessage(
+            branch_id=branch_id,
             message_id=message_id,
             sender=sender,
             subject=subject or "(без теми)",
@@ -106,6 +112,7 @@ def ingest_mailbox(db: Session) -> dict:
                 handle.write(payload)
 
             document = Document(
+                branch_id=branch_id,
                 file_name=filename,
                 file_path=str(out_path),
                 file_type=doc_type,
@@ -118,6 +125,7 @@ def ingest_mailbox(db: Session) -> dict:
             text = _extract_text_from_file(str(out_path), doc_type)
             draft_type, payload_guess = guess_draft_from_text(text)
             ocr_result = OCRResult(
+                branch_id=branch_id,
                 document_id=document.id,
                 extracted_text=text,
                 structured_payload=payload_guess,
@@ -133,4 +141,3 @@ def ingest_mailbox(db: Session) -> dict:
     db.commit()
     mailbox.logout()
     return {"processed": processed}
-

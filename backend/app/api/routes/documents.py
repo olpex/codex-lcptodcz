@@ -1,9 +1,11 @@
 from uuid import uuid4
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from celery.utils.log import get_task_logger
 
-from app.api.deps import CurrentUser, DbSession, require_roles
+from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Document, ExportJob, ImportJob, JobStatus, RoleName
 from app.schemas.api import ExportRequest, JobResponse
 from app.services.audit import write_audit
@@ -58,8 +60,13 @@ def import_document(
     if doc_type.value not in {"xlsx", "pdf", "docx"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються лише .xlsx, .pdf, .docx")
 
-    idem_key = x_idempotency_key or f"import-{uuid4().hex}"
-    existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idem_key).first()
+    raw_idem_key = x_idempotency_key or f"import-{uuid4().hex}"
+    idem_key = f"{current_user.branch_id}:{raw_idem_key}"
+    existing = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .filter(ImportJob.idempotency_key == idem_key)
+        .first()
+    )
     if existing:
         return JobResponse.model_validate(existing)
 
@@ -72,11 +79,13 @@ def import_document(
         hash_sha256=sha256,
         source="upload",
         created_by=current_user.id,
+        branch_id=current_user.branch_id,
     )
     db.add(document)
     db.flush()
 
     job = ImportJob(
+        branch_id=current_user.branch_id,
         idempotency_key=idem_key,
         document_id=document.id,
         status=JobStatus.QUEUED,
@@ -111,8 +120,9 @@ def export_report(
     current_user: CurrentUser,
     x_idempotency_key: str | None = Header(default=None),
 ) -> JobResponse:
-    idem_key = x_idempotency_key or f"export-{payload.report_type}-{payload.export_format}-{uuid4().hex}"
-    existing = db.query(ExportJob).filter(ExportJob.idempotency_key == idem_key).first()
+    raw_idem_key = x_idempotency_key or f"export-{payload.report_type}-{payload.export_format}-{uuid4().hex}"
+    idem_key = f"{current_user.branch_id}:{raw_idem_key}"
+    existing = apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id).filter(ExportJob.idempotency_key == idem_key).first()
     if existing:
         return JobResponse.model_validate(existing)
 
@@ -120,6 +130,7 @@ def export_report(
         idempotency_key=idem_key,
         report_type=payload.report_type,
         export_format=payload.export_format,
+        branch_id=current_user.branch_id,
         status=JobStatus.QUEUED,
         message="Заявку на експорт створено",
     )
@@ -138,3 +149,18 @@ def export_report(
         details={"report_type": payload.report_type, "format": payload.export_format, "dispatch_mode": dispatch_mode},
     )
     return _with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode)
+
+
+@router.get("/{document_id}/download")
+def download_document(document_id: int, db: DbSession, current_user: CurrentUser) -> FileResponse:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не знайдено")
+    ensure_same_branch(current_user, document, "Документ")
+    if not Path(document.file_path).exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл документа відсутній у сховищі")
+    return FileResponse(
+        path=document.file_path,
+        filename=document.file_name,
+        media_type=document.mime_type or "application/octet-stream",
+    )
