@@ -85,8 +85,8 @@ for (const scenario of CASES) {
       await expect(page).toHaveURL(/\/groups$/);
       await expect(page.getByText("Створити групу")).toBeVisible();
     } else {
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.getByText("Створити групу")).toHaveCount(0);
+      await expect(page).toHaveURL(/\/forbidden$/);
+      await expect(page.getByText("Доступ заборонено (403)")).toBeVisible();
     }
   });
 }

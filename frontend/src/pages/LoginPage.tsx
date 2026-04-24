@@ -1,25 +1,15 @@
 import { FormEvent, useState } from "react";
-import { Navigate } from "react-router-dom";
-import { apiRequest } from "../api/client";
+import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import { uiText } from "../i18n/uk";
-
-type MessageResponse = {
-  message: string;
-};
 
 export function LoginPage() {
   const { login, user } = useAuth();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("Admin123!");
-  const [error, setError] = useState("");
-  const [resetError, setResetError] = useState("");
-  const [resetNotice, setResetNotice] = useState("");
-  const [resetToken, setResetToken] = useState("");
-  const [resetNewPassword, setResetNewPassword] = useState("");
-  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const { showError } = useToast();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [resetSubmitting, setResetSubmitting] = useState(false);
 
   if (user) {
     return <Navigate to="/" replace />;
@@ -27,56 +17,23 @@ export function LoginPage() {
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setError("");
+    if (!username.trim()) {
+      showError("Вкажіть логін");
+      return;
+    }
+    if (!password) {
+      showError("Вкажіть пароль");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await login(username, password);
-    } catch (e) {
-      const err = e as Error;
-      setError(err.message || "Не вдалося увійти");
+      await login(username.trim(), password);
+    } catch (error) {
+      const err = error as Error;
+      showError(err.message || "Не вдалося увійти");
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const onResetSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    setResetError("");
-    setResetNotice("");
-
-    if (resetNewPassword.length < 8) {
-      setResetError("Новий пароль має містити щонайменше 8 символів");
-      return;
-    }
-    if (resetNewPassword.length > 72) {
-      setResetError("Новий пароль має містити не більше 72 символів");
-      return;
-    }
-    if (resetNewPassword !== resetConfirmPassword) {
-      setResetError("Підтвердження пароля не співпадає");
-      return;
-    }
-
-    setResetSubmitting(true);
-    try {
-      const response = await apiRequest<MessageResponse>("/auth/admin-reset-password", {
-        method: "POST",
-        body: JSON.stringify({
-          username,
-          reset_token: resetToken,
-          new_password: resetNewPassword
-        })
-      });
-      setResetNotice(response.message || "Пароль скинуто");
-      setPassword(resetNewPassword);
-      setResetToken("");
-      setResetNewPassword("");
-      setResetConfirmPassword("");
-    } catch (e) {
-      const err = e as Error;
-      setResetError(err.message || "Не вдалося скинути пароль");
-    } finally {
-      setResetSubmitting(false);
     }
   };
 
@@ -91,8 +48,10 @@ export function LoginPage() {
             <span className="mb-1 block text-sm font-semibold text-slate-700">Логін</span>
             <input
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
+              required
             />
           </label>
           <label className="mb-5 block">
@@ -100,11 +59,12 @@ export function LoginPage() {
             <input
               type="password"
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              required
             />
           </label>
-          {error && <p className="mb-4 rounded-md bg-red-50 p-2 text-sm text-red-700">{error}</p>}
           <button
             disabled={submitting}
             className="w-full rounded-lg bg-pine px-4 py-2.5 font-semibold text-white disabled:opacity-50"
@@ -113,60 +73,12 @@ export function LoginPage() {
           </button>
         </form>
 
-        <form onSubmit={onResetSubmit} className="mt-6 border-t border-slate-200 pt-4">
-          <p className="mb-2 text-sm font-semibold text-slate-700">Не знаєте поточний пароль?</p>
-          <p className="mb-3 text-xs text-slate-500">
-            Екстрене скидання для адміністратора: введіть службовий токен із `ADMIN_PASSWORD_RESET_TOKEN`.
-          </p>
-
-          <div className="space-y-2">
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-700">Службовий токен</span>
-              <input
-                type="password"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                value={resetToken}
-                onChange={(event) => setResetToken(event.target.value)}
-                minLength={1}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-700">Новий пароль</span>
-              <input
-                type="password"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                value={resetNewPassword}
-                onChange={(event) => setResetNewPassword(event.target.value)}
-                minLength={8}
-                maxLength={72}
-                required
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-700">Підтвердження нового пароля</span>
-              <input
-                type="password"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                value={resetConfirmPassword}
-                onChange={(event) => setResetConfirmPassword(event.target.value)}
-                minLength={8}
-                maxLength={72}
-                required
-              />
-            </label>
-          </div>
-
-          {resetError && <p className="mt-3 rounded-md bg-red-50 p-2 text-sm text-red-700">{resetError}</p>}
-          {resetNotice && <p className="mt-3 rounded-md bg-skyline p-2 text-sm text-pine">{resetNotice}</p>}
-
-          <button
-            disabled={resetSubmitting}
-            className="mt-3 w-full rounded-lg border border-pine bg-white px-4 py-2 text-sm font-semibold text-pine disabled:opacity-50"
-          >
-            {resetSubmitting ? "Скидаємо..." : "Скинути пароль адміністратора"}
-          </button>
-        </form>
+        <div className="mt-6 border-t border-slate-200 pt-4">
+          <p className="text-sm text-slate-600">Не знаєте поточний пароль?</p>
+          <Link className="mt-2 inline-block text-sm font-semibold text-pine hover:underline" to="/login/admin-reset">
+            Аварійне відновлення доступу
+          </Link>
+        </div>
       </div>
     </div>
   );

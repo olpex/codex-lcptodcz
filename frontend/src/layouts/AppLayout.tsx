@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import { uiText } from "../i18n/uk";
 
 const NAV_ITEMS = [
@@ -17,9 +18,16 @@ const NAV_ITEMS = [
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  const { showInfo } = useToast();
   const userRoles = user?.roles.map((role) => role.name) || [];
   const roles = userRoles.join(", ") || "—";
   const visibleItems = NAV_ITEMS.filter((item) => item.roles.some((role) => userRoles.includes(role)));
+
+  const handleLogout = async () => {
+    await logout();
+    showInfo("Ви вийшли з системи");
+  };
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
       <header className="border-b border-pine/10 bg-white/80 backdrop-blur">
@@ -31,7 +39,7 @@ export function AppLayout() {
           <div className="text-right">
             <p className="font-semibold">{user?.full_name}</p>
             <p className="text-sm text-slate-500">Ролі: {roles}</p>
-            <button className="mt-2 rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={logout}>
+            <button className="mt-2 rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={handleLogout}>
               {uiText.actions.logout}
             </button>
           </div>

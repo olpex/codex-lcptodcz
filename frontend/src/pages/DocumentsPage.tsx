@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
 import type { Job } from "../types/api";
 
@@ -11,6 +12,7 @@ type JobStatusPayload = {
 
 export function DocumentsPage() {
   const { request, accessToken } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [reportType, setReportType] = useState("kpi");
   const [exportFormat, setExportFormat] = useState("xlsx");
@@ -18,8 +20,6 @@ export function DocumentsPage() {
   const [activeJobType, setActiveJobType] = useState<string | null>(null);
   const [activeJobStatus, setActiveJobStatus] = useState<string | null>(null);
   const [outputDocumentId, setOutputDocumentId] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
 
   const extractOutputDocumentId = (job: Job): number | null => {
     if (!job.result_payload || typeof job.result_payload !== "object") {
@@ -31,9 +31,11 @@ export function DocumentsPage() {
 
   const uploadImport = async (event: FormEvent) => {
     event.preventDefault();
-    if (!file) return;
-    setError("");
-    setMessage("");
+    if (!file) {
+      showError("Оберіть файл для імпорту");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
     try {
@@ -45,15 +47,13 @@ export function DocumentsPage() {
       setActiveJobType("import");
       setActiveJobStatus(job.status);
       setOutputDocumentId(null);
-      setMessage(job.message || "Імпорт запущено");
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess(job.message || "Імпорт запущено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   const runExport = async () => {
-    setError("");
-    setMessage("");
     try {
       const job = await request<Job>("/documents/export", {
         method: "POST",
@@ -63,36 +63,34 @@ export function DocumentsPage() {
       setActiveJobType("export");
       setActiveJobStatus(job.status);
       setOutputDocumentId(extractOutputDocumentId(job));
-      setMessage(job.message || "Експорт запущено");
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess(job.message || "Експорт запущено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   const checkJob = async () => {
     if (!activeJobId) return;
-    setError("");
     try {
       const response = await request<JobStatusPayload>(`/jobs/${activeJobId}`);
       setActiveJobType(response.job_type);
       setActiveJobStatus(response.job.status);
       setOutputDocumentId(extractOutputDocumentId(response.job));
-      setMessage(response.job.message || "Статус оновлено");
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess(response.job.message || "Статус оновлено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   const downloadOutput = async () => {
     if (!outputDocumentId) {
-      setError("Експортований файл ще недоступний");
+      showError("Експортований файл ще недоступний");
       return;
     }
     if (!accessToken) {
-      setError("Потрібна авторизація");
+      showError("Потрібна авторизація");
       return;
     }
-    setError("");
     try {
       const response = await fetch(`${API_URL}/documents/${outputDocumentId}/download`, {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -113,16 +111,14 @@ export function DocumentsPage() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
-      setMessage("Файл завантажено");
-    } catch (e) {
-      setError((e as Error).message);
+      showSuccess("Файл завантажено");
+    } catch (error) {
+      showError((error as Error).message);
     }
   };
 
   return (
     <div className="space-y-5">
-      {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-      {message && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{message}</p>}
       <Panel title="Імпорт документів (.xlsx, .pdf, .docx)">
         <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport}>
           <input

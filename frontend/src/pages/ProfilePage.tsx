@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 
 type MessageResponse = {
   message: string;
@@ -8,28 +9,25 @@ type MessageResponse = {
 
 export function ProfilePage() {
   const { request, logout, user } = useAuth();
+  const { showError, showInfo, showSuccess } = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    setError("");
-    setNotice("");
 
     if (newPassword.length < 8) {
-      setError("Новий пароль має містити щонайменше 8 символів");
+      showError("Новий пароль має містити щонайменше 8 символів");
       return;
     }
     if (newPassword.length > 72) {
-      setError("Новий пароль має містити не більше 72 символів");
+      showError("Новий пароль має містити не більше 72 символів");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("Підтвердження пароля не співпадає");
+      showError("Підтвердження пароля не співпадає");
       return;
     }
 
@@ -42,15 +40,16 @@ export function ProfilePage() {
           new_password: newPassword
         })
       });
-      setNotice(response.message || "Пароль змінено");
+      showSuccess(response.message || "Пароль змінено");
+      showInfo("Виконуємо повторний вхід з новим паролем...");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
       setTimeout(() => {
         logout();
       }, 1200);
-    } catch (e) {
-      setError((e as Error).message);
+    } catch (error) {
+      showError((error as Error).message);
     } finally {
       setSubmitting(false);
     }
@@ -106,9 +105,6 @@ export function ProfilePage() {
               required
             />
           </label>
-
-          {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{error}</p>}
-          {notice && <p className="rounded-lg bg-skyline p-2 text-sm text-pine">{notice}</p>}
 
           <button
             disabled={submitting}

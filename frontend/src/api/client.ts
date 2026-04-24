@@ -4,6 +4,30 @@ interface RequestOptions extends RequestInit {
   token?: string | null;
 }
 
+function mapStatusToMessage(status: number): string {
+  if (status === 400) return "Некоректний запит. Перевірте введені дані.";
+  if (status === 401) return "Сесія завершилась або вказані невірні облікові дані.";
+  if (status === 403) return "У вас недостатньо прав для цієї дії.";
+  if (status === 404) return "Запитаний ресурс не знайдено.";
+  if (status === 409) return "Конфлікт даних. Оновіть сторінку та спробуйте ще раз.";
+  if (status === 422) return "Дані не пройшли валідацію.";
+  if (status >= 500) return "Внутрішня помилка сервера. Спробуйте ще раз пізніше.";
+  return `Помилка запиту (${status}).`;
+}
+
+function parsePayloadMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  if ("message" in payload && typeof payload.message === "string") {
+    return payload.message;
+  }
+  if ("detail" in payload && typeof payload.detail === "string") {
+    return payload.detail;
+  }
+  return null;
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
@@ -22,7 +46,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       headers
     });
   } catch {
-    const error = new Error(`Не вдалося підключитися до API (${API_URL})`) as Error & { status?: number };
+    const error = new Error("Не вдалося підключитися до сервера. Перевірте інтернет-з'єднання.") as Error & {
+      status?: number;
+    };
     error.status = 0;
     throw error;
   }
@@ -33,15 +59,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const fallback =
-      payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string"
-        ? payload.message
-        : `API помилка ${response.status} (${requestUrl})`;
-    const detail =
-      payload && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string"
-        ? payload.detail
-        : null;
-    const message = detail ? `${detail} (${requestUrl})` : fallback;
+    const message = parsePayloadMessage(payload) || mapStatusToMessage(response.status);
     const error = new Error(message) as Error & { status?: number };
     error.status = response.status;
     throw error;

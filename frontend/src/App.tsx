@@ -1,9 +1,11 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import { AppLayout } from "./layouts/AppLayout";
+import { AdminResetPage } from "./pages/AdminResetPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { DraftsPage } from "./pages/DraftsPage";
+import { ForbiddenPage } from "./pages/ForbiddenPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OrdersPage } from "./pages/OrdersPage";
@@ -32,10 +34,11 @@ function RoleGuard({
   children: JSX.Element;
 }) {
   const { user } = useAuth();
+  const location = useLocation();
   const userRoles = user?.roles.map((role) => role.name) ?? [];
   const hasAccess = allowedRoles.some((role) => userRoles.includes(role));
   if (!hasAccess) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/forbidden" replace state={{ from: location.pathname }} />;
   }
   return children;
 }
@@ -44,8 +47,10 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/login/admin-reset" element={<AdminResetPage />} />
       <Route path="/" element={<GuardedLayout />}>
         <Route index element={<DashboardPage />} />
+        <Route path="forbidden" element={<ForbiddenPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route
           path="groups"
