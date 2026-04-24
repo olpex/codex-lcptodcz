@@ -86,6 +86,15 @@ export interface Job {
   updated_at?: string;
 }
 
+export interface JobListItem {
+  job_type: "import" | "export";
+  job: Job;
+  report_type?: string | null;
+  export_format?: string | null;
+  output_document_id?: number | null;
+  document_id?: number | null;
+}
+
 export interface Draft {
   id: number;
   document_id: number;

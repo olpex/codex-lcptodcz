@@ -298,6 +298,15 @@ class JobStatusResponse(BaseModel):
     job: JobResponse
 
 
+class JobListItemResponse(BaseModel):
+    job_type: str
+    job: JobResponse
+    report_type: str | None = None
+    export_format: str | None = None
+    output_document_id: int | None = None
+    document_id: int | None = None
+
+
 class MailMessageResponse(ORMModel):
     id: int
     message_id: str

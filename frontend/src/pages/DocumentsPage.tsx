@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Link } from "react-router-dom";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -177,6 +178,9 @@ export function DocumentsPage() {
               Завантажити файл
             </button>
           )}
+          <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
+            Відкрити центр задач
+          </Link>
         </div>
       </Panel>
     </div>

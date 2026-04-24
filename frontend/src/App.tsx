@@ -7,6 +7,7 @@ import { DocumentsPage } from "./pages/DocumentsPage";
 import { DraftsPage } from "./pages/DraftsPage";
 import { ForbiddenPage } from "./pages/ForbiddenPage";
 import { GroupsPage } from "./pages/GroupsPage";
+import { JobCenterPage } from "./pages/JobCenterPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OrdersPage } from "./pages/OrdersPage";
 import { PerformancePage } from "./pages/PerformancePage";
@@ -97,6 +98,14 @@ export default function App() {
           element={
             <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
               <PerformancePage />
+            </RoleGuard>
+          }
+        />
+        <Route
+          path="jobs"
+          element={
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <JobCenterPage />
             </RoleGuard>
           }
         />
