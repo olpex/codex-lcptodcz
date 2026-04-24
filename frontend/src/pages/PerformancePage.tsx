@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -28,13 +30,25 @@ export function PerformancePage() {
   const [trainees, setTrainees] = useState<Trainee[]>([]);
   const [form, setForm] = useState<PerformancePayload>(DEFAULT_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [performanceToDelete, setPerformanceToDelete] = useState<Performance | null>(null);
 
   const canDelete = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
 
+  const groupLookup = useMemo(
+    () => Object.fromEntries(groups.map((group) => [group.id, `${group.code} - ${group.name}`])),
+    [groups]
+  );
+  const traineeLookup = useMemo(
+    () => Object.fromEntries(trainees.map((trainee) => [trainee.id, `${trainee.last_name} ${trainee.first_name}`])),
+    [trainees]
+  );
+
   const load = async () => {
+    setIsLoading(true);
     try {
       const [performanceRows, groupRows, traineeRows] = await Promise.all([
         request<Performance[]>("/performance"),
@@ -46,6 +60,8 @@ export function PerformancePage() {
       setTrainees(traineeRows);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -103,21 +119,89 @@ export function PerformancePage() {
     });
   };
 
-  const remove = async (id: number) => {
-    const confirmed = window.confirm(`Видалити запис успішності #${id}? Цю дію неможливо скасувати.`);
-    if (!confirmed) return;
+  const remove = async (item: Performance) => {
+    setPerformanceToDelete(item);
+  };
+
+  const confirmDelete = async () => {
+    if (!performanceToDelete) return;
     try {
-      await request<void>(`/performance/${id}`, { method: "DELETE" });
+      await request<void>(`/performance/${performanceToDelete.id}`, { method: "DELETE" });
       showSuccess("Запис видалено");
-      if (editingId === id) {
+      if (editingId === performanceToDelete.id) {
         setEditingId(null);
         setForm(DEFAULT_FORM);
       }
+      setPerformanceToDelete(null);
       await load();
     } catch (error) {
       showError((error as Error).message);
     }
   };
+
+  const columns = useMemo<DataTableColumn<Performance>[]>(() => {
+    const baseColumns: DataTableColumn<Performance>[] = [
+      {
+        key: "id",
+        header: "ID",
+        render: (item) => item.id,
+        sortAccessor: (item) => item.id
+      },
+      {
+        key: "group",
+        header: "Група",
+        render: (item) => groupLookup[item.group_id] || item.group_id,
+        sortAccessor: (item) => groupLookup[item.group_id] || String(item.group_id)
+      },
+      {
+        key: "trainee",
+        header: "Слухач",
+        render: (item) => traineeLookup[item.trainee_id] || item.trainee_id,
+        sortAccessor: (item) => traineeLookup[item.trainee_id] || String(item.trainee_id)
+      },
+      {
+        key: "progress",
+        header: "Прогрес",
+        render: (item) => `${item.progress_pct}%`,
+        sortAccessor: (item) => item.progress_pct
+      },
+      {
+        key: "attendance",
+        header: "Відвідування",
+        render: (item) => `${item.attendance_pct}%`,
+        sortAccessor: (item) => item.attendance_pct
+      },
+      {
+        key: "employment",
+        header: "Працевлаштування",
+        render: (item) => (item.employment_flag ? "Так" : "Ні"),
+        sortAccessor: (item) => (item.employment_flag ? 1 : 0)
+      }
+    ];
+
+    return [
+      ...baseColumns,
+      {
+        key: "actions",
+        header: "Дії",
+        render: (item) => (
+          <div className="flex gap-2">
+            <button className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink" onClick={() => startEdit(item)}>
+              Редагувати
+            </button>
+            {canDelete && (
+              <button
+                className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700"
+                onClick={() => remove(item)}
+              >
+                Видалити
+              </button>
+            )}
+          </div>
+        )
+      }
+    ];
+  }, [canDelete, groupLookup, traineeLookup, remove, startEdit]);
 
   return (
     <div className="space-y-5">
@@ -202,49 +286,32 @@ export function PerformancePage() {
       </Panel>
 
       <Panel title="Моніторинг успішності">
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">ID</th>
-                <th className="px-2 py-2">Група</th>
-                <th className="px-2 py-2">Слухач</th>
-                <th className="px-2 py-2">Прогрес</th>
-                <th className="px-2 py-2">Відвідування</th>
-                <th className="px-2 py-2">Працевлаштування</th>
-                <th className="px-2 py-2">Дії</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2">{item.id}</td>
-                  <td className="px-2 py-2">{item.group_id}</td>
-                  <td className="px-2 py-2">{item.trainee_id}</td>
-                  <td className="px-2 py-2">{item.progress_pct}%</td>
-                  <td className="px-2 py-2">{item.attendance_pct}%</td>
-                  <td className="px-2 py-2">{item.employment_flag ? "Так" : "Ні"}</td>
-                  <td className="px-2 py-2">
-                    <div className="flex gap-2">
-                      <button className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink" onClick={() => startEdit(item)}>
-                        Редагувати
-                      </button>
-                      {canDelete && (
-                        <button
-                          className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700"
-                          onClick={() => remove(item.id)}
-                        >
-                          Видалити
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          data={rows}
+          columns={columns}
+          rowKey={(item) => item.id}
+          isLoading={isLoading}
+          emptyText="Записи успішності відсутні"
+          search={{
+            placeholder: "Пошук за групою, слухачем або ID",
+            getSearchText: (item) =>
+              `${item.id} ${groupLookup[item.group_id] || item.group_id} ${traineeLookup[item.trainee_id] || item.trainee_id}`,
+            emptyResultText: "Нічого не знайдено за запитом"
+          }}
+        />
       </Panel>
+      <ConfirmDialog
+        open={Boolean(performanceToDelete)}
+        title="Підтвердження видалення"
+        description={
+          performanceToDelete
+            ? `Видалити запис успішності для "${traineeLookup[performanceToDelete.trainee_id] || performanceToDelete.trainee_id}"?`
+            : ""
+        }
+        confirmLabel="Видалити"
+        onCancel={() => setPerformanceToDelete(null)}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

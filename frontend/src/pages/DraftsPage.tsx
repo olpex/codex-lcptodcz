@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -20,6 +21,7 @@ export function DraftsPage() {
   const [draftType, setDraftType] = useState("trainee_card");
   const [confidence, setConfidence] = useState(0.75);
   const [payload, setPayload] = useState<EditablePayload>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -29,6 +31,80 @@ export function DraftsPage() {
   const selectedDraft = useMemo(
     () => drafts.find((draft) => draft.id === selectedDraftId) || null,
     [drafts, selectedDraftId]
+  );
+
+  const mailColumns = useMemo<DataTableColumn<MailMessage>[]>(
+    () => [
+      {
+        key: "received_at",
+        header: "Дата",
+        render: (message) => new Date(message.received_at).toLocaleString("uk-UA"),
+        sortAccessor: (message) => message.received_at
+      },
+      {
+        key: "sender",
+        header: "Відправник",
+        render: (message) => message.sender,
+        sortAccessor: (message) => message.sender
+      },
+      {
+        key: "subject",
+        header: "Тема",
+        render: (message) => message.subject,
+        sortAccessor: (message) => message.subject
+      },
+      {
+        key: "status",
+        header: "Статус",
+        render: (message) => message.status,
+        sortAccessor: (message) => message.status
+      }
+    ],
+    []
+  );
+
+  const draftColumns = useMemo<DataTableColumn<Draft>[]>(
+    () => [
+      {
+        key: "id",
+        header: "ID",
+        render: (draft) => draft.id,
+        sortAccessor: (draft) => draft.id
+      },
+      {
+        key: "draft_type",
+        header: "Тип",
+        render: (draft) => draft.draft_type,
+        sortAccessor: (draft) => draft.draft_type
+      },
+      {
+        key: "confidence",
+        header: "Довіра",
+        render: (draft) => `${(draft.confidence * 100).toFixed(0)}%`,
+        sortAccessor: (draft) => draft.confidence
+      },
+      {
+        key: "status",
+        header: "Статус",
+        render: (draft) => draft.status,
+        sortAccessor: (draft) => draft.status
+      },
+      {
+        key: "actions",
+        header: "Вибір",
+        render: (draft) => (
+          <button
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+              draft.id === selectedDraftId ? "bg-pine text-white" : "bg-slate-100 text-slate-700"
+            }`}
+            onClick={() => applyDraftToForm(draft)}
+          >
+            Відкрити
+          </button>
+        )
+      }
+    ],
+    [selectedDraftId]
   );
 
   const applyDraftToForm = (draft: Draft) => {
@@ -45,6 +121,7 @@ export function DraftsPage() {
   };
 
   const load = async () => {
+    setIsLoading(true);
     try {
       const [draftRows, mailRows] = await Promise.all([
         request<Draft[]>("/drafts"),
@@ -61,6 +138,8 @@ export function DraftsPage() {
       }
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -142,65 +221,33 @@ export function DraftsPage() {
             Оновити
           </button>
         </div>
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">Дата</th>
-                <th className="px-2 py-2">Відправник</th>
-                <th className="px-2 py-2">Тема</th>
-                <th className="px-2 py-2">Статус</th>
-              </tr>
-            </thead>
-            <tbody>
-              {messages.map((message) => (
-                <tr key={message.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2">{new Date(message.received_at).toLocaleString("uk-UA")}</td>
-                  <td className="px-2 py-2">{message.sender}</td>
-                  <td className="px-2 py-2">{message.subject}</td>
-                  <td className="px-2 py-2">{message.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          data={messages}
+          columns={mailColumns}
+          rowKey={(message) => message.id}
+          isLoading={isLoading}
+          emptyText="Листи відсутні"
+          search={{
+            placeholder: "Пошук за відправником або темою",
+            getSearchText: (message) => `${message.sender} ${message.subject} ${message.status}`
+          }}
+          initialPageSize={20}
+        />
       </Panel>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_1fr]">
         <Panel title="Чернетки OCR">
-          <div className="overflow-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-600">
-                  <th className="px-2 py-2">ID</th>
-                  <th className="px-2 py-2">Тип</th>
-                  <th className="px-2 py-2">Довіра</th>
-                  <th className="px-2 py-2">Статус</th>
-                  <th className="px-2 py-2">Вибір</th>
-                </tr>
-              </thead>
-              <tbody>
-                {drafts.map((draft) => (
-                  <tr key={draft.id} className="border-b border-slate-100">
-                    <td className="px-2 py-2">{draft.id}</td>
-                    <td className="px-2 py-2">{draft.draft_type}</td>
-                    <td className="px-2 py-2">{(draft.confidence * 100).toFixed(0)}%</td>
-                    <td className="px-2 py-2">{draft.status}</td>
-                    <td className="px-2 py-2">
-                      <button
-                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                          draft.id === selectedDraftId ? "bg-pine text-white" : "bg-slate-100 text-slate-700"
-                        }`}
-                        onClick={() => applyDraftToForm(draft)}
-                      >
-                        Відкрити
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            data={drafts}
+            columns={draftColumns}
+            rowKey={(draft) => draft.id}
+            isLoading={isLoading}
+            emptyText="Чернетки відсутні"
+            search={{
+              placeholder: "Пошук за типом або статусом",
+              getSearchText: (draft) => `${draft.id} ${draft.draft_type} ${draft.status}`
+            }}
+          />
         </Panel>
 
         <Panel title="Редактор чернетки">

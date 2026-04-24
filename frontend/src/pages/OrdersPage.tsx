@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
@@ -25,6 +26,7 @@ export function OrdersPage() {
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
   const [isLoading, setIsLoading] = useState(false);
+  const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -116,14 +118,18 @@ export function OrdersPage() {
 
   const deleteOrder = async (row: Order) => {
     if (!canEdit) return;
-    const confirmed = window.confirm(`Видалити наказ "${row.order_number}"? Цю дію неможливо скасувати.`);
-    if (!confirmed) return;
+    setOrderToDelete(row);
+  };
+
+  const confirmDeleteOrder = async () => {
+    if (!orderToDelete) return;
     try {
-      await request<void>(`/orders/${row.id}`, { method: "DELETE" });
-      showSuccess(`Наказ "${row.order_number}" видалено`);
-      if (editId === row.id) {
+      await request<void>(`/orders/${orderToDelete.id}`, { method: "DELETE" });
+      showSuccess(`Наказ "${orderToDelete.order_number}" видалено`);
+      if (editId === orderToDelete.id) {
         resetEdit();
       }
+      setOrderToDelete(null);
       await load();
     } catch (error) {
       showError((error as Error).message);
@@ -298,6 +304,18 @@ export function OrdersPage() {
           }}
         />
       </Panel>
+      <ConfirmDialog
+        open={Boolean(orderToDelete)}
+        title="Підтвердження видалення наказу"
+        description={
+          orderToDelete
+            ? `Ви дійсно хочете видалити наказ "${orderToDelete.order_number}"? Дію неможливо скасувати.`
+            : ""
+        }
+        confirmLabel="Видалити"
+        onCancel={() => setOrderToDelete(null)}
+        onConfirm={confirmDeleteOrder}
+      />
     </div>
   );
 }

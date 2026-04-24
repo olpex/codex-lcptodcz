@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -19,12 +20,14 @@ const NAV_ITEMS = [
 export function AppLayout() {
   const { user, logout } = useAuth();
   const { showInfo } = useToast();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const userRoles = user?.roles.map((role) => role.name) || [];
   const roles = userRoles.join(", ") || "—";
   const visibleItems = NAV_ITEMS.filter((item) => item.roles.some((role) => userRoles.includes(role)));
 
   const handleLogout = async () => {
     await logout();
+    setMobileMenuOpen(false);
     showInfo("Ви вийшли з системи");
   };
 
@@ -36,17 +39,27 @@ export function AppLayout() {
             <p className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</p>
             <p className="text-sm text-slate-600">{uiText.appSubtitle}</p>
           </div>
-          <div className="text-right">
-            <p className="font-semibold">{user?.full_name}</p>
-            <p className="text-sm text-slate-500">Ролі: {roles}</p>
-            <button className="mt-2 rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={handleLogout}>
-              {uiText.actions.logout}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 md:hidden"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Відкрити меню"
+            >
+              Меню
             </button>
+            <div className="text-right">
+              <p className="font-semibold">{user?.full_name}</p>
+              <p className="text-sm text-slate-500">Ролі: {roles}</p>
+              <button className="mt-2 rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={handleLogout}>
+                {uiText.actions.logout}
+              </button>
+            </div>
           </div>
         </div>
       </header>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-4 py-6 md:grid-cols-[220px_1fr]">
-        <aside className="rounded-2xl bg-white p-3 shadow-card">
+        <aside className="hidden rounded-2xl bg-white p-3 shadow-card md:block">
           <nav className="space-y-1">
             {visibleItems.map((item) => (
               <NavLink
@@ -67,6 +80,39 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex bg-ink/40 md:hidden" role="dialog" aria-modal="true">
+          <aside className="h-full w-[86%] max-w-xs bg-white p-4 shadow-card">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="font-heading text-lg font-semibold text-pine">Навігація</p>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Закрити
+              </button>
+            </div>
+            <nav className="space-y-1">
+              {visibleItems.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={({ isActive }) =>
+                    `block rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                      isActive ? "bg-pine text-white" : "text-slate-700 hover:bg-mist"
+                    }`
+                  }
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+          </aside>
+          <button className="h-full flex-1 cursor-default" type="button" onClick={() => setMobileMenuOpen(false)} />
+        </div>
+      )}
     </div>
   );
 }
