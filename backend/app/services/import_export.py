@@ -91,6 +91,59 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
     return {"inserted": inserted}
 
 
+def collect_teacher_workload_summary(
+    db: Session,
+    branch_id: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[dict]:
+    teachers = (
+        db.query(Teacher)
+        .filter(Teacher.branch_id == branch_id, Teacher.is_active.is_(True))
+        .all()
+    )
+    query = (
+        db.query(ScheduleSlot)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .filter(Group.branch_id == branch_id)
+    )
+    if date_from:
+        query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
+    if date_to:
+        query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, datetime.max.time(), tzinfo=timezone.utc))
+    slots = query.all()
+
+    totals: dict[int, float] = {}
+    for slot in slots:
+        totals.setdefault(slot.teacher_id, 0.0)
+        if slot.academic_hours is not None:
+            totals[slot.teacher_id] += float(slot.academic_hours)
+        else:
+            totals[slot.teacher_id] += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+
+    rows: list[dict] = []
+    for teacher in teachers:
+        total_hours = round(totals.get(teacher.id, 0.0), 2)
+        annual_load = round(float(teacher.annual_load_hours or 0.0), 2)
+        # For report visibility include teachers who already teach or have planned annual load.
+        if total_hours <= 0 and annual_load <= 0:
+            continue
+        remaining = round(max(annual_load - total_hours, 0.0), 2)
+        rows.append(
+            {
+                "teacher_id": teacher.id,
+                "teacher_name": f"{teacher.last_name} {teacher.first_name}",
+                "total_hours": total_hours,
+                "annual_load_hours": annual_load,
+                "remaining_hours": remaining,
+            }
+        )
+    rows.sort(key=lambda item: item["teacher_name"].lower())
+    for idx, row in enumerate(rows, start=1):
+        row["row_number"] = idx
+    return rows
+
+
 def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[dict]:
     if report_type == "trainees":
         trainees = db.query(Trainee).filter(Trainee.branch_id == branch_id).all()
@@ -106,31 +159,17 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[d
         ]
 
     if report_type == "teacher_workload":
-        teachers = db.query(Teacher).filter(Teacher.branch_id == branch_id).all()
-        slots = (
-            db.query(ScheduleSlot)
-            .join(Group, Group.id == ScheduleSlot.group_id)
-            .filter(Group.branch_id == branch_id)
-            .all()
-        )
-        rows = []
-        for teacher in teachers:
-            total_hours = 0.0
-            for slot in slots:
-                if slot.teacher_id == teacher.id:
-                    if slot.academic_hours is not None:
-                        total_hours += float(slot.academic_hours)
-                    else:
-                        total_hours += (slot.ends_at - slot.starts_at).total_seconds() / 3600
-            rows.append(
-                {
-                    "teacher_id": teacher.id,
-                    "teacher_name": f"{teacher.last_name} {teacher.first_name}",
-                    "total_hours": round(total_hours, 2),
-                    "amount_uah": round(total_hours * teacher.hourly_rate, 2),
-                }
-            )
-        return rows
+        summary = collect_teacher_workload_summary(db, branch_id)
+        return [
+            {
+                "Номер за порядком": row["row_number"],
+                "Прізвище, ім'я та по батькові викладача": row["teacher_name"],
+                "Загальна кількість годин": row["total_hours"],
+                "Річне педнавантаження": row["annual_load_hours"],
+                "Залишок годин": row["remaining_hours"],
+            }
+            for row in summary
+        ]
 
     if report_type == "kpi":
         active_groups = (

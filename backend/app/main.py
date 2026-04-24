@@ -8,7 +8,7 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
-from app.models import Role, RoleName, Room, Subject, Teacher, User
+from app.models import Role, RoleName, Room, Subject, User
 from app.services.storage import storage_path
 
 
@@ -26,6 +26,7 @@ def ensure_runtime_schema() -> None:
             ("mail_messages", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("ocr_results", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("performances", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("teachers", "annual_load_hours", "FLOAT NOT NULL DEFAULT 0.0"),
             ("schedule_slots", "pair_number", "INTEGER NULL"),
             ("schedule_slots", "academic_hours", "FLOAT NOT NULL DEFAULT 2.0"),
         ]
@@ -61,13 +62,6 @@ def seed_reference_data(db: Session) -> None:
         db.add(admin)
         db.commit()
 
-    if not db.query(Teacher).first():
-        db.add_all(
-            [
-                Teacher(first_name="Олена", last_name="Коваль", hourly_rate=240),
-                Teacher(first_name="Іван", last_name="Сидоренко", hourly_rate=220),
-            ]
-        )
     if not db.query(Subject).first():
         db.add_all(
             [

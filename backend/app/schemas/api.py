@@ -147,6 +147,7 @@ class TeacherBase(BaseModel):
     first_name: str = Field(min_length=1, max_length=120)
     last_name: str = Field(min_length=1, max_length=120)
     hourly_rate: float = Field(default=0.0, ge=0)
+    annual_load_hours: float = Field(default=0.0, ge=0)
     is_active: bool = True
 
 
@@ -158,6 +159,7 @@ class TeacherUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     hourly_rate: float | None = Field(default=None, ge=0)
+    annual_load_hours: float | None = Field(default=None, ge=0)
     is_active: bool | None = None
 
 
@@ -167,6 +169,7 @@ class TeacherResponse(ORMModel):
     first_name: str
     last_name: str
     hourly_rate: float
+    annual_load_hours: float
     is_active: bool
     created_at: datetime
 
@@ -228,9 +231,11 @@ class ScheduleSlotResponse(ORMModel):
 
 class WorkloadResponse(BaseModel):
     teacher_id: int
+    row_number: int
     teacher_name: str
     total_hours: float
-    amount_uah: float
+    annual_load_hours: float
+    remaining_hours: float
 
 
 class DashboardKPIResponse(BaseModel):

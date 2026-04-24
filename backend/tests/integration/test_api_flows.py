@@ -45,6 +45,13 @@ def test_group_trainee_enrollment_flow(client, auth_headers):
 
 
 def test_schedule_workload_and_kpi_flow(client, auth_headers):
+    teacher_response = client.post(
+        "/api/v1/teachers",
+        json={"first_name": "Тест", "last_name": "Викладач", "hourly_rate": 0, "annual_load_hours": 100, "is_active": True},
+        headers=auth_headers,
+    )
+    assert teacher_response.status_code == 201
+
     group_response = client.post(
         "/api/v1/groups",
         json={"code": "GRP-002", "name": "Група для розкладу", "capacity": 20, "status": "active"},
@@ -68,4 +75,3 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     assert kpi_response.status_code == 200
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
-

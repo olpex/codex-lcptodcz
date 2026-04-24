@@ -59,9 +59,11 @@ export interface ScheduleSlot {
 
 export interface Workload {
   teacher_id: number;
+  row_number: number;
   teacher_name: string;
   total_hours: number;
-  amount_uah: number;
+  annual_load_hours: number;
+  remaining_hours: number;
 }
 
 export interface KPI {
