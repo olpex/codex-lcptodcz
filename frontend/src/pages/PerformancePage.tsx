@@ -104,6 +104,8 @@ export function PerformancePage() {
   };
 
   const remove = async (id: number) => {
+    const confirmed = window.confirm(`Видалити запис успішності #${id}? Цю дію неможливо скасувати.`);
+    if (!confirmed) return;
     try {
       await request<void>(`/performance/${id}`, { method: "DELETE" });
       showSuccess("Запис видалено");

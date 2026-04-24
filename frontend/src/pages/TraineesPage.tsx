@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -13,19 +14,57 @@ export function TraineesPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [search, setSearch] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
 
+  const columns = useMemo<DataTableColumn<Trainee>[]>(
+    () => [
+      {
+        key: "full_name",
+        header: "ПІБ",
+        render: (trainee) => (
+          <span className="font-semibold">
+            {trainee.last_name} {trainee.first_name}
+          </span>
+        ),
+        sortAccessor: (trainee) => `${trainee.last_name} ${trainee.first_name}`
+      },
+      {
+        key: "status",
+        header: "Статус",
+        render: (trainee) => trainee.status,
+        sortAccessor: (trainee) => trainee.status
+      },
+      {
+        key: "phone",
+        header: "Телефон",
+        render: (trainee) => trainee.phone || "—",
+        sortAccessor: (trainee) => trainee.phone || ""
+      },
+      {
+        key: "email",
+        header: "Email",
+        render: (trainee) => trainee.email || "—",
+        sortAccessor: (trainee) => trainee.email || ""
+      }
+    ],
+    []
+  );
+
   const fetchTrainees = async (term = "") => {
+    setIsLoading(true);
     try {
       const query = term ? `?search=${encodeURIComponent(term)}` : "";
       const data = await request<Trainee[]>(`/trainees${query}`);
       setTrainees(data);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -109,30 +148,13 @@ export function TraineesPage() {
         </Panel>
       )}
       <Panel title="Реєстр слухачів">
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">ПІБ</th>
-                <th className="px-2 py-2">Статус</th>
-                <th className="px-2 py-2">Телефон</th>
-                <th className="px-2 py-2">Email</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trainees.map((trainee) => (
-                <tr key={trainee.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2 font-semibold">
-                    {trainee.last_name} {trainee.first_name}
-                  </td>
-                  <td className="px-2 py-2">{trainee.status}</td>
-                  <td className="px-2 py-2">{trainee.phone || "—"}</td>
-                  <td className="px-2 py-2">{trainee.email || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          data={trainees}
+          columns={columns}
+          rowKey={(trainee) => trainee.id}
+          isLoading={isLoading}
+          emptyText="Слухачі відсутні"
+        />
       </Panel>
     </div>
   );

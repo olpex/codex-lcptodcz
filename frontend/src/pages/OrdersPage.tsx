@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -23,6 +24,7 @@ export function OrdersPage() {
   const [editOrderDate, setEditOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
+  const [isLoading, setIsLoading] = useState(false);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -30,6 +32,7 @@ export function OrdersPage() {
   );
 
   const load = async () => {
+    setIsLoading(true);
     try {
       const data = await request<Order[]>("/orders");
       setRows(data);
@@ -43,6 +46,8 @@ export function OrdersPage() {
       }
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -109,12 +114,14 @@ export function OrdersPage() {
     }
   };
 
-  const deleteOrder = async (orderId: number) => {
+  const deleteOrder = async (row: Order) => {
     if (!canEdit) return;
+    const confirmed = window.confirm(`Видалити наказ "${row.order_number}"? Цю дію неможливо скасувати.`);
+    if (!confirmed) return;
     try {
-      await request<void>(`/orders/${orderId}`, { method: "DELETE" });
-      showSuccess(`Наказ #${orderId} видалено`);
-      if (editId === orderId) {
+      await request<void>(`/orders/${row.id}`, { method: "DELETE" });
+      showSuccess(`Наказ "${row.order_number}" видалено`);
+      if (editId === row.id) {
         resetEdit();
       }
       await load();
@@ -122,6 +129,69 @@ export function OrdersPage() {
       showError((error as Error).message);
     }
   };
+
+  const columns = useMemo<DataTableColumn<Order>[]>(() => {
+    const baseColumns: DataTableColumn<Order>[] = [
+      {
+        key: "order_number",
+        header: "№",
+        render: (row) => <span className="font-semibold">{row.order_number}</span>,
+        sortAccessor: (row) => row.order_number
+      },
+      {
+        key: "order_type",
+        header: "Тип",
+        render: (row) => row.order_type,
+        sortAccessor: (row) => row.order_type
+      },
+      {
+        key: "order_date",
+        header: "Дата",
+        render: (row) => new Date(row.order_date).toLocaleDateString("uk-UA"),
+        sortAccessor: (row) => row.order_date
+      },
+      {
+        key: "status",
+        header: "Статус",
+        render: (row) => row.status,
+        sortAccessor: (row) => row.status
+      },
+      {
+        key: "created_at",
+        header: "Створено",
+        render: (row) => new Date(row.created_at).toLocaleString("uk-UA"),
+        sortAccessor: (row) => row.created_at
+      }
+    ];
+
+    if (!canEdit) {
+      return baseColumns;
+    }
+
+    return [
+      ...baseColumns,
+      {
+        key: "actions",
+        header: "Дії",
+        render: (row) => (
+          <div className="flex gap-2">
+            <button
+              className="rounded-lg bg-pine px-3 py-1.5 text-xs font-semibold text-white"
+              onClick={() => beginEdit(row)}
+            >
+              Редагувати
+            </button>
+            <button
+              className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700"
+              onClick={() => deleteOrder(row)}
+            >
+              Видалити
+            </button>
+          </div>
+        )
+      }
+    ];
+  }, [canEdit, deleteOrder]);
 
   return (
     <div className="space-y-5">
@@ -216,49 +286,17 @@ export function OrdersPage() {
         <button className="mb-3 rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
           Оновити
         </button>
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">№</th>
-                <th className="px-2 py-2">Тип</th>
-                <th className="px-2 py-2">Дата</th>
-                <th className="px-2 py-2">Статус</th>
-                <th className="px-2 py-2">Створено</th>
-                {canEdit && <th className="px-2 py-2">Дії</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2 font-semibold">{row.order_number}</td>
-                  <td className="px-2 py-2">{row.order_type}</td>
-                  <td className="px-2 py-2">{new Date(row.order_date).toLocaleDateString("uk-UA")}</td>
-                  <td className="px-2 py-2">{row.status}</td>
-                  <td className="px-2 py-2">{new Date(row.created_at).toLocaleString("uk-UA")}</td>
-                  {canEdit && (
-                    <td className="px-2 py-2">
-                      <div className="flex gap-2">
-                        <button
-                          className="rounded-lg bg-pine px-3 py-1.5 text-xs font-semibold text-white"
-                          onClick={() => beginEdit(row)}
-                        >
-                          Редагувати
-                        </button>
-                        <button
-                          className="rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700"
-                          onClick={() => deleteOrder(row.id)}
-                        >
-                          Видалити
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          data={rows}
+          columns={columns}
+          rowKey={(row) => row.id}
+          isLoading={isLoading}
+          emptyText="Накази відсутні"
+          search={{
+            placeholder: "Пошук за номером, типом або статусом",
+            getSearchText: (row) => `${row.order_number} ${row.order_type} ${row.status}`
+          }}
+        />
       </Panel>
     </div>
   );

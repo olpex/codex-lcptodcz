@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -11,17 +12,51 @@ export function GroupsPage() {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
+  const [isLoading, setIsLoading] = useState(false);
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
 
+  const columns = useMemo<DataTableColumn<Group>[]>(
+    () => [
+      {
+        key: "code",
+        header: "Код",
+        render: (group) => <span className="font-semibold">{group.code}</span>,
+        sortAccessor: (group) => group.code
+      },
+      {
+        key: "name",
+        header: "Назва",
+        render: (group) => group.name,
+        sortAccessor: (group) => group.name
+      },
+      {
+        key: "status",
+        header: "Статус",
+        render: (group) => group.status,
+        sortAccessor: (group) => group.status
+      },
+      {
+        key: "capacity",
+        header: "Місткість",
+        render: (group) => group.capacity,
+        sortAccessor: (group) => group.capacity
+      }
+    ],
+    []
+  );
+
   const loadGroups = async () => {
+    setIsLoading(true);
     try {
       const data = await request<Group[]>("/groups");
       setGroups(data);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -84,28 +119,17 @@ export function GroupsPage() {
         </Panel>
       )}
       <Panel title="Реєстр груп">
-        <div className="overflow-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-600">
-                <th className="px-2 py-2">Код</th>
-                <th className="px-2 py-2">Назва</th>
-                <th className="px-2 py-2">Статус</th>
-                <th className="px-2 py-2">Місткість</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((group) => (
-                <tr key={group.id} className="border-b border-slate-100">
-                  <td className="px-2 py-2 font-semibold">{group.code}</td>
-                  <td className="px-2 py-2">{group.name}</td>
-                  <td className="px-2 py-2">{group.status}</td>
-                  <td className="px-2 py-2">{group.capacity}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          data={groups}
+          columns={columns}
+          rowKey={(group) => group.id}
+          isLoading={isLoading}
+          emptyText="Групи відсутні"
+          search={{
+            placeholder: "Пошук за кодом, назвою або статусом",
+            getSearchText: (group) => `${group.code} ${group.name} ${group.status}`
+          }}
+        />
       </Panel>
     </div>
   );
