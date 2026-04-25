@@ -165,12 +165,14 @@ export function ProfilePage() {
         title="Підтвердження зміни пароля"
         description="Після зміни пароля поточна сесія завершиться і потрібно буде увійти повторно."
         confirmLabel={submitting ? "Зберігаємо..." : "Так, змінити пароль"}
+        confirmDisabled={submitting}
         confirmVariant="primary"
         onCancel={() => {
           if (submitting) return;
           setConfirmOpen(false);
         }}
         onConfirm={() => {
+          if (submitting) return;
           setConfirmOpen(false);
           submitChange();
         }}

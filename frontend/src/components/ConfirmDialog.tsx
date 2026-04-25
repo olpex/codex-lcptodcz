@@ -9,6 +9,7 @@ type ConfirmDialogProps = {
   onConfirm: () => void;
   onCancel: () => void;
   confirmVariant?: "danger" | "primary";
+  confirmDisabled?: boolean;
 };
 
 export function ConfirmDialog({
@@ -19,7 +20,8 @@ export function ConfirmDialog({
   cancelLabel = "Скасувати",
   onConfirm,
   onCancel,
-  confirmVariant = "danger"
+  confirmVariant = "danger",
+  confirmDisabled = false
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -101,7 +103,12 @@ export function ConfirmDialog({
           >
             {cancelLabel}
           </button>
-          <button type="button" className={`rounded-lg px-4 py-2 text-sm font-semibold ${confirmClass}`} onClick={onConfirm}>
+          <button
+            type="button"
+            disabled={confirmDisabled}
+            className={`rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${confirmClass}`}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </button>
         </div>

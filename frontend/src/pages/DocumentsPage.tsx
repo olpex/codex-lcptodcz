@@ -32,6 +32,8 @@ type DiagnosticsSnapshot = {
 };
 
 const DIAGNOSTICS_HISTORY_LIMIT = 12;
+const ALLOWED_REPORT_TYPES = new Set(["kpi", "trainees", "teacher_workload", "employment", "financial", "form_1pa"]);
+const ALLOWED_EXPORT_FORMATS = new Set(["xlsx", "pdf", "csv"]);
 
 export function DocumentsPage() {
   const { request, accessToken } = useAuth();
@@ -49,6 +51,7 @@ export function DocumentsPage() {
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [importFieldError, setImportFieldError] = useState<string | undefined>(undefined);
+  const [exportErrors, setExportErrors] = useState<{ reportType?: string; exportFormat?: string }>({});
   const [, setKnownJobs] = useState<Record<number, KnownJob>>({});
   const [diagnosticsHistory, setDiagnosticsHistory] = useState<DiagnosticsSnapshot[]>([]);
 
@@ -129,6 +132,20 @@ export function DocumentsPage() {
   };
 
   const runExport = async () => {
+    const nextErrors: { reportType?: string; exportFormat?: string } = {};
+    if (!ALLOWED_REPORT_TYPES.has(reportType)) {
+      nextErrors.reportType = "Оберіть валідний тип звіту";
+    }
+    if (!ALLOWED_EXPORT_FORMATS.has(exportFormat)) {
+      nextErrors.exportFormat = "Оберіть валідний формат експорту";
+    }
+    if (Object.keys(nextErrors).length) {
+      setExportErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+    setExportErrors({});
+
     setIsExporting(true);
     try {
       const job = await request<Job>("/documents/export", {
@@ -228,16 +245,16 @@ export function DocumentsPage() {
     <div className="space-y-5">
       <Panel title="Імпорт документів (.xls, .xlsx, .pdf, .docx, .csv)">
         <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport} aria-busy={isImporting}>
-            <FormField
-              label="Файл для імпорту"
-              required
-              helperText="Підтримуються .xls/.xlsx, .pdf, .docx, .csv"
-              errorText={importFieldError}
-            >
-              <input
-                type="file"
-                className={formControlClass}
-                accept=".xls,.xlsx,.pdf,.docx,.csv"
+          <FormField
+            label="Файл для імпорту"
+            required
+            helperText="Підтримуються .xls/.xlsx, .pdf, .docx, .csv"
+            errorText={importFieldError}
+          >
+            <input
+              type="file"
+              className={formControlClass}
+              accept=".xls,.xlsx,.pdf,.docx,.csv"
               onChange={(event) => {
                 setFile(event.target.files?.[0] || null);
                 setImportFieldError(undefined);
@@ -263,11 +280,18 @@ export function DocumentsPage() {
               runExport();
             }}
           >
-            <FormField label="Тип звіту" helperText="Оберіть набір даних для експорту">
+            <FormField
+              label="Тип звіту"
+              helperText="Оберіть набір даних для експорту"
+              errorText={exportErrors.reportType}
+            >
               <select
                 className={formControlClass}
                 value={reportType}
-                onChange={(event) => setReportType(event.target.value)}
+                onChange={(event) => {
+                  setReportType(event.target.value);
+                  setExportErrors((prev) => ({ ...prev, reportType: undefined }));
+                }}
                 disabled={isExporting}
               >
                 <option value="kpi">KPI</option>
@@ -278,11 +302,14 @@ export function DocumentsPage() {
                 <option value="form_1pa">Форма 1-ПА</option>
               </select>
             </FormField>
-            <FormField label="Формат" helperText="XLSX/PDF/CSV">
+            <FormField label="Формат" helperText="XLSX/PDF/CSV" errorText={exportErrors.exportFormat}>
               <select
                 className={formControlClass}
                 value={exportFormat}
-                onChange={(event) => setExportFormat(event.target.value)}
+                onChange={(event) => {
+                  setExportFormat(event.target.value);
+                  setExportErrors((prev) => ({ ...prev, exportFormat: undefined }));
+                }}
                 disabled={isExporting}
               >
                 <option value="xlsx">XLSX</option>
@@ -325,36 +352,36 @@ export function DocumentsPage() {
         </div>
         <StickyActionBar>
           <div className="flex flex-wrap items-center gap-3">
-          <p>
-            ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
-          </p>
-          <p>
-            Тип: <span className="font-semibold">{activeJobType ?? "—"}</span>
-          </p>
-          <p>
-            Статус: <span className="font-semibold">{activeJobStatus ?? "—"}</span>
-          </p>
-          <button
-            type="button"
-            className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
-            onClick={checkJob}
-            disabled={!activeJobId || isCheckingStatus}
-          >
-            {isCheckingStatus ? "Оновлюємо..." : "Оновити статус"}
-          </button>
-          {activeJobType === "export" && outputDocumentId && activeJobStatus === "succeeded" && (
+            <p>
+              ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
+            </p>
+            <p>
+              Тип: <span className="font-semibold">{activeJobType ?? "—"}</span>
+            </p>
+            <p>
+              Статус: <span className="font-semibold">{activeJobStatus ?? "—"}</span>
+            </p>
             <button
               type="button"
-              className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
-              onClick={downloadOutput}
-              disabled={isDownloading}
+              className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
+              onClick={checkJob}
+              disabled={!activeJobId || isCheckingStatus}
             >
-              {isDownloading ? "Завантажуємо..." : "Завантажити файл"}
+              {isCheckingStatus ? "Оновлюємо..." : "Оновити статус"}
             </button>
-          )}
-          <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
-            Відкрити центр задач
-          </Link>
+            {activeJobType === "export" && outputDocumentId && activeJobStatus === "succeeded" && (
+              <button
+                type="button"
+                className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
+                onClick={downloadOutput}
+                disabled={isDownloading}
+              >
+                {isDownloading ? "Завантажуємо..." : "Завантажити файл"}
+              </button>
+            )}
+            <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
+              Відкрити центр задач
+            </Link>
           </div>
         </StickyActionBar>
       </Panel>

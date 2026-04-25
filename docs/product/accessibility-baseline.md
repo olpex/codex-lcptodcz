@@ -5,21 +5,32 @@
 ## Що покрито у baseline
 
 - Глобальні `focus-visible` стилі для інтерактивних елементів (`a`, `button`, `input`, `select`, `textarea`).
+- Додано `skip-link` для швидкого переходу до основного контенту (`#main-content`).
 - Єдина логіка `label + helper + error` через `FormField` з `aria-describedby` та `aria-invalid`.
 - Таблиці мають базові a11y-атрибути:
   - `caption` (sr-only),
   - `aria-label`,
   - `scope="col"`,
   - `aria-sort`.
-- Toast-сповіщення мають `aria-live="polite"`.
+- Toast-сповіщення:
+  - `success/info`: `role="status"` + `aria-live="polite"`,
+  - `error`: `role="alert"` + `aria-live="assertive"`.
+- Confirm-діалоги переведені на `role="alertdialog"` з:
+  - `aria-labelledby`/`aria-describedby`,
+  - фокусом у модалі,
+  - закриттям по `Esc`,
+  - базовим focus trap.
+- Блоки помилок у таблицях мають `role="alert"` для негайного озвучення screen reader.
 - Адаптація до `prefers-reduced-motion: reduce`.
 
 ## Мінімальний ручний чекліст (keyboard-only)
 
 1. `/login`: перейти `Tab`-клавішею через логін, пароль, кнопку входу, посилання аварійного відновлення.
-2. `/schedule`: перевірити керування згортками по датах клавіатурою.
-3. `/documents`: пройти import/export/status дії без миші.
-4. `/jobs`: фільтри та пагінація доступні з клавіатури.
+2. На будь-якій внутрішній сторінці: перевірити `skip-link` (`Tab` одразу після відкриття сторінки).
+3. `/schedule`: перевірити керування згортками по датах клавіатурою.
+4. `/documents`: пройти import/export/status дії без миші.
+5. `/orders` або `/profile`: відкрити confirm-діалог, перевірити `Esc` та фокус-цикл.
+6. `/jobs`: фільтри та пагінація доступні з клавіатури.
 
 ## Автоматизовані перевірки
 
