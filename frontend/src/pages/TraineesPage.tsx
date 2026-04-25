@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
 import { Panel } from "../components/Panel";
@@ -112,6 +113,8 @@ export function TraineesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editForm, setEditForm] = useState<TraineeEditForm | null>(null);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [archiveTargetIds, setArchiveTargetIds] = useState<number[]>([]);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -293,23 +296,37 @@ export function TraineesPage() {
     }
   };
 
-  const runBulkDelete = async () => {
+  const openBulkArchiveDialog = () => {
     if (!selectedActiveIds.length) {
       showError("Виберіть щонайменше одного активного слухача");
       return;
     }
-    const confirmed = window.confirm(`Перемістити вибраних слухачів в архів (${selectedActiveIds.length})?`);
-    if (!confirmed) return;
+    setArchiveTargetIds(selectedActiveIds);
+    setArchiveDialogOpen(true);
+  };
 
+  const closeBulkArchiveDialog = () => {
+    if (isBulkUpdating) return;
+    setArchiveDialogOpen(false);
+    setArchiveTargetIds([]);
+  };
+
+  const runBulkDelete = async () => {
+    if (isBulkUpdating) return;
+    if (!archiveTargetIds.length) {
+      closeBulkArchiveDialog();
+      return;
+    }
     setIsBulkUpdating(true);
     try {
       const response = await request<BulkDeleteResponse>("/trainees/bulk/delete", {
         method: "POST",
-        body: JSON.stringify({ trainee_ids: selectedActiveIds })
+        body: JSON.stringify({ trainee_ids: archiveTargetIds })
       });
       await fetchTrainees(search);
       clearSelection();
       showSuccess(`Архівовано слухачів: ${response.deleted_count}`);
+      closeBulkArchiveDialog();
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -396,6 +413,20 @@ export function TraineesPage() {
       setIsSavingEdit(false);
     }
   };
+
+  const archiveDialogDescription = useMemo(() => {
+    if (!archiveTargetIds.length) return "Оберіть слухачів для архівування.";
+    const targetRows = trainees.filter((item) => archiveTargetIds.includes(item.id));
+    if (!targetRows.length) {
+      return `Підтвердьте архівування ${archiveTargetIds.length} запис(ів).`;
+    }
+    const preview = targetRows
+      .slice(0, 2)
+      .map((item) => buildDisplayName(item))
+      .join(", ");
+    const hasMore = targetRows.length > 2 ? ` та ще ${targetRows.length - 2}` : "";
+    return `Підтвердьте архівування: ${preview}${hasMore}.`;
+  }, [archiveTargetIds, trainees]);
 
   return (
     <div className="space-y-5">
@@ -520,7 +551,7 @@ export function TraineesPage() {
                 </button>
                 <button
                   className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                  onClick={runBulkDelete}
+                  onClick={openBulkArchiveDialog}
                   disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Архівувати вибраних
@@ -707,6 +738,17 @@ export function TraineesPage() {
           })}
         </div>
       </Panel>
+
+      <ConfirmDialog
+        open={archiveDialogOpen}
+        title="Архівувати вибраних слухачів?"
+        description={archiveDialogDescription}
+        confirmLabel={isBulkUpdating ? "Архівація..." : "Архівувати"}
+        cancelLabel="Скасувати"
+        onConfirm={runBulkDelete}
+        onCancel={closeBulkArchiveDialog}
+        confirmVariant="danger"
+      />
     </div>
   );
 }
