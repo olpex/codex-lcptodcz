@@ -40,6 +40,11 @@ type BulkStatusUpdateResponse = {
   status: "active" | "completed" | "expelled";
 };
 
+type BulkDeleteResponse = {
+  deleted_count: number;
+  deleted_ids: number[];
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -257,6 +262,30 @@ export function TraineesPage() {
     }
   };
 
+  const runBulkDelete = async () => {
+    if (!selectedIds.length) {
+      showError("Виберіть щонайменше одного слухача");
+      return;
+    }
+    const confirmed = window.confirm(`Видалити вибраних слухачів (${selectedIds.length})?`);
+    if (!confirmed) return;
+
+    setIsBulkUpdating(true);
+    try {
+      const response = await request<BulkDeleteResponse>("/trainees/bulk/delete", {
+        method: "POST",
+        body: JSON.stringify({ trainee_ids: selectedIds })
+      });
+      await fetchTrainees(search);
+      clearSelection();
+      showSuccess(`Видалено слухачів: ${response.deleted_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
   const startEdit = (trainee: Trainee) => {
     setEditingId(trainee.id);
     setEditForm(toEditForm(trainee));
@@ -417,6 +446,13 @@ export function TraineesPage() {
                   disabled={isBulkUpdating || !selectedIds.length}
                 >
                   Змінити статус
+                </button>
+                <button
+                  className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={runBulkDelete}
+                  disabled={isBulkUpdating || !selectedIds.length}
+                >
+                  Видалити вибраних
                 </button>
               </>
             )}

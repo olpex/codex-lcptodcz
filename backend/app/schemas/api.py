@@ -152,6 +152,15 @@ class TraineeBulkStatusUpdateResponse(BaseModel):
     status: str
 
 
+class TraineeBulkDeleteRequest(BaseModel):
+    trainee_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class TraineeBulkDeleteResponse(BaseModel):
+    deleted_count: int
+    deleted_ids: list[int]
+
+
 class GroupBase(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)

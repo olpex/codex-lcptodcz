@@ -3,8 +3,10 @@ from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
-from app.models import RoleName, Trainee
+from app.models import GroupMembership, Performance, RoleName, Trainee
 from app.schemas.api import (
+    TraineeBulkDeleteRequest,
+    TraineeBulkDeleteResponse,
     TraineeBulkGroupUpdateRequest,
     TraineeBulkGroupUpdateResponse,
     TraineeBulkStatusUpdateRequest,
@@ -190,6 +192,45 @@ def bulk_update_status(
         updated_ids=updated_ids,
         status=payload.status,
     )
+
+
+@router.post(
+    "/bulk/delete",
+    response_model=TraineeBulkDeleteResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_delete_trainees(
+    payload: TraineeBulkDeleteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkDeleteResponse:
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(payload.trainee_ids))
+        .all()
+    )
+    if not target_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для видалення не знайдено")
+
+    target_ids = [item.id for item in target_rows]
+    db.query(GroupMembership).filter(GroupMembership.trainee_id.in_(target_ids)).delete(synchronize_session=False)
+    db.query(Performance).filter(Performance.trainee_id.in_(target_ids)).delete(synchronize_session=False)
+    deleted_count = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(target_ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_delete",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in target_ids[:20]),
+        details={"deleted_count": deleted_count},
+    )
+    return TraineeBulkDeleteResponse(deleted_count=deleted_count, deleted_ids=target_ids)
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)
