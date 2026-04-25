@@ -1,0 +1,35 @@
+{
+  "ci": {
+    "collect": {
+      "numberOfRuns": 1,
+      "startServerCommand": "npm run preview -- --host 127.0.0.1 --port 4173",
+      "startServerReadyPattern": "Local",
+      "startServerReadyTimeout": 30000,
+      "url": [
+        "http://127.0.0.1:4173/",
+        "http://127.0.0.1:4173/login"
+      ],
+      "settings": {
+        "preset": "desktop",
+        "chromeFlags": "--no-sandbox --disable-dev-shm-usage"
+      }
+    },
+    "assert": {
+      "assertions": {
+        "categories:accessibility": [
+          "error",
+          {
+            "minScore": 0.9
+          }
+        ],
+        "aria-valid-attr": "error",
+        "label": "error",
+        "color-contrast": "warn"
+      }
+    },
+    "upload": {
+      "target": "filesystem",
+      "outputDir": "./lighthouseci"
+    }
+  }
+}

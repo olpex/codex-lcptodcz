@@ -41,6 +41,8 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
   - `pytest backend/tests -q`
 - Frontend e2e (Playwright):
   - `cd frontend && npm run test:e2e`
+- Frontend Lighthouse accessibility audit:
+  - `cd frontend && npm run test:a11y:lighthouse`
 - Інтеграційний стек із реальними PostgreSQL + Redis:
   - `docker compose -f infra/tests/docker-compose.integration.yml up --build --abort-on-container-exit`
 

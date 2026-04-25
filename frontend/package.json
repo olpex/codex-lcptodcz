@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:a11y:lighthouse": "lhci autorun --config=.lighthouserc.json"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -17,7 +18,9 @@
     "react-router-dom": "^6.30.1"
   },
   "devDependencies": {
+    "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.54.1",
+    "@rollup/rollup-win32-x64-msvc": "^4.60.2",
     "@types/node": "^22.18.0",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",

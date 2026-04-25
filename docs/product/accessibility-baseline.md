@@ -24,10 +24,10 @@
 ## Автоматизовані перевірки
 
 - Frontend build: `cd frontend && npm run build`
-- E2E (критичні): `cd frontend && npx playwright test tests/e2e/smoke.spec.ts tests/e2e/mvp-admin-flow.spec.ts tests/e2e/schedule-conflicts.spec.ts`
+- Lighthouse accessibility audit: `cd frontend && npm run test:a11y:lighthouse`
+- E2E (критичні): `cd frontend && npx playwright test tests/e2e/smoke.spec.ts tests/e2e/mvp-admin-flow.spec.ts tests/e2e/schedule-conflicts.spec.ts tests/e2e/a11y-keyboard.spec.ts`
 - Full nightly regression: `cd frontend && npm run test:e2e`
 
 ## Обмеження поточного baseline
 
-- Lighthouse accessibility audit ще не автоматизований у CI.
-- Не всі сторінки мають окремі цільові e2e-сценарії keyboard-only.
+- Не всі сторінки мають окремі цільові e2e-сценарії keyboard-only (пріоритетні маршрути вже покриті).
