@@ -8,6 +8,7 @@ import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
+import { formatJobStatus, formatJobType } from "../i18n/statuses";
 import type { Job } from "../types/api";
 
 type JobStatusPayload = {
@@ -356,10 +357,10 @@ export function DocumentsPage() {
               ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
             </p>
             <p>
-              Тип: <span className="font-semibold">{activeJobType ?? "—"}</span>
+              Тип: <span className="font-semibold">{formatJobType(activeJobType)}</span>
             </p>
             <p>
-              Статус: <span className="font-semibold">{activeJobStatus ?? "—"}</span>
+              Статус: <span className="font-semibold">{formatJobStatus(activeJobStatus)}</span>
             </p>
             <button
               type="button"

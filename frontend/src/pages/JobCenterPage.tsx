@@ -4,6 +4,7 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { API_URL } from "../api/client";
+import { formatJobStatus, formatJobType } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Job, JobListItem } from "../types/api";
@@ -242,14 +243,14 @@ export function JobCenterPage() {
       {
         key: "type",
         header: "Тип",
-        render: (item) => item.job_type === "import" ? "Імпорт" : "Експорт",
-        sortAccessor: (item) => item.job_type
+        render: (item) => formatJobType(item.job_type),
+        sortAccessor: (item) => formatJobType(item.job_type)
       },
       {
         key: "status",
         header: "Статус",
-        render: (item) => item.job.status,
-        sortAccessor: (item) => item.job.status
+        render: (item) => formatJobStatus(item.job.status),
+        sortAccessor: (item) => formatJobStatus(item.job.status)
       },
       {
         key: "created_at",
@@ -371,10 +372,10 @@ export function JobCenterPage() {
               onChange={(event) => setJobStatus(event.target.value as JobStatusFilter)}
             >
               <option value="all">Усі</option>
-              <option value="queued">queued</option>
-              <option value="running">running</option>
-              <option value="succeeded">succeeded</option>
-              <option value="failed">failed</option>
+              <option value="queued">{formatJobStatus("queued")}</option>
+              <option value="running">{formatJobStatus("running")}</option>
+              <option value="succeeded">{formatJobStatus("succeeded")}</option>
+              <option value="failed">{formatJobStatus("failed")}</option>
             </select>
           </label>
           <label className="block">
@@ -448,7 +449,7 @@ export function JobCenterPage() {
           search={{
             placeholder: "Пошук за ID, типом, статусом, повідомленням або назвою документа",
             getSearchText: (item) =>
-              `${item.job.id} ${item.job_type} ${item.job.status} ${item.job.message || ""} ${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
+              `${item.job.id} ${item.job_type} ${formatJobType(item.job_type)} ${item.job.status} ${formatJobStatus(item.job.status)} ${item.job.message || ""} ${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
           }}
           initialPageSize={20}
           pageSizeOptions={[10, 20, 50, 100]}

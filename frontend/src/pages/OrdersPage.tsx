@@ -13,6 +13,9 @@ const ORDER_TYPES = [
   { value: "enrollment", label: "Зарахування" },
   { value: "expulsion", label: "Відрахування" }
 ] as const;
+const ORDER_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  ORDER_TYPES.map((item) => [item.value, item.label])
+);
 
 const ORDER_STATUSES = [
   { value: "draft", label: "Чернетка" },
@@ -42,6 +45,7 @@ export function OrdersPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [orderToDelete, setOrderToDelete] = useState<Order | null>(null);
 
   const canEdit = useMemo(
@@ -167,7 +171,8 @@ export function OrdersPage() {
   };
 
   const confirmDeleteOrder = async () => {
-    if (!orderToDelete) return;
+    if (!orderToDelete || isDeleting) return;
+    setIsDeleting(true);
     try {
       await request<void>(`/orders/${orderToDelete.id}`, { method: "DELETE" });
       showSuccess(`Наказ "${orderToDelete.order_number}" видалено`);
@@ -178,6 +183,8 @@ export function OrdersPage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -192,7 +199,7 @@ export function OrdersPage() {
       {
         key: "order_type",
         header: "Тип",
-        render: (row) => row.order_type,
+        render: (row) => ORDER_TYPE_LABELS[row.order_type] || row.order_type,
         sortAccessor: (row) => row.order_type
       },
       {
@@ -405,7 +412,8 @@ export function OrdersPage() {
           emptyText="Накази відсутні"
           search={{
             placeholder: "Пошук за номером, типом або статусом",
-            getSearchText: (row) => `${row.order_number} ${row.order_type} ${row.status}`
+            getSearchText: (row) =>
+              `${row.order_number} ${row.order_type} ${ORDER_TYPE_LABELS[row.order_type] || row.order_type} ${row.status} ${ORDER_STATUS_LABELS[row.status] || row.status}`
           }}
         />
       </Panel>
@@ -417,8 +425,12 @@ export function OrdersPage() {
             ? `Ви дійсно хочете видалити наказ "${orderToDelete.order_number}"? Дію неможливо скасувати.`
             : ""
         }
-        confirmLabel="Видалити"
-        onCancel={() => setOrderToDelete(null)}
+        confirmLabel={isDeleting ? "Видаляємо..." : "Видалити"}
+        confirmDisabled={isDeleting}
+        onCancel={() => {
+          if (isDeleting) return;
+          setOrderToDelete(null);
+        }}
         onConfirm={confirmDeleteOrder}
       />
     </div>

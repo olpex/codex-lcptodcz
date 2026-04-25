@@ -51,6 +51,15 @@ type BulkRestoreResponse = {
   restored_ids: number[];
 };
 
+const TRAINEE_STATUS_OPTIONS = [
+  { value: "active", label: "Активний" },
+  { value: "completed", label: "Завершив навчання" },
+  { value: "expelled", label: "Відрахований" }
+] as const;
+const TRAINEE_STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  TRAINEE_STATUS_OPTIONS.map((item) => [item.value, item.label])
+);
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -296,7 +305,8 @@ export function TraineesPage() {
       });
       await fetchTrainees(search);
       clearSelection();
-      showSuccess(`Оновлено статус (${response.status}) для ${response.updated_count} слухачів`);
+      const statusLabel = TRAINEE_STATUS_LABELS[response.status] || response.status;
+      showSuccess(`Оновлено статус (${statusLabel}) для ${response.updated_count} слухачів`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -569,9 +579,11 @@ export function TraineesPage() {
                   value={bulkStatus}
                   onChange={(event) => setBulkStatus(event.target.value as "active" | "completed" | "expelled")}
                 >
-                  <option value="active">active</option>
-                  <option value="completed">completed</option>
-                  <option value="expelled">expelled</option>
+                  {TRAINEE_STATUS_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
                 </select>
                 <button
                   className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -630,6 +642,9 @@ export function TraineesPage() {
                       <p className="truncate text-xs text-slate-600">
                         Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
                       </p>
+                      <p className="truncate text-xs text-slate-600">
+                        Статус: {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}
+                      </p>
                       {trainee.is_deleted && (
                         <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
                           В архіві
@@ -659,6 +674,7 @@ export function TraineesPage() {
                         <p><span className="font-semibold">Ідентифікаційний код:</span> {trainee.tax_id || "—"}</p>
                         <p><span className="font-semibold">Телефон:</span> {trainee.phone || "—"}</p>
                         <p><span className="font-semibold">Номер групи:</span> {trainee.group_code || "—"}</p>
+                        <p><span className="font-semibold">Статус:</span> {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}</p>
                       </div>
                     )}
 
@@ -766,9 +782,11 @@ export function TraineesPage() {
                         </FormField>
                         <FormField label="Статус">
                           <select className={formControlClass} value={editForm.status} onChange={(event) => updateEditField("status", event.target.value)}>
-                            <option value="active">active</option>
-                            <option value="completed">completed</option>
-                            <option value="expelled">expelled</option>
+                            {TRAINEE_STATUS_OPTIONS.map((item) => (
+                              <option key={item.value} value={item.value}>
+                                {item.label}
+                              </option>
+                            ))}
                           </select>
                         </FormField>
                         <div className="md:col-span-2 flex flex-wrap gap-2">
@@ -805,6 +823,7 @@ export function TraineesPage() {
         onConfirm={runBulkDelete}
         onCancel={closeBulkArchiveDialog}
         confirmVariant="danger"
+        confirmDisabled={isBulkUpdating}
       />
     </div>
   );

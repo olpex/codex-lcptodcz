@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Group } from "../types/api";
@@ -39,8 +40,8 @@ export function GroupsPage() {
       {
         key: "status",
         header: "Статус",
-        render: (group) => group.status,
-        sortAccessor: (group) => group.status
+        render: (group) => formatGroupStatus(group.status),
+        sortAccessor: (group) => formatGroupStatus(group.status)
       },
       {
         key: "capacity",
@@ -183,7 +184,7 @@ export function GroupsPage() {
           emptyText="Групи відсутні"
           search={{
             placeholder: "Пошук за кодом, назвою або статусом",
-            getSearchText: (group) => `${group.code} ${group.name} ${group.status}`
+            getSearchText: (group) => `${group.code} ${group.name} ${group.status} ${formatGroupStatus(group.status)}`
           }}
         />
       </Panel>

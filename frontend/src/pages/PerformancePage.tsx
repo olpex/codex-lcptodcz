@@ -40,6 +40,7 @@ export function PerformancePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [performanceToDelete, setPerformanceToDelete] = useState<Performance | null>(null);
 
   const canDelete = useMemo(
@@ -157,7 +158,8 @@ export function PerformancePage() {
   };
 
   const confirmDelete = async () => {
-    if (!performanceToDelete) return;
+    if (!performanceToDelete || isDeleting) return;
+    setIsDeleting(true);
     try {
       await request<void>(`/performance/${performanceToDelete.id}`, { method: "DELETE" });
       showSuccess("Запис видалено");
@@ -169,6 +171,8 @@ export function PerformancePage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -377,8 +381,12 @@ export function PerformancePage() {
             ? `Видалити запис успішності для "${traineeLookup[performanceToDelete.trainee_id] || performanceToDelete.trainee_id}"?`
             : ""
         }
-        confirmLabel="Видалити"
-        onCancel={() => setPerformanceToDelete(null)}
+        confirmLabel={isDeleting ? "Видаляємо..." : "Видалити"}
+        confirmDisabled={isDeleting}
+        onCancel={() => {
+          if (isDeleting) return;
+          setPerformanceToDelete(null);
+        }}
         onConfirm={confirmDelete}
       />
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
+import { formatDraftStatus, formatMailStatus } from "../i18n/statuses";
 import { Panel } from "../components/Panel";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
@@ -99,8 +100,8 @@ export function DraftsPage() {
       {
         key: "status",
         header: "Статус",
-        render: (message) => message.status,
-        sortAccessor: (message) => message.status
+        render: (message) => formatMailStatus(message.status),
+        sortAccessor: (message) => formatMailStatus(message.status)
       }
     ],
     []
@@ -129,8 +130,8 @@ export function DraftsPage() {
       {
         key: "status",
         header: "Статус",
-        render: (draft) => draft.status,
-        sortAccessor: (draft) => draft.status
+        render: (draft) => formatDraftStatus(draft.status),
+        sortAccessor: (draft) => formatDraftStatus(draft.status)
       },
       {
         key: "actions",
@@ -290,7 +291,7 @@ export function DraftsPage() {
           emptyText="Листи відсутні"
           search={{
             placeholder: "Пошук за відправником або темою",
-            getSearchText: (message) => `${message.sender} ${message.subject} ${message.status}`
+            getSearchText: (message) => `${message.sender} ${message.subject} ${message.status} ${formatMailStatus(message.status)}`
           }}
           initialPageSize={20}
         />
@@ -333,7 +334,7 @@ export function DraftsPage() {
             emptyText="Чернетки відсутні"
             search={{
               placeholder: "Пошук за типом або статусом",
-              getSearchText: (draft) => `${draft.id} ${draft.draft_type} ${draft.status}`
+              getSearchText: (draft) => `${draft.id} ${draft.draft_type} ${draft.status} ${formatDraftStatus(draft.status)}`
             }}
           />
         </Panel>
