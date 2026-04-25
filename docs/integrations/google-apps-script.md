@@ -42,29 +42,28 @@ function processContractsEmails() {
   threads.forEach((thread) => {
     const messages = thread.getMessages();
     let threadOk = true;
+    let hasMatchedAttachment = false;
 
     messages.forEach((message) => {
       const attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true });
       attachments.forEach((att) => {
-        const fileName = att.getName() || "";
+        const fileName = (att.getName() || "").trim();
         if (!isContractsFilename_(fileName)) return;
 
         const ext = getExtension_(fileName);
         if (ext !== "xlsx" && ext !== "xls") return;
 
-        const payload = {
-          sender_email: SENDER_EMAIL,
-          sender_name: SENDER_NAME,
-          subject: message.getSubject() || "",
-          message_id: message.getId(),
-          update_existing_mode: "overwrite",
-        };
+        hasMatchedAttachment = true;
 
         const options = {
           method: "post",
           headers: { Authorization: "Bearer " + WEBHOOK_SECRET },
           payload: {
-            ...payload,
+            sender_email: SENDER_EMAIL,
+            sender_name: SENDER_NAME,
+            subject: message.getSubject() || "",
+            message_id: message.getId(),
+            update_existing_mode: "overwrite",
             file: att.copyBlob().setName(fileName),
           },
           muteHttpExceptions: true,
@@ -73,27 +72,44 @@ function processContractsEmails() {
         const url = PROJECT_BASE_URL + "/api/api/v1/mail/google-webhook/contracts";
         const resp = UrlFetchApp.fetch(url, options);
         const code = resp.getResponseCode();
-        if (code < 200 || code >= 300) {
+        let body = {};
+        try {
+          body = JSON.parse(resp.getContentText() || "{}");
+        } catch (e) {
+          body = { raw: resp.getContentText() };
+        }
+
+        // 2xx is transport success, but backend job can still be failed.
+        const jobFailed = body && body.status === "failed";
+        if (code < 200 || code >= 300 || jobFailed) {
           threadOk = false;
-          Logger.log("Webhook error %s: %s", code, resp.getContentText());
+          Logger.log("Webhook error %s for file '%s': %s", code, fileName, resp.getContentText());
+        } else {
+          Logger.log("Webhook success %s for file '%s': %s", code, fileName, resp.getContentText());
         }
       });
     });
 
+    if (!hasMatchedAttachment) {
+      Logger.log("Thread skipped (no matching attachments): %s", thread.getFirstMessageSubject());
+      return;
+    }
+
     if (threadOk) {
       thread.addLabel(okLabel);
       thread.markRead();
+      Logger.log("Thread processed and marked read: %s", thread.getFirstMessageSubject());
     } else {
       thread.addLabel(failLabel);
+      Logger.log("Thread marked failed: %s", thread.getFirstMessageSubject());
     }
   });
 }
 
 function isContractsFilename_(name) {
   const normalized = (name || "").toLowerCase().replace(/_/g, " ");
-  if (!normalized.includes("договор")) return false;
-  // Matches 73-26, 73/26, 73–26, 73—26
-  return /\d{1,4}\s*[-/–—]\s*\d{1,4}/.test(normalized);
+  // Let backend validate full business rules; here only coarse filter.
+  return normalized.includes("договор");
 }
 
 function getExtension_(name) {
