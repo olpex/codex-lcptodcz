@@ -1,7 +1,7 @@
 from uuid import uuid4
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from celery.utils.log import get_task_logger
 
@@ -9,6 +9,7 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same
 from app.models import Document, ExportJob, ImportJob, JobStatus, RoleName
 from app.schemas.api import ExportRequest, JobResponse
 from app.services.audit import write_audit
+from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.storage import detect_document_type, persist_upload
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
@@ -54,11 +55,14 @@ def import_document(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
+    update_existing_mode: str = Form(default="missing_only"),
     x_idempotency_key: str | None = Header(default=None),
 ) -> JobResponse:
     doc_type = detect_document_type(file.filename)
     if doc_type.value not in {"xlsx", "pdf", "docx", "csv"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються .xls/.xlsx, .pdf, .docx, .csv")
+    if update_existing_mode not in IMPORT_UPDATE_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний режим імпорту")
 
     raw_idem_key = x_idempotency_key or f"import-{uuid4().hex}"
     idem_key = f"{current_user.branch_id}:{raw_idem_key}"
@@ -90,6 +94,7 @@ def import_document(
         document_id=document.id,
         status=JobStatus.QUEUED,
         message="Заявку на імпорт створено",
+        result_payload={"import_mode": update_existing_mode},
     )
     db.add(job)
     db.commit()
@@ -103,7 +108,12 @@ def import_document(
         action="documents.import.create_job",
         entity_type="import_job",
         entity_id=str(job.id),
-        details={"document_id": document.id, "file_name": document.file_name, "dispatch_mode": dispatch_mode},
+        details={
+            "document_id": document.id,
+            "file_name": document.file_name,
+            "dispatch_mode": dispatch_mode,
+            "import_mode": update_existing_mode,
+        },
     )
     return _with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode)
 

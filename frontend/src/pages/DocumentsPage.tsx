@@ -19,6 +19,7 @@ type JobStatusPayload = {
 type NoticeTone = "info" | "success" | "error";
 type KnownJobType = "import" | "export";
 type KnownJobStatus = Job["status"];
+type ImportMode = "missing_only" | "overwrite";
 
 type KnownJob = {
   jobType: KnownJobType;
@@ -98,8 +99,7 @@ export function DocumentsPage() {
     return typeof value === "number" ? value : null;
   };
 
-  const uploadImport = async (event: FormEvent) => {
-    event.preventDefault();
+  const runImport = async (mode: ImportMode) => {
     if (!file) {
       showError("Оберіть файл для імпорту");
       setImportFieldError("Оберіть файл для імпорту");
@@ -110,6 +110,7 @@ export function DocumentsPage() {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("update_existing_mode", mode);
     setIsImporting(true);
     try {
       const job = await request<Job>("/documents/import", {
@@ -122,7 +123,11 @@ export function DocumentsPage() {
       setActiveJobStatus(job.status);
       setOutputDocumentId(null);
       showSuccess(job.message || "Імпорт запущено");
-      setNotice({ tone: "success", text: job.message || "Імпорт запущено. Перевірте статус задачі нижче." });
+      const modeLabel = mode === "overwrite" ? "перезапис існуючих" : "додавання нових/дозаповнення";
+      setNotice({
+        tone: "success",
+        text: job.message || `Імпорт запущено (${modeLabel}). Перевірте статус задачі нижче.`
+      });
     } catch (error) {
       const message = (error as Error).message;
       showError(message);
@@ -130,6 +135,11 @@ export function DocumentsPage() {
     } finally {
       setIsImporting(false);
     }
+  };
+
+  const uploadImport = async (event: FormEvent) => {
+    event.preventDefault();
+    await runImport("missing_only");
   };
 
   const runExport = async () => {
@@ -264,12 +274,21 @@ export function DocumentsPage() {
               required
             />
           </FormField>
-          <FormSubmitButton
-            isLoading={isImporting}
-            idleLabel="Завантажити"
-            loadingLabel="Завантаження..."
-            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
-          />
+          <button
+            type="submit"
+            disabled={isImporting}
+            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
+          >
+            {isImporting ? "Завантаження..." : "Завантажити нові"}
+          </button>
+          <button
+            type="button"
+            disabled={isImporting}
+            className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
+            onClick={() => void runImport("overwrite")}
+          >
+            {isImporting ? "Оновлення..." : "Оновити існуючих"}
+          </button>
         </form>
       </Panel>
       <Panel title="Експорт звітів (.xlsx, .pdf, .csv)">

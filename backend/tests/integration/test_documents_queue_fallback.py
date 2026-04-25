@@ -38,6 +38,30 @@ def test_import_works_when_queue_is_unavailable(client, auth_headers, monkeypatc
     assert payload["status"] != "queued"
 
 
+def test_import_accepts_overwrite_mode_form_field(client, auth_headers, monkeypatch):
+    def _raise_queue_error(job_id: int):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(documents_route.process_import_job_task, "delay", _raise_queue_error)
+
+    file_bytes = _docx_bytes("Тестовий DOCX документ")
+    response = client.post(
+        "/api/v1/documents/import",
+        headers=auth_headers,
+        data={"update_existing_mode": "overwrite"},
+        files={
+            "file": (
+                "167-25 Організація трудових відносин – копія.docx",
+                file_bytes,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] in {"running", "succeeded", "failed"}
+
+
 def test_export_works_when_queue_is_unavailable(client, auth_headers, monkeypatch):
     def _raise_queue_error(job_id: int):
         raise RuntimeError("redis unavailable")

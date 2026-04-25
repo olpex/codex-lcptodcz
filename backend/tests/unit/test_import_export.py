@@ -118,3 +118,32 @@ def test_import_updates_existing_missing_fields_instead_of_skipping(tmp_path: Pa
     assert trainee.contract_number == "1499"
     assert trainee.group_code == "73-26"
     assert trainee.employment_center_encrypted is not None
+
+
+def test_import_overwrite_mode_updates_existing_non_empty_fields(tmp_path: Path, db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Тетяна Анатоліївна",
+            last_name="Бортнік",
+            contract_number="OLD-1499",
+            status="completed",
+            group_code="OLD-GROUP",
+        )
+    )
+    db_session.commit()
+
+    file_path = tmp_path / "contracts_overwrite.xlsx"
+    _create_contract_like_workbook(file_path)
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    result = try_import_trainees(db_session, parsed, "main", update_existing_mode="overwrite")
+    assert result["inserted"] == 0
+    assert result["updated_existing"] == 1
+    assert result["update_existing_mode"] == "overwrite"
+
+    trainee = db_session.query(Trainee).filter(Trainee.last_name == "Бортнік").first()
+    assert trainee is not None
+    assert trainee.contract_number == "1499"
+    assert trainee.group_code == "73-26"
+    assert trainee.status == "active"

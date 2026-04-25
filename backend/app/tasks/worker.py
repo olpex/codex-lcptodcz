@@ -7,6 +7,7 @@ from app.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.models import Document, ExportJob, ImportJob, JobStatus, OCRResult
 from app.services.import_export import (
+    IMPORT_UPDATE_MODES,
     collect_report_rows,
     mark_job_failed,
     mark_job_running,
@@ -60,10 +61,12 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         db.add(job)
         db.commit()
 
+        raw_import_mode = (job.result_payload or {}).get("import_mode") if isinstance(job.result_payload, dict) else None
+        import_mode = raw_import_mode if raw_import_mode in IMPORT_UPDATE_MODES else "missing_only"
         parsed = parse_document_content(job.document.file_path, job.document.file_type)
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:
-            import_result = try_import_trainees(db, parsed, job.branch_id)
+            import_result = try_import_trainees(db, parsed, job.branch_id, update_existing_mode=import_mode)
         elif job.document.file_type.value == "docx":
             import_result = import_schedule_docx(
                 db,
@@ -74,6 +77,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
 
         payload = {
             "parsed": _parsed_snapshot(parsed),
+            "import_mode": import_mode,
             "import_result": import_result,
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }

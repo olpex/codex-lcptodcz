@@ -35,6 +35,7 @@ from app.services.storage import storage_path
 PREFERRED_TRAINEE_SHEET_NAMES = ("Додаток", "додаток")
 HEADER_SCAN_LIMIT = 30
 ROW_SAMPLE_LIMIT = 20
+IMPORT_UPDATE_MODES = {"missing_only", "overwrite"}
 
 FIRST_NAME_ALIASES = {
     "first_name",
@@ -351,14 +352,38 @@ def _is_missing(value: Any) -> bool:
     return False
 
 
-def _set_if_missing(obj: Any, field: str, value: Any) -> bool:
+def _set_plain_value(obj: Any, field: str, value: Any, overwrite: bool) -> bool:
     if _is_missing(value):
         return False
     current = getattr(obj, field)
-    if not _is_missing(current):
+    if overwrite:
+        if current != value:
+            setattr(obj, field, value)
+            return True
         return False
-    setattr(obj, field, value)
-    return True
+    if _is_missing(current):
+        setattr(obj, field, value)
+        return True
+    return False
+
+
+def _set_encrypted_value(obj: Any, field: str, plain_value: str | None, overwrite: bool) -> bool:
+    normalized = _normalize_text_value(plain_value)
+    if not normalized:
+        return False
+
+    current_cipher = getattr(obj, field)
+    if overwrite:
+        current_plain = _normalize_text_value(cipher.decrypt(current_cipher))
+        if current_plain == normalized:
+            return False
+        setattr(obj, field, cipher.encrypt(normalized))
+        return True
+
+    if _is_missing(current_cipher):
+        setattr(obj, field, cipher.encrypt(normalized))
+        return True
+    return False
 
 
 def _ensure_group_for_trainee(
@@ -368,29 +393,34 @@ def _ensure_group_for_trainee(
     group_cache: dict[str, Group],
     group_code_raw: str | None,
     group_name_raw: str | None,
+    overwrite_group: bool = False,
 ) -> tuple[int, bool]:
     group_code = _normalize_text_value(group_code_raw)
     group_name = _normalize_text_value(group_name_raw)
     if not group_code and not group_name:
         return 0, False
 
-    code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
-    trainee_group_changed = trainee.group_code != code
-    trainee.group_code = code
+    incoming_code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
+    effective_code = incoming_code
+    if trainee.group_code and not overwrite_group:
+        effective_code = trainee.group_code
 
-    cache_key = code.lower()
+    trainee_group_changed = trainee.group_code != effective_code
+    trainee.group_code = effective_code
+
+    cache_key = effective_code.lower()
     group = group_cache.get(cache_key)
     if not group:
         group = (
             db.query(Group)
-            .filter(Group.branch_id == branch_id, Group.code == code)
+            .filter(Group.branch_id == branch_id, Group.code == effective_code)
             .first()
         )
         if not group:
             group = Group(
                 branch_id=branch_id,
-                code=code,
-                name=(group_name or code)[:255],
+                code=effective_code,
+                name=(group_name or effective_code)[:255],
                 status=GroupStatus.ACTIVE,
                 capacity=30,
             )
@@ -447,7 +477,16 @@ def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     return {"rows": 0, "data": []}
 
 
-def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
+def try_import_trainees(
+    db: Session,
+    parsed: dict,
+    branch_id: str,
+    update_existing_mode: str = "missing_only",
+) -> dict:
+    if update_existing_mode not in IMPORT_UPDATE_MODES:
+        update_existing_mode = "missing_only"
+    overwrite_existing = update_existing_mode == "overwrite"
+
     headers = {_normalize_header(h) for h in parsed.get("headers", [])}
     required_match = bool(
         (_has_any_alias(headers, FIRST_NAME_ALIASES) and _has_any_alias(headers, LAST_NAME_ALIASES))
@@ -546,21 +585,22 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
             existing = fallback_query.first()
         if existing:
             changed = False
-            changed = _set_if_missing(existing, "source_row_number", source_row_number) or changed
-            changed = _set_if_missing(existing, "birth_date", birth_date) or changed
-            changed = _set_if_missing(existing, "employment_center_encrypted", cipher.encrypt(employment_center)) or changed
-            changed = _set_if_missing(existing, "contract_number", contract_number) or changed
-            changed = _set_if_missing(existing, "certificate_number", certificate_number) or changed
-            changed = _set_if_missing(existing, "certificate_issue_date", certificate_issue_date) or changed
-            changed = _set_if_missing(existing, "postal_index", postal_index) or changed
-            changed = _set_if_missing(existing, "address_encrypted", cipher.encrypt(address)) or changed
-            changed = _set_if_missing(existing, "passport_series_encrypted", cipher.encrypt(passport_series)) or changed
-            changed = _set_if_missing(existing, "passport_number_encrypted", cipher.encrypt(passport_number)) or changed
-            changed = _set_if_missing(existing, "passport_issued_by_encrypted", cipher.encrypt(passport_issued_by)) or changed
-            changed = _set_if_missing(existing, "passport_issued_date", passport_issued_date) or changed
-            changed = _set_if_missing(existing, "tax_id_encrypted", cipher.encrypt(tax_id)) or changed
-            changed = _set_if_missing(existing, "phone_encrypted", cipher.encrypt(phone_value)) or changed
-            changed = _set_if_missing(existing, "status", status) or changed
+            changed = _set_plain_value(existing, "source_row_number", source_row_number, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "birth_date", birth_date, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "contract_number", contract_number, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "certificate_number", certificate_number, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "certificate_issue_date", certificate_issue_date, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "postal_index", postal_index, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "passport_issued_date", passport_issued_date, overwrite_existing) or changed
+            changed = _set_plain_value(existing, "status", status, overwrite_existing) or changed
+
+            changed = _set_encrypted_value(existing, "employment_center_encrypted", employment_center, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "address_encrypted", address, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "passport_series_encrypted", passport_series, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "passport_number_encrypted", passport_number, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "passport_issued_by_encrypted", passport_issued_by, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "tax_id_encrypted", tax_id, overwrite_existing) or changed
+            changed = _set_encrypted_value(existing, "phone_encrypted", phone_value, overwrite_existing) or changed
 
             memberships_added, group_changed = _ensure_group_for_trainee(
                 db,
@@ -569,6 +609,7 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
                 group_cache,
                 group_code,
                 group_name,
+                overwrite_group=overwrite_existing,
             )
             memberships_created += memberships_added
             changed = changed or group_changed
@@ -612,6 +653,7 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
             group_cache,
             group_code,
             group_name,
+            overwrite_group=True,
         )
         memberships_created += memberships_added
 
@@ -627,6 +669,7 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
         "sheet_name": parsed.get("sheet_name"),
         "default_group_code": default_group_code or None,
         "default_group_name": default_group_name or None,
+        "update_existing_mode": update_existing_mode,
         "preview": _tabular_preview(parsed.get("data", [])),
     }
 
