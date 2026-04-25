@@ -382,6 +382,7 @@ class JobStatusResponse(BaseModel):
 class JobListItemResponse(BaseModel):
     job_type: str
     job: JobResponse
+    import_source: str | None = None
     report_type: str | None = None
     export_format: str | None = None
     output_document_id: int | None = None

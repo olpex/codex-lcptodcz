@@ -9,5 +9,11 @@
       "entrypoint": "backend/main.py",
       "routePrefix": "/api"
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/api/v1/mail/poll-cron",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }

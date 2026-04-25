@@ -1,7 +1,9 @@
 import email
 import imaplib
+import re
 from datetime import datetime, timezone
 from email.header import decode_header
+from email.utils import parseaddr
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,9 +22,49 @@ from app.models import (
     MailStatus,
     OCRResult,
 )
-from app.services.import_export import parse_document_content, try_import_trainees
+from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content, try_import_trainees
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
+
+GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+
+
+def _normalize_compact(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _is_contract_sender(sender_name: str, sender_email: str) -> bool:
+    expected_name = settings.imap_contract_sender_name_normalized
+    expected_email = settings.imap_contract_sender_email_normalized
+    if not expected_email:
+        return False
+    if _normalize_compact(sender_email) != expected_email:
+        return False
+    if expected_name and _normalize_compact(sender_name) != expected_name:
+        return False
+    return True
+
+
+def _extract_contract_group_code(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    lower = filename.strip().lower()
+    if "." not in lower:
+        return None
+    stem, ext = lower.rsplit(".", 1)
+    if ext not in {"xlsx", "xls"}:
+        return None
+
+    keyword = _normalize_compact(settings.imap_contract_attachment_prefix)
+    stem_compact = _normalize_compact(stem.replace("_", " "))
+    if keyword and keyword not in stem_compact:
+        return None
+
+    # Accept both "Договори 73-26 ..." and "73-26 ... Договори ...".
+    match = GROUP_CODE_PATTERN.search(stem)
+    if not match:
+        return None
+    return "".join(match.group(1).split())
 
 
 def _decode_header(value: str | None) -> str:
@@ -84,6 +126,10 @@ def ingest_mailbox(db: Session) -> dict:
         subject = _decode_header(parsed.get("Subject"))
         sender = _decode_header(parsed.get("From"))
         sender_lower = sender.lower()
+        sender_name, sender_email = parseaddr(sender)
+        sender_name = _decode_header(sender_name)
+        sender_email = sender_email.strip().lower()
+        sender_is_contract_source = _is_contract_sender(sender_name, sender_email)
         received_at = datetime.now(timezone.utc)
 
         snippet = ""
@@ -114,6 +160,7 @@ def ingest_mailbox(db: Session) -> dict:
             processed += 1
             continue
 
+        attachment_notes: list[str] = []
         for part in parsed.walk():
             content_disposition = str(part.get("Content-Disposition", ""))
             if "attachment" not in content_disposition:
@@ -139,38 +186,62 @@ def ingest_mailbox(db: Session) -> dict:
             )
             db.add(document)
             db.flush()
+            if record.raw_document_id is None:
+                record.raw_document_id = document.id
 
-            if doc_type in {DocumentType.XLSX, DocumentType.CSV}:
+            contract_group_code = _extract_contract_group_code(filename)
+            if sender_is_contract_source and contract_group_code and doc_type == DocumentType.XLSX:
+                import_mode = settings.imap_contract_update_mode if settings.imap_contract_update_mode in IMPORT_UPDATE_MODES else "overwrite"
                 job = ImportJob(
                     branch_id=branch_id,
-                    idempotency_key=f"{branch_id}:mail:{uuid4().hex}",
+                    idempotency_key=f"{branch_id}:mail-contracts:{uuid4().hex}",
                     document_id=document.id,
                     status=JobStatus.RUNNING,
-                    message="Автоімпорт із пошти виконується",
+                    message="Автоімпорт договорів із пошти виконується",
                     started_at=datetime.now(timezone.utc),
+                    result_payload={
+                        "source": "mail_auto_contracts",
+                        "message_id": message_id,
+                        "sender_name": sender_name,
+                        "sender_email": sender_email,
+                        "group_code_hint": contract_group_code,
+                        "import_mode": import_mode,
+                    },
                 )
                 db.add(job)
                 db.flush()
                 try:
                     parsed_content = parse_document_content(str(out_path), doc_type)
-                    import_result = try_import_trainees(db, parsed_content, branch_id)
+                    import_result = try_import_trainees(db, parsed_content, branch_id, update_existing_mode=import_mode)
                     job.status = JobStatus.SUCCEEDED
                     job.result_payload = {
-                        "source": "mail",
+                        "source": "mail_auto_contracts",
                         "message_id": message_id,
+                        "sender_name": sender_name,
+                        "sender_email": sender_email,
+                        "group_code_hint": contract_group_code,
+                        "import_mode": import_mode,
                         "parsed": {
                             key: value for key, value in parsed_content.items() if key != "data"
                         },
                         "import_result": import_result,
                     }
-                    job.message = "Автоімпорт із пошти виконано"
+                    job.message = "Автоімпорт договорів із пошти виконано"
                     job.finished_at = datetime.now(timezone.utc)
+                    attachment_notes.append(f"Імпорт договорів виконано ({filename})")
                 except Exception as exc:
                     job.status = JobStatus.FAILED
-                    job.message = f"Помилка автоімпорту з пошти: {exc}"
+                    job.message = f"Помилка автоімпорту договорів: {exc}"
                     job.finished_at = datetime.now(timezone.utc)
                     db.add(job)
+                    attachment_notes.append(f"Помилка імпорту договорів ({filename})")
                 db.flush()
+                continue
+
+            if doc_type in {DocumentType.XLSX, DocumentType.CSV}:
+                attachment_notes.append(
+                    f"Excel-вкладення пропущено ({filename}): не відповідає правилу 'Договори + номер групи' або відправнику"
+                )
                 continue
 
             text = _extract_text_from_file(str(out_path), doc_type)
@@ -185,6 +256,14 @@ def ingest_mailbox(db: Session) -> dict:
                 confidence=0.75 if text else 0.1,
             )
             db.add(ocr_result)
+            attachment_notes.append(f"Створено OCR-чернетку ({filename})")
+
+        if attachment_notes:
+            note = " | ".join(attachment_notes)
+            if record.snippet:
+                record.snippet = f"{record.snippet} [{note}]"
+            else:
+                record.snippet = note
 
         record.status = MailStatus.PROCESSED
         processed += 1

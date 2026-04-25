@@ -137,6 +137,7 @@ def list_jobs(
             JobListItemResponse(
                 job_type="import",
                 job=JobResponse.model_validate(job),
+                import_source=job.document.source if job.document else None,
                 document_id=job.document_id,
                 document_file_name=job.document.file_name if job.document else None,
             )

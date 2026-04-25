@@ -1,8 +1,9 @@
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
+from app.core.config import settings
 from app.models import DraftStatus, MailMessage, OCRResult, Order, OrderType, RoleName, Trainee
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, MailMessageResponse
 from app.services.audit import write_audit
@@ -46,6 +47,37 @@ def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
         "task_id": task_id,
         "dispatch_mode": dispatch_mode,
     }
+
+
+@router.get("/mail/poll-cron", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/mail/poll-cron", status_code=status.HTTP_202_ACCEPTED)
+def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
+    expected_secret = settings.cron_secret.strip()
+    if not expected_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="CRON_SECRET не налаштовано")
+    expected_header = f"Bearer {expected_secret}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
+
+    dispatch_mode = "queued"
+    task_id: str | None = None
+    inline_result: dict | None = None
+    try:
+        task = poll_mailbox_task.delay()
+        task_id = task.id
+    except Exception:
+        dispatch_mode = "inline"
+        inline_result = poll_mailbox_task.run()
+
+    payload: dict[str, object] = {
+        "message": "Опитування поштової скриньки запущено",
+        "dispatch_mode": dispatch_mode,
+    }
+    if task_id:
+        payload["task_id"] = task_id
+    if inline_result is not None:
+        payload["result"] = inline_result
+    return payload
 
 
 @router.get("/mail/messages", response_model=list[MailMessageResponse])

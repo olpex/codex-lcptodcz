@@ -5,6 +5,12 @@ export const JOB_TYPE_LABELS: Record<"import" | "export", string> = {
   export: "Експорт"
 };
 
+export const IMPORT_SOURCE_LABELS: Record<string, string> = {
+  upload: "Ручний",
+  mail: "Пошта",
+  mail_auto_contracts: "Пошта: Договори"
+};
+
 export const JOB_STATUS_LABELS: Record<Job["status"], string> = {
   queued: "У черзі",
   running: "Виконується",
@@ -44,6 +50,11 @@ export function formatJobType(value: string | null | undefined): string {
 export function formatJobStatus(value: string | null | undefined): string {
   if (!value) return "—";
   return JOB_STATUS_LABELS[value as keyof typeof JOB_STATUS_LABELS] || value;
+}
+
+export function formatImportSource(value: string | null | undefined): string {
+  if (!value) return "—";
+  return IMPORT_SOURCE_LABELS[value] || value;
 }
 
 export function formatGroupStatus(value: string | null | undefined): string {

@@ -60,6 +60,19 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 - Інструкція: `infra/vercel/README.md`
 - Compose-файл: `infra/vercel/docker-compose.workers.yml`
 
+### Автообробка вхідної пошти (контракти/договори)
+
+Реалізовано автоматичний імпорт вкладень з IMAP-скриньки за правилами:
+
+- відправник: `IMAP_CONTRACT_SENDER_NAME` + `IMAP_CONTRACT_SENDER_EMAIL`,
+- назва вкладення: починається з `IMAP_CONTRACT_ATTACHMENT_PREFIX` і містить номер групи (наприклад `73-26`),
+- формат вкладення: `.xls/.xlsx`.
+
+Такі вкладення обробляються як імпорт слухачів (аналогічно ручному імпорту), а в задачах мають джерело `mail_auto_contracts`.
+
+Для Vercel додано cron (`vercel.json`), який викликає `GET /api/api/v1/mail/poll-cron` кожні 5 хвилин.
+Потрібно обов'язково задати `CRON_SECRET` у Vercel Environment Variables.
+
 ## Kubernetes
 
 Додатково доступні маніфести для розгортання у Kubernetes:

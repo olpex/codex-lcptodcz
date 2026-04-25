@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     imap_branch_id: str = Field(default="main")
     imap_poll_interval_seconds: int = Field(default=300)
     imap_allowed_senders: str = Field(default="")
+    imap_contract_sender_name: str = Field(default="Львівський центр ПТО ДСЗ")
+    imap_contract_sender_email: str = Field(default="lcptodcz@gmail.com")
+    imap_contract_attachment_prefix: str = Field(default="Договори")
+    imap_contract_update_mode: str = Field(default="overwrite")
+    cron_secret: str = Field(default="")
 
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)
@@ -60,6 +65,14 @@ class Settings(BaseSettings):
     @property
     def imap_allowed_senders_list(self) -> List[str]:
         return [part.strip().lower() for part in self.imap_allowed_senders.split(",") if part.strip()]
+
+    @property
+    def imap_contract_sender_name_normalized(self) -> str:
+        return self.imap_contract_sender_name.strip().lower()
+
+    @property
+    def imap_contract_sender_email_normalized(self) -> str:
+        return self.imap_contract_sender_email.strip().lower()
 
 
 @lru_cache

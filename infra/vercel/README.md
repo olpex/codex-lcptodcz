@@ -9,6 +9,7 @@ Vercel не запускає довгоживучі процеси `celery worke
    - `REDIS_URL`,
    - `SECRET_KEY`, `DATA_ENCRYPTION_KEY`,
    - IMAP/OCR змінні.
+4. Для serverless fallback також доступний Vercel Cron: `GET /api/api/v1/mail/poll-cron` (кожні 5 хв, див. `vercel.json`), захищений змінною `CRON_SECRET`.
 
 ## Запуск worker/beat
 

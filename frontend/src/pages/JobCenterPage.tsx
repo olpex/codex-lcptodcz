@@ -4,7 +4,7 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { API_URL } from "../api/client";
-import { formatJobStatus, formatJobType } from "../i18n/statuses";
+import { formatImportSource, formatJobStatus, formatJobType } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Job, JobListItem } from "../types/api";
@@ -247,6 +247,12 @@ export function JobCenterPage() {
         sortAccessor: (item) => formatJobType(item.job_type)
       },
       {
+        key: "source",
+        header: "Джерело",
+        render: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "—"),
+        sortAccessor: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "")
+      },
+      {
         key: "status",
         header: "Статус",
         render: (item) => formatJobStatus(item.job.status),
@@ -449,7 +455,7 @@ export function JobCenterPage() {
           search={{
             placeholder: "Пошук за ID, типом, статусом, повідомленням або назвою документа",
             getSearchText: (item) =>
-              `${item.job.id} ${item.job_type} ${formatJobType(item.job_type)} ${item.job.status} ${formatJobStatus(item.job.status)} ${item.job.message || ""} ${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
+              `${item.job.id} ${item.job_type} ${formatJobType(item.job_type)} ${item.import_source || ""} ${formatImportSource(item.import_source)} ${item.job.status} ${formatJobStatus(item.job.status)} ${item.job.message || ""} ${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
           }}
           initialPageSize={20}
           pageSizeOptions={[10, 20, 50, 100]}

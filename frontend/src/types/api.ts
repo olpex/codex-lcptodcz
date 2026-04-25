@@ -107,6 +107,7 @@ export interface Job {
 export interface JobListItem {
   job_type: "import" | "export";
   job: Job;
+  import_source?: string | null;
   report_type?: string | null;
   export_format?: string | null;
   output_document_id?: number | null;
