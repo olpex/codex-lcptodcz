@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -389,7 +390,8 @@ export function SchedulePage() {
             );
           })}
         </div>
-        <div className="mb-3 flex flex-wrap items-center gap-3">
+        <StickyActionBar className="mb-3">
+          <div className="flex flex-wrap items-center gap-3">
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={fetchSchedule}>
             Оновити
           </button>
@@ -415,7 +417,8 @@ export function SchedulePage() {
             />
             Лише конфлікти
           </label>
-        </div>
+          </div>
+        </StickyActionBar>
         {conflictAnalysis.overlapCount > 0 && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Виявлено конфлікти у розкладі: {conflictAnalysis.overlapCount}. Конфліктні рядки підсвічено нижче.

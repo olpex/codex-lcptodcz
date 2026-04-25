@@ -30,6 +30,12 @@ export function PerformancePage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [trainees, setTrainees] = useState<Trainee[]>([]);
   const [form, setForm] = useState<PerformancePayload>(DEFAULT_FORM);
+  const [fieldErrors, setFieldErrors] = useState<{
+    groupId?: string;
+    traineeId?: string;
+    progress?: string;
+    attendance?: string;
+  }>({});
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,10 +90,26 @@ export function PerformancePage() {
       progress_pct: Number(form.progress_pct),
       attendance_pct: Number(form.attendance_pct)
     };
-    if (!payload.trainee_id || !payload.group_id) {
-      showError("Оберіть слухача та групу");
+    const nextErrors: {
+      groupId?: string;
+      traineeId?: string;
+      progress?: string;
+      attendance?: string;
+    } = {};
+    if (!payload.group_id) nextErrors.groupId = "Оберіть групу";
+    if (!payload.trainee_id) nextErrors.traineeId = "Оберіть слухача";
+    if (!Number.isFinite(payload.progress_pct) || payload.progress_pct < 0 || payload.progress_pct > 100) {
+      nextErrors.progress = "Прогрес має бути від 0 до 100";
+    }
+    if (!Number.isFinite(payload.attendance_pct) || payload.attendance_pct < 0 || payload.attendance_pct > 100) {
+      nextErrors.attendance = "Відвідуваність має бути від 0 до 100";
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
       return;
     }
+    setFieldErrors({});
     setIsSubmitting(true);
     try {
       if (editingId) {
@@ -108,6 +130,7 @@ export function PerformancePage() {
         showSuccess("Запис успішності створено");
       }
       setForm(DEFAULT_FORM);
+      setFieldErrors({});
       setEditingId(null);
       await load();
     } catch (error) {
@@ -126,6 +149,7 @@ export function PerformancePage() {
       attendance_pct: item.attendance_pct,
       employment_flag: item.employment_flag
     });
+    setFieldErrors({});
   };
 
   const remove = async (item: Performance) => {
@@ -216,11 +240,14 @@ export function PerformancePage() {
     <div className="space-y-5">
       <Panel title={editingId ? "Редагування успішності" : "Нова оцінка успішності"}>
         <form className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" onSubmit={submit}>
-          <FormField label="Група" required>
+          <FormField label="Група" required errorText={fieldErrors.groupId}>
             <select
               className={formControlClass}
               value={form.group_id || ""}
-              onChange={(event) => setForm((prev) => ({ ...prev, group_id: Number(event.target.value) }))}
+              onChange={(event) => {
+                setForm((prev) => ({ ...prev, group_id: Number(event.target.value) }));
+                setFieldErrors((prev) => ({ ...prev, groupId: undefined }));
+              }}
               required
               disabled={Boolean(editingId)}
             >
@@ -232,11 +259,14 @@ export function PerformancePage() {
               ))}
             </select>
           </FormField>
-          <FormField label="Слухач" required>
+          <FormField label="Слухач" required errorText={fieldErrors.traineeId}>
             <select
               className={formControlClass}
               value={form.trainee_id || ""}
-              onChange={(event) => setForm((prev) => ({ ...prev, trainee_id: Number(event.target.value) }))}
+              onChange={(event) => {
+                setForm((prev) => ({ ...prev, trainee_id: Number(event.target.value) }));
+                setFieldErrors((prev) => ({ ...prev, traineeId: undefined }));
+              }}
               required
               disabled={Boolean(editingId)}
             >
@@ -248,7 +278,12 @@ export function PerformancePage() {
               ))}
             </select>
           </FormField>
-          <FormField label="Прогрес, %" required helperText="Значення від 0 до 100">
+          <FormField
+            label="Прогрес, %"
+            required
+            helperText="Значення від 0 до 100"
+            errorText={fieldErrors.progress}
+          >
             <input
               type="number"
               min={0}
@@ -256,11 +291,19 @@ export function PerformancePage() {
               step={0.1}
               className={formControlClass}
               value={form.progress_pct}
-              onChange={(event) => setForm((prev) => ({ ...prev, progress_pct: Number(event.target.value) }))}
+              onChange={(event) => {
+                setForm((prev) => ({ ...prev, progress_pct: Number(event.target.value) }));
+                setFieldErrors((prev) => ({ ...prev, progress: undefined }));
+              }}
               required
             />
           </FormField>
-          <FormField label="Відвідуваність, %" required helperText="Значення від 0 до 100">
+          <FormField
+            label="Відвідуваність, %"
+            required
+            helperText="Значення від 0 до 100"
+            errorText={fieldErrors.attendance}
+          >
             <input
               type="number"
               min={0}
@@ -268,7 +311,10 @@ export function PerformancePage() {
               step={0.1}
               className={formControlClass}
               value={form.attendance_pct}
-              onChange={(event) => setForm((prev) => ({ ...prev, attendance_pct: Number(event.target.value) }))}
+              onChange={(event) => {
+                setForm((prev) => ({ ...prev, attendance_pct: Number(event.target.value) }));
+                setFieldErrors((prev) => ({ ...prev, attendance: undefined }));
+              }}
               required
             />
           </FormField>
@@ -296,6 +342,7 @@ export function PerformancePage() {
                 onClick={() => {
                   setEditingId(null);
                   setForm(DEFAULT_FORM);
+                  setFieldErrors({});
                 }}
               >
                 Скасувати

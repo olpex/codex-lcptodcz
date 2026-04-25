@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Trainee } from "../types/api";
@@ -14,6 +15,12 @@ export function TraineesPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
+  }>({});
   const [search, setSearch] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -81,6 +88,26 @@ export function TraineesPage() {
   const createTrainee = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    const nextErrors: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string;
+    } = {};
+    if (!firstName.trim()) nextErrors.firstName = "Вкажіть ім'я";
+    if (!lastName.trim()) nextErrors.lastName = "Вкажіть прізвище";
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      nextErrors.email = "Вкажіть коректний email";
+    }
+    if (phone && !/^\+?[0-9()\-\s]{7,20}$/.test(phone)) {
+      nextErrors.phone = "Вкажіть коректний номер телефону";
+    }
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+    setFieldErrors({});
     setIsSubmitting(true);
     try {
       await request("/trainees", {
@@ -109,7 +136,8 @@ export function TraineesPage() {
   return (
     <div className="space-y-5">
       <Panel title="Пошук слухачів">
-        <div className="flex flex-wrap gap-3">
+        <StickyActionBar>
+          <div className="flex flex-wrap gap-3">
           <FormField
             className="min-w-[240px] flex-1"
             label="Пошуковий запит"
@@ -125,43 +153,56 @@ export function TraineesPage() {
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={() => fetchTrainees(search)}>
             Знайти
           </button>
-        </div>
+          </div>
+        </StickyActionBar>
       </Panel>
       {canEdit && (
         <Panel title="Додати слухача">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" onSubmit={createTrainee}>
-            <FormField label="Ім'я" required>
+            <FormField label="Ім'я" required errorText={fieldErrors.firstName}>
               <input
                 className={formControlClass}
                 value={firstName}
-                onChange={(event) => setFirstName(event.target.value)}
+                onChange={(event) => {
+                  setFirstName(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, firstName: undefined }));
+                }}
                 placeholder="Ім'я"
                 required
               />
             </FormField>
-            <FormField label="Прізвище" required>
+            <FormField label="Прізвище" required errorText={fieldErrors.lastName}>
               <input
                 className={formControlClass}
                 value={lastName}
-                onChange={(event) => setLastName(event.target.value)}
+                onChange={(event) => {
+                  setLastName(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, lastName: undefined }));
+                }}
                 placeholder="Прізвище"
                 required
               />
             </FormField>
-            <FormField label="Email" helperText="Необов'язково">
+            <FormField label="Email" helperText="Необов'язково" errorText={fieldErrors.email}>
               <input
                 className={formControlClass}
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, email: undefined }));
+                }}
                 placeholder="teacher@example.com"
               />
             </FormField>
             <div className="flex gap-2">
-              <FormField className="flex-1" label="Телефон" helperText="Необов'язково">
+              <FormField className="flex-1" label="Телефон" helperText="Необов'язково" errorText={fieldErrors.phone}>
                 <input
                   className={formControlClass}
                   value={phone}
-                  onChange={(event) => setPhone(event.target.value)}
+                  onChange={(event) => {
+                    setPhone(event.target.value);
+                    setFieldErrors((prev) => ({ ...prev, phone: undefined }));
+                  }}
                   placeholder="+380..."
                 />
               </FormField>

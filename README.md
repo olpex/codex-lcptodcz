@@ -49,6 +49,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 - OCR-чернетки та їх підтвердження,
 - контракти імпорту `.xlsx/.pdf/.docx` і структури експорту `.xlsx/.pdf/.csv`,
 - базовий perf-test KPI endpoint.
+- UX/UI accessibility baseline: `docs/product/accessibility-baseline.md`.
 
 ## Production на Vercel
 

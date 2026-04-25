@@ -45,7 +45,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run critical e2e
-        run: npx playwright test tests/e2e/smoke.spec.ts tests/e2e/mvp-admin-flow.spec.ts tests/e2e/schedule-conflicts.spec.ts --reporter=line,html
+        run: npx playwright test tests/e2e/smoke.spec.ts tests/e2e/mvp-admin-flow.spec.ts tests/e2e/schedule-conflicts.spec.ts tests/e2e/a11y-keyboard.spec.ts --reporter=line,html
 
       - name: Upload Playwright report
         if: always()

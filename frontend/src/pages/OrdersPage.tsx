@@ -3,6 +3,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Order } from "../types/api";
@@ -21,11 +22,13 @@ export function OrdersPage() {
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderType, setOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [status, setStatus] = useState("draft");
+  const [createErrors, setCreateErrors] = useState<{ orderNumber?: string; orderDate?: string; status?: string }>({});
   const [editId, setEditId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState("");
   const [editOrderDate, setEditOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
+  const [editErrors, setEditErrors] = useState<{ orderNumber?: string; orderDate?: string; status?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -67,6 +70,16 @@ export function OrdersPage() {
   const createOrder = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    const nextErrors: { orderNumber?: string; orderDate?: string; status?: string } = {};
+    if (!orderNumber.trim()) nextErrors.orderNumber = "Вкажіть номер наказу";
+    if (!orderDate) nextErrors.orderDate = "Вкажіть дату наказу";
+    if (!status.trim()) nextErrors.status = "Вкажіть статус наказу";
+    if (Object.keys(nextErrors).length) {
+      setCreateErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+    setCreateErrors({});
     setIsCreating(true);
     try {
       await request<Order>("/orders", {
@@ -81,6 +94,7 @@ export function OrdersPage() {
       });
       setOrderNumber("");
       setStatus("draft");
+      setCreateErrors({});
       showSuccess("Наказ створено");
       await load();
     } catch (error) {
@@ -104,11 +118,22 @@ export function OrdersPage() {
     setEditOrderDate(new Date().toISOString().slice(0, 10));
     setEditOrderType("internal");
     setEditStatus("draft");
+    setEditErrors({});
   };
 
   const saveEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || !editId) return;
+    const nextErrors: { orderNumber?: string; orderDate?: string; status?: string } = {};
+    if (!editOrderNumber.trim()) nextErrors.orderNumber = "Вкажіть номер наказу";
+    if (!editOrderDate) nextErrors.orderDate = "Вкажіть дату наказу";
+    if (!editStatus.trim()) nextErrors.status = "Вкажіть статус наказу";
+    if (Object.keys(nextErrors).length) {
+      setEditErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+    setEditErrors({});
     setIsSavingEdit(true);
     try {
       await request<Order>(`/orders/${editId}`, {
@@ -217,12 +242,20 @@ export function OrdersPage() {
       {canEdit && (
         <Panel title="Створити наказ">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={createOrder}>
-            <FormField label="Номер наказу" required helperText="Наприклад: 167-25">
+            <FormField
+              label="Номер наказу"
+              required
+              helperText="Наприклад: 167-25"
+              errorText={createErrors.orderNumber}
+            >
               <input
                 className={formControlClass}
                 placeholder="167-25"
                 value={orderNumber}
-                onChange={(event) => setOrderNumber(event.target.value)}
+                onChange={(event) => {
+                  setOrderNumber(event.target.value);
+                  setCreateErrors((prev) => ({ ...prev, orderNumber: undefined }));
+                }}
                 required
               />
             </FormField>
@@ -239,21 +272,32 @@ export function OrdersPage() {
                 ))}
               </select>
             </FormField>
-            <FormField label="Дата наказу" required>
+            <FormField label="Дата наказу" required errorText={createErrors.orderDate}>
               <input
                 type="date"
                 className={formControlClass}
                 value={orderDate}
-                onChange={(event) => setOrderDate(event.target.value)}
+                onChange={(event) => {
+                  setOrderDate(event.target.value);
+                  setCreateErrors((prev) => ({ ...prev, orderDate: undefined }));
+                }}
                 required
               />
             </FormField>
-            <FormField label="Статус" required helperText="draft, approved, archived тощо">
+            <FormField
+              label="Статус"
+              required
+              helperText="draft, approved, archived тощо"
+              errorText={createErrors.status}
+            >
               <input
                 className={formControlClass}
                 placeholder="draft"
                 value={status}
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setCreateErrors((prev) => ({ ...prev, status: undefined }));
+                }}
                 required
               />
             </FormField>
@@ -271,12 +315,15 @@ export function OrdersPage() {
       {canEdit && editId && (
         <Panel title={`Редагувати наказ #${editId}`}>
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={saveEdit}>
-            <FormField label="Номер наказу" required>
+            <FormField label="Номер наказу" required errorText={editErrors.orderNumber}>
               <input
                 className={formControlClass}
                 placeholder="Номер наказу"
                 value={editOrderNumber}
-                onChange={(event) => setEditOrderNumber(event.target.value)}
+                onChange={(event) => {
+                  setEditOrderNumber(event.target.value);
+                  setEditErrors((prev) => ({ ...prev, orderNumber: undefined }));
+                }}
                 required
               />
             </FormField>
@@ -293,21 +340,27 @@ export function OrdersPage() {
                 ))}
               </select>
             </FormField>
-            <FormField label="Дата наказу" required>
+            <FormField label="Дата наказу" required errorText={editErrors.orderDate}>
               <input
                 type="date"
                 className={formControlClass}
                 value={editOrderDate}
-                onChange={(event) => setEditOrderDate(event.target.value)}
+                onChange={(event) => {
+                  setEditOrderDate(event.target.value);
+                  setEditErrors((prev) => ({ ...prev, orderDate: undefined }));
+                }}
                 required
               />
             </FormField>
-            <FormField label="Статус" required>
+            <FormField label="Статус" required errorText={editErrors.status}>
               <input
                 className={formControlClass}
                 placeholder="Статус"
                 value={editStatus}
-                onChange={(event) => setEditStatus(event.target.value)}
+                onChange={(event) => {
+                  setEditStatus(event.target.value);
+                  setEditErrors((prev) => ({ ...prev, status: undefined }));
+                }}
                 required
               />
             </FormField>
@@ -330,9 +383,11 @@ export function OrdersPage() {
         </Panel>
       )}
       <Panel title="Реєстр наказів">
-        <button className="mb-3 rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
-          Оновити
-        </button>
+        <StickyActionBar className="mb-3">
+          <button className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
+            Оновити
+          </button>
+        </StickyActionBar>
         <DataTable
           data={rows}
           columns={columns}

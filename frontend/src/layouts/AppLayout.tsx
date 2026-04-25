@@ -34,7 +34,7 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
-      <header className="border-b border-pine/10 bg-white/80 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b border-pine/10 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
             <p className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</p>

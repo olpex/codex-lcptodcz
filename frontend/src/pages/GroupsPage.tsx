@@ -13,6 +13,7 @@ export function GroupsPage() {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -73,6 +74,18 @@ export function GroupsPage() {
   const createGroup = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
+    const nextErrors: { name?: string; code?: string; capacity?: string } = {};
+    if (!code.trim()) nextErrors.code = "Вкажіть код групи";
+    if (!name.trim()) nextErrors.name = "Вкажіть назву групи";
+    if (!Number.isFinite(capacity) || capacity < 1 || capacity > 200) {
+      nextErrors.capacity = "Місткість має бути від 1 до 200";
+    }
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+    setFieldErrors({});
     setIsSubmitting(true);
     try {
       await request<Group>("/groups", {
@@ -101,32 +114,51 @@ export function GroupsPage() {
       {canEdit && (
         <Panel title="Створити групу">
           <form className="grid gap-3 md:grid-cols-4" onSubmit={createGroup}>
-            <FormField label="Код групи" required helperText="Наприклад: М-2026-01">
+            <FormField
+              label="Код групи"
+              required
+              helperText="Наприклад: М-2026-01"
+              errorText={fieldErrors.code}
+            >
               <input
                 className={formControlClass}
                 placeholder="Код групи"
                 value={code}
-                onChange={(event) => setCode(event.target.value)}
+                onChange={(event) => {
+                  setCode(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, code: undefined }));
+                }}
                 required
               />
             </FormField>
-            <FormField label="Назва групи" required helperText="Повна назва навчальної групи">
+            <FormField
+              label="Назва групи"
+              required
+              helperText="Повна назва навчальної групи"
+              errorText={fieldErrors.name}
+            >
               <input
                 className={formControlClass}
                 placeholder="Назва групи"
                 value={name}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, name: undefined }));
+                }}
                 required
               />
             </FormField>
-            <FormField label="Місткість" helperText="Від 1 до 200 слухачів">
+            <FormField label="Місткість" helperText="Від 1 до 200 слухачів" errorText={fieldErrors.capacity}>
               <input
                 type="number"
                 className={formControlClass}
                 value={capacity}
                 min={1}
                 max={200}
-                onChange={(event) => setCapacity(Number(event.target.value))}
+                onChange={(event) => {
+                  setCapacity(Number(event.target.value));
+                  setFieldErrors((prev) => ({ ...prev, capacity: undefined }));
+                }}
               />
             </FormField>
             <div className="flex items-end">

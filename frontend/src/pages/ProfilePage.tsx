@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
@@ -8,30 +9,40 @@ type MessageResponse = {
   message: string;
 };
 
+type ProfileFormErrors = {
+  currentPassword?: string;
+  newPassword?: string;
+  confirmPassword?: string;
+};
+
 export function ProfilePage() {
   const { request, logout, user } = useAuth();
   const { showError, showInfo, showSuccess } = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<ProfileFormErrors>({});
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-
-    if (newPassword.length < 8) {
-      showError("Новий пароль має містити щонайменше 8 символів");
-      return;
+  const validate = () => {
+    const nextErrors: ProfileFormErrors = {};
+    if (!currentPassword) {
+      nextErrors.currentPassword = "Вкажіть поточний пароль";
     }
-    if (newPassword.length > 72) {
-      showError("Новий пароль має містити не більше 72 символів");
-      return;
+    if (newPassword.length < 8) {
+      nextErrors.newPassword = "Новий пароль має містити щонайменше 8 символів";
+    } else if (newPassword.length > 72) {
+      nextErrors.newPassword = "Новий пароль має містити не більше 72 символів";
     }
     if (newPassword !== confirmPassword) {
-      showError("Підтвердження пароля не співпадає");
-      return;
+      nextErrors.confirmPassword = "Підтвердження пароля не співпадає";
     }
+    setFieldErrors(nextErrors);
+    return nextErrors;
+  };
 
+  const submitChange = async () => {
     setSubmitting(true);
     try {
       const response = await request<MessageResponse>("/auth/change-password", {
@@ -46,6 +57,7 @@ export function ProfilePage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      setFieldErrors({});
       setTimeout(() => {
         logout();
       }, 1200);
@@ -54,6 +66,17 @@ export function ProfilePage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    const errors = validate();
+    if (Object.keys(errors).length > 0) {
+      const firstError = Object.values(errors)[0];
+      if (firstError) showError(firstError);
+      return;
+    }
+    setConfirmOpen(true);
   };
 
   return (
@@ -71,33 +94,57 @@ export function ProfilePage() {
 
       <Panel title="Змінити пароль">
         <form className="space-y-3" onSubmit={handleSubmit}>
-          <FormField label="Поточний пароль" required helperText="Потрібен для підтвердження зміни">
+          <FormField
+            label="Поточний пароль"
+            required
+            helperText="Потрібен для підтвердження зміни"
+            errorText={fieldErrors.currentPassword}
+          >
             <input
               type="password"
               className={formControlClass}
               value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
+              onChange={(event) => {
+                setCurrentPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, currentPassword: undefined }));
+              }}
               maxLength={72}
               required
             />
           </FormField>
-          <FormField label="Новий пароль" required helperText="Мінімум 8 символів, максимум 72">
+          <FormField
+            label="Новий пароль"
+            required
+            helperText="Мінімум 8 символів, максимум 72"
+            errorText={fieldErrors.newPassword}
+          >
             <input
               type="password"
               className={formControlClass}
               value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
+              onChange={(event) => {
+                setNewPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, newPassword: undefined }));
+              }}
               minLength={8}
               maxLength={72}
               required
             />
           </FormField>
-          <FormField label="Підтвердження нового пароля" required helperText="Повторіть новий пароль">
+          <FormField
+            label="Підтвердження нового пароля"
+            required
+            helperText="Повторіть новий пароль"
+            errorText={fieldErrors.confirmPassword}
+          >
             <input
               type="password"
               className={formControlClass}
               value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
+              onChange={(event) => {
+                setConfirmPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+              }}
               minLength={8}
               maxLength={72}
               required
@@ -113,6 +160,21 @@ export function ProfilePage() {
           <p className="text-xs text-slate-500">Після зміни пароля ви будете автоматично розлогінені.</p>
         </form>
       </Panel>
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Підтвердження зміни пароля"
+        description="Після зміни пароля поточна сесія завершиться і потрібно буде увійти повторно."
+        confirmLabel={submitting ? "Зберігаємо..." : "Так, змінити пароль"}
+        confirmVariant="primary"
+        onCancel={() => {
+          if (submitting) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          submitChange();
+        }}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
+import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { API_URL } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -259,7 +260,8 @@ export function JobCenterPage() {
   return (
     <div className="space-y-5">
       <Panel title="Центр задач імпорту/експорту">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <StickyActionBar className="mb-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="block">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Тип задачі</span>
             <select
@@ -317,8 +319,9 @@ export function JobCenterPage() {
               Автооновлення
             </label>
           </div>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+          </div>
+        </StickyActionBar>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
           {[
             { key: "total", title: "Усього задач", series: seriesByKey.total },
             { key: "queued", title: "У черзі", series: seriesByKey.queued },

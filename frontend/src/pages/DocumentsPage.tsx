@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
 import { Panel } from "../components/Panel";
+import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -47,6 +48,7 @@ export function DocumentsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [importFieldError, setImportFieldError] = useState<string | undefined>(undefined);
   const [, setKnownJobs] = useState<Record<number, KnownJob>>({});
   const [diagnosticsHistory, setDiagnosticsHistory] = useState<DiagnosticsSnapshot[]>([]);
 
@@ -96,9 +98,11 @@ export function DocumentsPage() {
     event.preventDefault();
     if (!file) {
       showError("Оберіть файл для імпорту");
+      setImportFieldError("Оберіть файл для імпорту");
       setNotice({ tone: "error", text: "Оберіть файл для імпорту" });
       return;
     }
+    setImportFieldError(undefined);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -224,12 +228,20 @@ export function DocumentsPage() {
     <div className="space-y-5">
       <Panel title="Імпорт документів (.xlsx, .pdf, .docx)">
         <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport} aria-busy={isImporting}>
-          <FormField label="Файл для імпорту" required helperText="Підтримуються .xlsx, .pdf, .docx">
+          <FormField
+            label="Файл для імпорту"
+            required
+            helperText="Підтримуються .xlsx, .pdf, .docx"
+            errorText={importFieldError}
+          >
             <input
               type="file"
               className={formControlClass}
               accept=".xlsx,.pdf,.docx"
-              onChange={(event) => setFile(event.target.files?.[0] || null)}
+              onChange={(event) => {
+                setFile(event.target.files?.[0] || null);
+                setImportFieldError(undefined);
+              }}
               disabled={isImporting}
               required
             />
@@ -243,7 +255,8 @@ export function DocumentsPage() {
         </form>
       </Panel>
       <Panel title="Експорт звітів (.xlsx, .pdf, .csv)">
-        <div className="flex flex-wrap items-center gap-3">
+        <StickyActionBar>
+          <div className="flex flex-wrap items-center gap-3">
           <FormField label="Тип звіту">
             <select
               className={formControlClass}
@@ -279,7 +292,8 @@ export function DocumentsPage() {
           >
             {isExporting ? "Генеруємо..." : "Згенерувати"}
           </button>
-        </div>
+          </div>
+        </StickyActionBar>
       </Panel>
       <Panel title="Статус job">
         {notice && <InlineNotice className="mb-3" tone={notice.tone} text={notice.text} />}
@@ -305,7 +319,8 @@ export function DocumentsPage() {
             );
           })}
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <StickyActionBar>
+          <div className="flex flex-wrap items-center gap-3">
           <p>
             ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
           </p>
@@ -336,7 +351,8 @@ export function DocumentsPage() {
           <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
             Відкрити центр задач
           </Link>
-        </div>
+          </div>
+        </StickyActionBar>
       </Panel>
     </div>
   );

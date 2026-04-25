@@ -10,6 +10,7 @@ export function LoginPage() {
   const { showError } = useToast();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
@@ -18,14 +19,19 @@ export function LoginPage() {
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    const nextErrors: { username?: string; password?: string } = {};
     if (!username.trim()) {
-      showError("Вкажіть логін");
-      return;
+      nextErrors.username = "Вкажіть логін";
     }
     if (!password) {
-      showError("Вкажіть пароль");
+      nextErrors.password = "Вкажіть пароль";
+    }
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
       return;
     }
+    setFieldErrors({});
 
     setSubmitting(true);
     try {
@@ -45,22 +51,40 @@ export function LoginPage() {
         <p className="mb-6 mt-2 text-sm text-slate-600">{uiText.appSubtitle}</p>
 
         <form onSubmit={onSubmit}>
-          <FormField className="mb-4" label="Логін" required helperText="Ваш обліковий запис у системі">
+          <FormField
+            className="mb-4"
+            label="Логін"
+            required
+            helperText="Ваш обліковий запис у системі"
+            errorText={fieldErrors.username}
+          >
             <input
               className={formControlClass}
               autoComplete="username"
               value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, username: undefined }));
+              }}
               required
             />
           </FormField>
-          <FormField className="mb-5" label="Пароль" required helperText="Має містити від 8 до 72 символів">
+          <FormField
+            className="mb-5"
+            label="Пароль"
+            required
+            helperText="Має містити від 8 до 72 символів"
+            errorText={fieldErrors.password}
+          >
             <input
               type="password"
               className={formControlClass}
               autoComplete="current-password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, password: undefined }));
+              }}
               required
             />
           </FormField>

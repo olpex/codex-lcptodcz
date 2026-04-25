@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { apiRequest } from "../api/client";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -19,32 +20,45 @@ export function AdminResetPage() {
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{
+    username?: string;
+    resetToken?: string;
+    newPassword?: string;
+    confirmPassword?: string;
+  }>({});
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
     return <Navigate to="/" replace />;
   }
 
-  const onSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-
+  const validate = () => {
+    const nextErrors: {
+      username?: string;
+      resetToken?: string;
+      newPassword?: string;
+      confirmPassword?: string;
+    } = {};
     if (!username.trim()) {
-      showError("Вкажіть логін користувача");
-      return;
+      nextErrors.username = "Вкажіть логін користувача";
+    }
+    if (!resetToken.trim()) {
+      nextErrors.resetToken = "Вкажіть службовий токен";
     }
     if (newPassword.length < 8) {
-      showError("Новий пароль має містити щонайменше 8 символів");
-      return;
-    }
-    if (newPassword.length > 72) {
-      showError("Новий пароль має містити не більше 72 символів");
-      return;
+      nextErrors.newPassword = "Новий пароль має містити щонайменше 8 символів";
+    } else if (newPassword.length > 72) {
+      nextErrors.newPassword = "Новий пароль має містити не більше 72 символів";
     }
     if (newPassword !== confirmPassword) {
-      showError("Підтвердження пароля не співпадає");
-      return;
+      nextErrors.confirmPassword = "Підтвердження пароля не співпадає";
     }
+    setFieldErrors(nextErrors);
+    return nextErrors;
+  };
 
+  const submitReset = async () => {
     setSubmitting(true);
     try {
       const response = await apiRequest<MessageResponse>("/auth/admin-reset-password", {
@@ -64,6 +78,17 @@ export function AdminResetPage() {
     }
   };
 
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    const errors = validate();
+    if (Object.keys(errors).length > 0) {
+      const firstError = Object.values(errors)[0];
+      if (firstError) showError(firstError);
+      return;
+    }
+    setConfirmOpen(true);
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_right,#d8ecf2_0%,#f2f7f5_50%,#ffffff_100%)] px-4">
       <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-card">
@@ -74,44 +99,76 @@ export function AdminResetPage() {
         </p>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <FormField label="Логін" required helperText="Логін облікового запису адміністратора">
+          <FormField
+            label="Логін"
+            required
+            helperText="Логін облікового запису адміністратора"
+            errorText={fieldErrors.username}
+          >
             <input
               className={formControlClass}
               autoComplete="username"
               value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, username: undefined }));
+              }}
               required
             />
           </FormField>
 
-          <FormField label="Службовий токен" required helperText="Змінна середовища ADMIN_PASSWORD_RESET_TOKEN">
+          <FormField
+            label="Службовий токен"
+            required
+            helperText="Змінна середовища ADMIN_PASSWORD_RESET_TOKEN"
+            errorText={fieldErrors.resetToken}
+          >
             <input
               type="password"
               className={formControlClass}
               value={resetToken}
-              onChange={(event) => setResetToken(event.target.value)}
+              onChange={(event) => {
+                setResetToken(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, resetToken: undefined }));
+              }}
               required
             />
           </FormField>
 
-          <FormField label="Новий пароль" required helperText="Мінімум 8 символів, максимум 72">
+          <FormField
+            label="Новий пароль"
+            required
+            helperText="Мінімум 8 символів, максимум 72"
+            errorText={fieldErrors.newPassword}
+          >
             <input
               type="password"
               className={formControlClass}
               value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
+              onChange={(event) => {
+                setNewPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, newPassword: undefined }));
+              }}
               minLength={8}
               maxLength={72}
               required
             />
           </FormField>
 
-          <FormField label="Підтвердження нового пароля" required helperText="Повторіть новий пароль без помилок">
+          <FormField
+            label="Підтвердження нового пароля"
+            required
+            helperText="Повторіть новий пароль без помилок"
+            errorText={fieldErrors.confirmPassword}
+          >
             <input
               type="password"
               className={formControlClass}
               value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
+              onChange={(event) => {
+                setConfirmPassword(event.target.value);
+                setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+              }}
               minLength={8}
               maxLength={72}
               required
@@ -130,6 +187,21 @@ export function AdminResetPage() {
           Повернутися до входу
         </Link>
       </div>
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Підтвердити аварійне скидання"
+        description={`Ви впевнені, що хочете скинути пароль для "${username.trim()}"?`}
+        confirmLabel={submitting ? "Скидаємо..." : "Так, скинути пароль"}
+        confirmVariant="danger"
+        onCancel={() => {
+          if (submitting) return;
+          setConfirmOpen(false);
+        }}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          submitReset();
+        }}
+      />
     </div>
   );
 }
