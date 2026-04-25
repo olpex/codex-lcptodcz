@@ -75,3 +75,35 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     assert kpi_response.status_code == 200
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
+
+
+def test_bulk_group_code_update_flow(client, auth_headers):
+    first = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Іван", "last_name": "Перший", "status": "active"},
+        headers=auth_headers,
+    )
+    second = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Олена", "last_name": "Друга", "status": "active"},
+        headers=auth_headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    trainee_ids = [first.json()["id"], second.json()["id"]]
+
+    bulk_response = client.post(
+        "/api/v1/trainees/bulk/group-code",
+        json={"trainee_ids": trainee_ids, "group_code": "73-26"},
+        headers=auth_headers,
+    )
+    assert bulk_response.status_code == 200
+    assert bulk_response.json()["updated_count"] == 2
+    assert bulk_response.json()["group_code"] == "73-26"
+
+    trainees_response = client.get("/api/v1/trainees", headers=auth_headers)
+    assert trainees_response.status_code == 200
+    rows = trainees_response.json()
+    updated = [item for item in rows if item["id"] in trainee_ids]
+    assert len(updated) == 2
+    assert all(item["group_code"] == "73-26" for item in updated)

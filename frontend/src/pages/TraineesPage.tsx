@@ -28,6 +28,12 @@ type TraineeEditForm = {
   status: string;
 };
 
+type BulkGroupUpdateResponse = {
+  updated_count: number;
+  updated_ids: number[];
+  group_code: string | null;
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -82,6 +88,9 @@ export function TraineesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [bulkGroupCode, setBulkGroupCode] = useState("");
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editForm, setEditForm] = useState<TraineeEditForm | null>(null);
@@ -102,12 +111,24 @@ export function TraineesPage() {
     [trainees]
   );
 
+  const selectedIds = useMemo(
+    () => Object.entries(selected).filter(([, checked]) => checked).map(([id]) => Number(id)),
+    [selected]
+  );
+
   const fetchTrainees = async (term = "") => {
     setIsLoading(true);
     try {
       const query = term ? `?search=${encodeURIComponent(term)}` : "";
       const data = await request<Trainee[]>(`/trainees${query}`);
       setTrainees(data);
+      setSelected((prev) => {
+        const next: Record<number, boolean> = {};
+        for (const trainee of data) {
+          if (prev[trainee.id]) next[trainee.id] = true;
+        }
+        return next;
+      });
       setLoadError(null);
     } catch (error) {
       const message = (error as Error).message;
@@ -165,6 +186,44 @@ export function TraineesPage() {
   };
 
   const collapseAll = () => setExpanded({});
+
+  const toggleSelected = (id: number) => {
+    setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const selectAllVisible = () => {
+    const next: Record<number, boolean> = {};
+    for (const trainee of sortedTrainees) next[trainee.id] = true;
+    setSelected(next);
+  };
+
+  const clearSelection = () => setSelected({});
+
+  const runBulkGroupUpdate = async (targetGroupCode: string | null) => {
+    if (!selectedIds.length) {
+      showError("Виберіть щонайменше одного слухача");
+      return;
+    }
+    setIsBulkUpdating(true);
+    try {
+      const payload = {
+        trainee_ids: selectedIds,
+        group_code: targetGroupCode
+      };
+      const response = await request<BulkGroupUpdateResponse>("/trainees/bulk/group-code", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      await fetchTrainees(search);
+      clearSelection();
+      setBulkGroupCode("");
+      showSuccess(`Оновлено слухачів: ${response.updated_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
 
   const startEdit = (trainee: Trainee) => {
     setEditingId(trainee.id);
@@ -280,6 +339,39 @@ export function TraineesPage() {
             <button className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" onClick={collapseAll}>
               Згорнути всі
             </button>
+            {canEdit && (
+              <>
+                <button className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" onClick={selectAllVisible}>
+                  Вибрати всі
+                </button>
+                <button className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" onClick={clearSelection}>
+                  Зняти вибір
+                </button>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                  Вибрано: {selectedIds.length}
+                </span>
+                <input
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Номер групи"
+                  value={bulkGroupCode}
+                  onChange={(event) => setBulkGroupCode(event.target.value)}
+                />
+                <button
+                  className="rounded-lg bg-pine px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() => runBulkGroupUpdate(bulkGroupCode.trim() || null)}
+                  disabled={isBulkUpdating || !selectedIds.length}
+                >
+                  Призначити групу
+                </button>
+                <button
+                  className="rounded-lg bg-amber px-3 py-2 text-sm font-semibold text-ink disabled:opacity-50"
+                  onClick={() => runBulkGroupUpdate(null)}
+                  disabled={isBulkUpdating || !selectedIds.length}
+                >
+                  Очистити групу
+                </button>
+              </>
+            )}
           </div>
         </StickyActionBar>
         {isLoading && <p className="text-sm text-slate-600">Завантаження...</p>}
@@ -289,24 +381,35 @@ export function TraineesPage() {
             const isExpanded = Boolean(expanded[trainee.id]);
             const isEditing = editingId === trainee.id;
             const number = trainee.source_row_number ?? index + 1;
+            const isSelected = Boolean(selected[trainee.id]);
             return (
               <article key={trainee.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-                  onClick={() => toggleExpanded(trainee.id)}
-                  aria-expanded={isExpanded}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {number}. {buildDisplayName(trainee)}
-                    </p>
-                    <p className="truncate text-xs text-slate-600">
-                      Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
-                    </p>
-                  </div>
-                  <span className="text-xl leading-none text-slate-500">{isExpanded ? "−" : "+"}</span>
-                </button>
+                <div className="flex items-center gap-2 px-3 py-2">
+                  {canEdit && (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelected(trainee.id)}
+                      aria-label={`Вибрати слухача ${buildDisplayName(trainee)}`}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                    onClick={() => toggleExpanded(trainee.id)}
+                    aria-expanded={isExpanded}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {number}. {buildDisplayName(trainee)}
+                      </p>
+                      <p className="truncate text-xs text-slate-600">
+                        Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
+                      </p>
+                    </div>
+                    <span className="text-xl leading-none text-slate-500">{isExpanded ? "−" : "+"}</span>
+                  </button>
+                </div>
                 {isExpanded && (
                   <div className="space-y-3 border-t border-slate-200 px-4 py-3 text-sm">
                     {!isEditing && (

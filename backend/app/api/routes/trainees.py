@@ -4,7 +4,13 @@ from sqlalchemy import or_
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
 from app.models import RoleName, Trainee
-from app.schemas.api import TraineeCreate, TraineeResponse, TraineeUpdate
+from app.schemas.api import (
+    TraineeBulkGroupUpdateRequest,
+    TraineeBulkGroupUpdateResponse,
+    TraineeCreate,
+    TraineeResponse,
+    TraineeUpdate,
+)
 from app.services.audit import write_audit
 
 router = APIRouter()
@@ -101,6 +107,47 @@ def create_trainee(payload: TraineeCreate, db: DbSession, current_user: CurrentU
         entity_id=str(trainee.id),
     )
     return _to_response(trainee)
+
+
+@router.post(
+    "/bulk/group-code",
+    response_model=TraineeBulkGroupUpdateResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_update_group_code(
+    payload: TraineeBulkGroupUpdateRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkGroupUpdateResponse:
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(payload.trainee_ids))
+        .all()
+    )
+    if not target_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для оновлення не знайдено")
+
+    normalized_group_code = payload.group_code.strip() if payload.group_code else None
+    updated_ids: list[int] = []
+    for trainee in target_rows:
+        trainee.group_code = normalized_group_code
+        db.add(trainee)
+        updated_ids.append(trainee.id)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_update_group_code",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in updated_ids[:20]),
+        details={"updated_count": len(updated_ids), "group_code": normalized_group_code},
+    )
+    return TraineeBulkGroupUpdateResponse(
+        updated_count=len(updated_ids),
+        updated_ids=updated_ids,
+        group_code=normalized_group_code,
+    )
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)

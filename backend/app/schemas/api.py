@@ -130,6 +130,17 @@ class TraineeResponse(ORMModel):
     updated_at: datetime
 
 
+class TraineeBulkGroupUpdateRequest(BaseModel):
+    trainee_ids: list[int] = Field(min_length=1, max_length=500)
+    group_code: str | None = Field(default=None, max_length=50)
+
+
+class TraineeBulkGroupUpdateResponse(BaseModel):
+    updated_count: int
+    updated_ids: list[int]
+    group_code: str | None
+
+
 class GroupBase(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)
