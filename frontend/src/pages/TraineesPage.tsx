@@ -45,6 +45,11 @@ type BulkDeleteResponse = {
   deleted_ids: number[];
 };
 
+type BulkRestoreResponse = {
+  restored_count: number;
+  restored_ids: number[];
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -95,6 +100,7 @@ export function TraineesPage() {
   const [phone, setPhone] = useState("");
   const [groupCode, setGroupCode] = useState("");
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -128,10 +134,35 @@ export function TraineesPage() {
     [selected]
   );
 
+  const selectedActiveIds = useMemo(
+    () =>
+      selectedIds.filter((id) => {
+        const trainee = trainees.find((item) => item.id === id);
+        return trainee ? !trainee.is_deleted : false;
+      }),
+    [selectedIds, trainees]
+  );
+
+  const selectedArchivedIds = useMemo(
+    () =>
+      selectedIds.filter((id) => {
+        const trainee = trainees.find((item) => item.id === id);
+        return trainee ? trainee.is_deleted : false;
+      }),
+    [selectedIds, trainees]
+  );
+
   const fetchTrainees = async (term = "") => {
     setIsLoading(true);
     try {
-      const query = term ? `?search=${encodeURIComponent(term)}` : "";
+      const params = new URLSearchParams();
+      if (term.trim()) {
+        params.set("search", term.trim());
+      }
+      if (showArchived) {
+        params.set("include_deleted", "true");
+      }
+      const query = params.toString() ? `?${params.toString()}` : "";
       const data = await request<Trainee[]>(`/trainees${query}`);
       setTrainees(data);
       setSelected((prev) => {
@@ -152,8 +183,8 @@ export function TraineesPage() {
   };
 
   useEffect(() => {
-    fetchTrainees();
-  }, []);
+    fetchTrainees(search);
+  }, [showArchived]);
 
   const createTrainee = async (event: FormEvent) => {
     event.preventDefault();
@@ -212,14 +243,14 @@ export function TraineesPage() {
   const clearSelection = () => setSelected({});
 
   const runBulkGroupUpdate = async (targetGroupCode: string | null) => {
-    if (!selectedIds.length) {
-      showError("Виберіть щонайменше одного слухача");
+    if (!selectedActiveIds.length) {
+      showError("Виберіть щонайменше одного активного слухача");
       return;
     }
     setIsBulkUpdating(true);
     try {
       const payload = {
-        trainee_ids: selectedIds,
+        trainee_ids: selectedActiveIds,
         group_code: targetGroupCode
       };
       const response = await request<BulkGroupUpdateResponse>("/trainees/bulk/group-code", {
@@ -238,14 +269,14 @@ export function TraineesPage() {
   };
 
   const runBulkStatusUpdate = async (targetStatus: "active" | "completed" | "expelled") => {
-    if (!selectedIds.length) {
-      showError("Виберіть щонайменше одного слухача");
+    if (!selectedActiveIds.length) {
+      showError("Виберіть щонайменше одного активного слухача");
       return;
     }
     setIsBulkUpdating(true);
     try {
       const payload = {
-        trainee_ids: selectedIds,
+        trainee_ids: selectedActiveIds,
         status: targetStatus
       };
       const response = await request<BulkStatusUpdateResponse>("/trainees/bulk/status", {
@@ -263,22 +294,43 @@ export function TraineesPage() {
   };
 
   const runBulkDelete = async () => {
-    if (!selectedIds.length) {
-      showError("Виберіть щонайменше одного слухача");
+    if (!selectedActiveIds.length) {
+      showError("Виберіть щонайменше одного активного слухача");
       return;
     }
-    const confirmed = window.confirm(`Видалити вибраних слухачів (${selectedIds.length})?`);
+    const confirmed = window.confirm(`Перемістити вибраних слухачів в архів (${selectedActiveIds.length})?`);
     if (!confirmed) return;
 
     setIsBulkUpdating(true);
     try {
       const response = await request<BulkDeleteResponse>("/trainees/bulk/delete", {
         method: "POST",
-        body: JSON.stringify({ trainee_ids: selectedIds })
+        body: JSON.stringify({ trainee_ids: selectedActiveIds })
       });
       await fetchTrainees(search);
       clearSelection();
-      showSuccess(`Видалено слухачів: ${response.deleted_count}`);
+      showSuccess(`Архівовано слухачів: ${response.deleted_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  const runBulkRestore = async () => {
+    if (!selectedArchivedIds.length) {
+      showError("Виберіть щонайменше одного архівного слухача");
+      return;
+    }
+    setIsBulkUpdating(true);
+    try {
+      const response = await request<BulkRestoreResponse>("/trainees/bulk/restore", {
+        method: "POST",
+        body: JSON.stringify({ trainee_ids: selectedArchivedIds })
+      });
+      await fetchTrainees(search);
+      clearSelection();
+      showSuccess(`Відновлено слухачів: ${response.restored_count}`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -287,6 +339,10 @@ export function TraineesPage() {
   };
 
   const startEdit = (trainee: Trainee) => {
+    if (trainee.is_deleted) {
+      showError("Слухач в архіві. Спочатку відновіть запис");
+      return;
+    }
     setEditingId(trainee.id);
     setEditForm(toEditForm(trainee));
     setExpanded((prev) => ({ ...prev, [trainee.id]: true }));
@@ -394,6 +450,14 @@ export function TraineesPage() {
         {loadError && <InlineNotice className="mb-3" tone="error" text={loadError} />}
         <StickyActionBar className="mb-3">
           <div className="flex flex-wrap items-center gap-2">
+            <label className="mr-2 flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(event) => setShowArchived(event.target.checked)}
+              />
+              Показати архів
+            </label>
             <button className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" onClick={expandAll}>
               Розгорнути всі
             </button>
@@ -420,14 +484,14 @@ export function TraineesPage() {
                 <button
                   className="rounded-lg bg-pine px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                   onClick={() => runBulkGroupUpdate(bulkGroupCode.trim() || null)}
-                  disabled={isBulkUpdating || !selectedIds.length}
+                  disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Призначити групу
                 </button>
                 <button
                   className="rounded-lg bg-amber px-3 py-2 text-sm font-semibold text-ink disabled:opacity-50"
                   onClick={() => runBulkGroupUpdate(null)}
-                  disabled={isBulkUpdating || !selectedIds.length}
+                  disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Очистити групу
                 </button>
@@ -443,16 +507,23 @@ export function TraineesPage() {
                 <button
                   className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                   onClick={() => runBulkStatusUpdate(bulkStatus)}
-                  disabled={isBulkUpdating || !selectedIds.length}
+                  disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Змінити статус
                 </button>
                 <button
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={runBulkRestore}
+                  disabled={isBulkUpdating || !selectedArchivedIds.length}
+                >
+                  Відновити вибраних
+                </button>
+                <button
                   className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                   onClick={runBulkDelete}
-                  disabled={isBulkUpdating || !selectedIds.length}
+                  disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
-                  Видалити вибраних
+                  Архівувати вибраних
                 </button>
               </>
             )}
@@ -490,6 +561,11 @@ export function TraineesPage() {
                       <p className="truncate text-xs text-slate-600">
                         Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
                       </p>
+                      {trainee.is_deleted && (
+                        <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                          В архіві
+                        </p>
+                      )}
                     </div>
                     <span className="text-xl leading-none text-slate-500">{isExpanded ? "−" : "+"}</span>
                   </button>
@@ -519,13 +595,17 @@ export function TraineesPage() {
 
                     {canEdit && !isEditing && (
                       <div>
-                        <button
-                          type="button"
-                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
-                          onClick={() => startEdit(trainee)}
-                        >
-                          Редагувати
-                        </button>
+                        {!trainee.is_deleted ? (
+                          <button
+                            type="button"
+                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                            onClick={() => startEdit(trainee)}
+                          >
+                            Редагувати
+                          </button>
+                        ) : (
+                          <p className="text-xs font-semibold text-rose-700">Редагування недоступне для архівного запису</p>
+                        )}
                       </div>
                     )}
 

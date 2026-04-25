@@ -144,6 +144,8 @@ class Trainee(Base):
     tax_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     group_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="active", nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     id_document_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)

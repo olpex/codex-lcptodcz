@@ -21,6 +21,7 @@ export interface TokenPair {
 
 export interface Trainee {
   id: number;
+  branch_id: string;
   source_row_number: number | null;
   first_name: string;
   last_name: string;
@@ -38,9 +39,13 @@ export interface Trainee {
   tax_id: string | null;
   group_code: string | null;
   status: string;
+  is_deleted: boolean;
+  deleted_at: string | null;
   phone: string | null;
   email: string | null;
   id_document: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Group {

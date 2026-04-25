@@ -123,6 +123,8 @@ class TraineeResponse(ORMModel):
     tax_id: str | None
     group_code: str | None
     status: str
+    is_deleted: bool = False
+    deleted_at: datetime | None = None
     phone: str | None
     email: str | None
     id_document: str | None
@@ -159,6 +161,15 @@ class TraineeBulkDeleteRequest(BaseModel):
 class TraineeBulkDeleteResponse(BaseModel):
     deleted_count: int
     deleted_ids: list[int]
+
+
+class TraineeBulkRestoreRequest(BaseModel):
+    trainee_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class TraineeBulkRestoreResponse(BaseModel):
+    restored_count: int
+    restored_ids: list[int]
 
 
 class GroupBase(BaseModel):

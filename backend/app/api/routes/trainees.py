@@ -1,14 +1,18 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
-from app.models import GroupMembership, Performance, RoleName, Trainee
+from app.models import RoleName, Trainee
 from app.schemas.api import (
     TraineeBulkDeleteRequest,
     TraineeBulkDeleteResponse,
     TraineeBulkGroupUpdateRequest,
     TraineeBulkGroupUpdateResponse,
+    TraineeBulkRestoreRequest,
+    TraineeBulkRestoreResponse,
     TraineeBulkStatusUpdateRequest,
     TraineeBulkStatusUpdateResponse,
     TraineeCreate,
@@ -41,6 +45,8 @@ def _to_response(trainee: Trainee) -> TraineeResponse:
         tax_id=cipher.decrypt(trainee.tax_id_encrypted),
         group_code=trainee.group_code,
         status=trainee.status,
+        is_deleted=trainee.is_deleted,
+        deleted_at=trainee.deleted_at,
         phone=cipher.decrypt(trainee.phone_encrypted),
         email=cipher.decrypt(trainee.email_encrypted),
         id_document=cipher.decrypt(trainee.id_document_encrypted),
@@ -54,8 +60,11 @@ def list_trainees(
     db: DbSession,
     current_user: CurrentUser,
     search: str | None = Query(default=None),
+    include_deleted: bool = Query(default=False),
 ) -> list[TraineeResponse]:
     query = apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+    if not include_deleted:
+        query = query.filter(Trainee.is_deleted.is_(False))
     if search:
         query = query.filter(
             or_(
@@ -125,7 +134,7 @@ def bulk_update_group_code(
 ) -> TraineeBulkGroupUpdateResponse:
     target_rows = (
         apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
-        .filter(Trainee.id.in_(payload.trainee_ids))
+        .filter(Trainee.id.in_(payload.trainee_ids), Trainee.is_deleted.is_(False))
         .all()
     )
     if not target_rows:
@@ -166,7 +175,7 @@ def bulk_update_status(
 ) -> TraineeBulkStatusUpdateResponse:
     target_rows = (
         apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
-        .filter(Trainee.id.in_(payload.trainee_ids))
+        .filter(Trainee.id.in_(payload.trainee_ids), Trainee.is_deleted.is_(False))
         .all()
     )
     if not target_rows:
@@ -206,20 +215,20 @@ def bulk_delete_trainees(
 ) -> TraineeBulkDeleteResponse:
     target_rows = (
         apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
-        .filter(Trainee.id.in_(payload.trainee_ids))
+        .filter(Trainee.id.in_(payload.trainee_ids), Trainee.is_deleted.is_(False))
         .all()
     )
     if not target_rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для видалення не знайдено")
 
     target_ids = [item.id for item in target_rows]
-    db.query(GroupMembership).filter(GroupMembership.trainee_id.in_(target_ids)).delete(synchronize_session=False)
-    db.query(Performance).filter(Performance.trainee_id.in_(target_ids)).delete(synchronize_session=False)
-    deleted_count = (
-        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
-        .filter(Trainee.id.in_(target_ids))
-        .delete(synchronize_session=False)
-    )
+    deleted_count = 0
+    timestamp = datetime.now(timezone.utc)
+    for trainee in target_rows:
+        trainee.is_deleted = True
+        trainee.deleted_at = timestamp
+        db.add(trainee)
+        deleted_count += 1
     db.commit()
 
     write_audit(
@@ -228,9 +237,46 @@ def bulk_delete_trainees(
         action="trainee.bulk_delete",
         entity_type="trainee_batch",
         entity_id=",".join(str(item) for item in target_ids[:20]),
-        details={"deleted_count": deleted_count},
+        details={"deleted_count": deleted_count, "mode": "soft_delete"},
     )
     return TraineeBulkDeleteResponse(deleted_count=deleted_count, deleted_ids=target_ids)
+
+
+@router.post(
+    "/bulk/restore",
+    response_model=TraineeBulkRestoreResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_restore_trainees(
+    payload: TraineeBulkRestoreRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkRestoreResponse:
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(payload.trainee_ids), Trainee.is_deleted.is_(True))
+        .all()
+    )
+    if not target_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для відновлення не знайдено")
+
+    restored_ids: list[int] = []
+    for trainee in target_rows:
+        trainee.is_deleted = False
+        trainee.deleted_at = None
+        db.add(trainee)
+        restored_ids.append(trainee.id)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_restore",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in restored_ids[:20]),
+        details={"restored_count": len(restored_ids)},
+    )
+    return TraineeBulkRestoreResponse(restored_count=len(restored_ids), restored_ids=restored_ids)
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)
@@ -257,6 +303,8 @@ def update_trainee(
     if not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухача не знайдено")
     ensure_same_branch(current_user, trainee, "Слухача")
+    if trainee.is_deleted:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Слухач в архіві. Спочатку відновіть запис")
 
     data = payload.model_dump(exclude_unset=True)
     for field in (
@@ -317,7 +365,9 @@ def delete_trainee(trainee_id: int, db: DbSession, current_user: CurrentUser) ->
     if not trainee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухача не знайдено")
     ensure_same_branch(current_user, trainee, "Слухача")
-    db.delete(trainee)
+    trainee.is_deleted = True
+    trainee.deleted_at = datetime.now(timezone.utc)
+    db.add(trainee)
     db.commit()
     write_audit(
         db,

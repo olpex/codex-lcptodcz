@@ -141,7 +141,7 @@ def test_bulk_status_update_flow(client, auth_headers):
     assert all(item["status"] == "completed" for item in updated)
 
 
-def test_bulk_delete_flow(client, auth_headers):
+def test_bulk_archive_restore_flow(client, auth_headers):
     first = client.post(
         "/api/v1/trainees",
         json={"first_name": "Анна", "last_name": "Видалити1", "status": "active"},
@@ -165,8 +165,33 @@ def test_bulk_delete_flow(client, auth_headers):
     assert bulk_response.json()["deleted_count"] == 2
     assert set(bulk_response.json()["deleted_ids"]) == set(trainee_ids)
 
-    trainees_response = client.get("/api/v1/trainees", headers=auth_headers)
-    assert trainees_response.status_code == 200
-    rows = trainees_response.json()
-    remaining_ids = {item["id"] for item in rows}
-    assert all(trainee_id not in remaining_ids for trainee_id in trainee_ids)
+    active_response = client.get("/api/v1/trainees", headers=auth_headers)
+    assert active_response.status_code == 200
+    active_rows = active_response.json()
+    active_ids = {item["id"] for item in active_rows}
+    assert all(trainee_id not in active_ids for trainee_id in trainee_ids)
+
+    archived_response = client.get("/api/v1/trainees?include_deleted=true", headers=auth_headers)
+    assert archived_response.status_code == 200
+    archived_rows = archived_response.json()
+    archived_by_id = {item["id"]: item for item in archived_rows if item["id"] in trainee_ids}
+    assert len(archived_by_id) == 2
+    assert all(row["is_deleted"] is True for row in archived_by_id.values())
+    assert all(row["deleted_at"] is not None for row in archived_by_id.values())
+
+    restore_response = client.post(
+        "/api/v1/trainees/bulk/restore",
+        json={"trainee_ids": trainee_ids},
+        headers=auth_headers,
+    )
+    assert restore_response.status_code == 200
+    assert restore_response.json()["restored_count"] == 2
+    assert set(restore_response.json()["restored_ids"]) == set(trainee_ids)
+
+    final_response = client.get("/api/v1/trainees", headers=auth_headers)
+    assert final_response.status_code == 200
+    final_rows = final_response.json()
+    restored_by_id = {item["id"]: item for item in final_rows if item["id"] in trainee_ids}
+    assert len(restored_by_id) == 2
+    assert all(row["is_deleted"] is False for row in restored_by_id.values())
+    assert all(row["deleted_at"] is None for row in restored_by_id.values())

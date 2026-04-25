@@ -42,6 +42,8 @@ def ensure_runtime_schema() -> None:
             ("trainees", "passport_issued_date", "DATE NULL"),
             ("trainees", "tax_id_encrypted", "TEXT NULL"),
             ("trainees", "group_code", "VARCHAR(50) NULL"),
+            ("trainees", "is_deleted", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("trainees", "deleted_at", "TIMESTAMP NULL"),
         ]
         for table_name, column_name, ddl in column_plan:
             if table_name not in existing_tables:
