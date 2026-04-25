@@ -26,7 +26,9 @@ from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_conte
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
 
-GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/–—]\s*\d{1,4})")
+GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+CONTRACT_KEYWORD_FALLBACK = "договор"
+DASH_VARIANTS = "–—‑‒−﹘﹣"
 
 
 def _normalize_compact(value: str | None) -> str:
@@ -57,13 +59,18 @@ def extract_contract_group_code(filename: str | None) -> str | None:
     if ext not in {"xlsx", "xls"}:
         return None
 
+    normalized_stem = stem.replace("_", " ").replace("\u00a0", " ")
+    for dash in DASH_VARIANTS:
+        normalized_stem = normalized_stem.replace(dash, "-")
+    stem_compact = _normalize_compact(normalized_stem)
+
     keyword = _normalize_compact(settings.imap_contract_attachment_prefix)
-    stem_compact = _normalize_compact(stem.replace("_", " "))
-    if keyword and keyword not in stem_compact:
+    keyword_matched = (keyword and keyword in stem_compact) or (CONTRACT_KEYWORD_FALLBACK in stem_compact)
+    if not keyword_matched:
         return None
 
     # Accept both "Договори 73-26 ..." and "73-26 ... Договори ...".
-    match = GROUP_CODE_PATTERN.search(stem)
+    match = GROUP_CODE_PATTERN.search(stem_compact)
     if not match:
         return None
     raw_group = "".join(match.group(1).split())
