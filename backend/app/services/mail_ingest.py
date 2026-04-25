@@ -10,7 +10,17 @@ from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Document, DocumentType, DraftStatus, MailMessage, MailStatus, OCRResult
+from app.models import (
+    Document,
+    DocumentType,
+    DraftStatus,
+    ImportJob,
+    JobStatus,
+    MailMessage,
+    MailStatus,
+    OCRResult,
+)
+from app.services.import_export import parse_document_content, try_import_trainees
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
 
@@ -43,6 +53,7 @@ def ingest_mailbox(db: Session) -> dict:
         return {"processed": 0, "message": "IMAP не налаштовано"}
 
     branch_id = settings.imap_branch_id or "main"
+    allowed_senders = settings.imap_allowed_senders_list
     processed = 0
     mailbox = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port)
     mailbox.login(settings.imap_user, settings.imap_password)
@@ -72,6 +83,7 @@ def ingest_mailbox(db: Session) -> dict:
 
         subject = _decode_header(parsed.get("Subject"))
         sender = _decode_header(parsed.get("From"))
+        sender_lower = sender.lower()
         received_at = datetime.now(timezone.utc)
 
         snippet = ""
@@ -95,6 +107,12 @@ def ingest_mailbox(db: Session) -> dict:
         )
         db.add(record)
         db.flush()
+
+        if allowed_senders and not any(token in sender_lower for token in allowed_senders):
+            record.status = MailStatus.PROCESSED
+            record.snippet = (record.snippet or "") + " [Пропущено: відправник не у списку дозволених]"
+            processed += 1
+            continue
 
         for part in parsed.walk():
             content_disposition = str(part.get("Content-Disposition", ""))
@@ -121,6 +139,39 @@ def ingest_mailbox(db: Session) -> dict:
             )
             db.add(document)
             db.flush()
+
+            if doc_type in {DocumentType.XLSX, DocumentType.CSV}:
+                job = ImportJob(
+                    branch_id=branch_id,
+                    idempotency_key=f"{branch_id}:mail:{uuid4().hex}",
+                    document_id=document.id,
+                    status=JobStatus.RUNNING,
+                    message="Автоімпорт із пошти виконується",
+                    started_at=datetime.now(timezone.utc),
+                )
+                db.add(job)
+                db.flush()
+                try:
+                    parsed_content = parse_document_content(str(out_path), doc_type)
+                    import_result = try_import_trainees(db, parsed_content, branch_id)
+                    job.status = JobStatus.SUCCEEDED
+                    job.result_payload = {
+                        "source": "mail",
+                        "message_id": message_id,
+                        "parsed": {
+                            key: value for key, value in parsed_content.items() if key != "data"
+                        },
+                        "import_result": import_result,
+                    }
+                    job.message = "Автоімпорт із пошти виконано"
+                    job.finished_at = datetime.now(timezone.utc)
+                except Exception as exc:
+                    job.status = JobStatus.FAILED
+                    job.message = f"Помилка автоімпорту з пошти: {exc}"
+                    job.finished_at = datetime.now(timezone.utc)
+                    db.add(job)
+                db.flush()
+                continue
 
             text = _extract_text_from_file(str(out_path), doc_type)
             draft_type, payload_guess = guess_draft_from_text(text)

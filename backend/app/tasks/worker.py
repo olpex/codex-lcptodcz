@@ -26,6 +26,18 @@ def _get_db() -> Session:
     return SessionLocal()
 
 
+def _parsed_snapshot(parsed: dict) -> dict:
+    snapshot = {key: value for key, value in parsed.items() if key != "data"}
+    data = parsed.get("data")
+    if isinstance(data, list):
+        preview: list[dict] = []
+        for row in data[:20]:
+            if isinstance(row, dict):
+                preview.append({str(key): str(value) if value is not None else "" for key, value in row.items()})
+        snapshot["preview"] = preview
+    return snapshot
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.worker.process_import_job_task",
@@ -41,6 +53,8 @@ def process_import_job_task(self, import_job_id: int) -> dict:
             return {"error": "job_not_found"}
         if job.status == JobStatus.SUCCEEDED:
             return {"status": "already_done"}
+        if job.status == JobStatus.FAILED and (job.message or "").lower().startswith("скасовано"):
+            return {"status": "canceled"}
 
         mark_job_running(job)
         db.add(job)
@@ -59,7 +73,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
             )
 
         payload = {
-            "parsed": parsed,
+            "parsed": _parsed_snapshot(parsed),
             "import_result": import_result,
             "processed_at": datetime.now(timezone.utc).isoformat(),
         }

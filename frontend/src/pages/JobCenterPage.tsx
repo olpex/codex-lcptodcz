@@ -144,6 +144,57 @@ export function JobCenterPage() {
     }
   };
 
+  const updateRowFromStatus = (itemId: number, payload: JobStatusPayload) => {
+    setRows((prev) => {
+      const nextRows = prev.map((row) =>
+        row.job.id === itemId
+          ? {
+              ...row,
+              job_type: payload.job_type,
+              job: payload.job
+            }
+          : row
+      );
+      appendSnapshot(nextRows);
+      return nextRows;
+    });
+  };
+
+  const cancelJob = async (item: JobListItem) => {
+    try {
+      const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/cancel`, { method: "POST" });
+      updateRowFromStatus(item.job.id, payload);
+      showSuccess(`Задачу #${item.job.id} скасовано`);
+    } catch (error) {
+      showError((error as Error).message);
+    }
+  };
+
+  const retryJob = async (item: JobListItem) => {
+    try {
+      const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/retry`, { method: "POST" });
+      updateRowFromStatus(item.job.id, payload);
+      showSuccess(`Задачу #${item.job.id} перезапущено`);
+    } catch (error) {
+      showError((error as Error).message);
+    }
+  };
+
+  const rollbackImportJob = async (item: JobListItem) => {
+    try {
+      const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/rollback-import`, { method: "POST" });
+      updateRowFromStatus(item.job.id, payload);
+      showSuccess(`Імпорт #${item.job.id} відкликано`);
+    } catch (error) {
+      showError((error as Error).message);
+    }
+  };
+
+  const hasRollbackData = (item: JobListItem) => {
+    const inserted = item.job.result_payload?.import_result as Record<string, unknown> | undefined;
+    return Array.isArray(inserted?.inserted_ids) && inserted.inserted_ids.length > 0;
+  };
+
   const downloadExport = async (item: JobListItem) => {
     const outputDocumentId = getOutputDocumentId(item);
     if (!outputDocumentId) {
@@ -219,6 +270,17 @@ export function JobCenterPage() {
         sortAccessor: (item) => item.job.message || ""
       },
       {
+        key: "document",
+        header: "Документ/звіт",
+        render: (item) => {
+          if (item.job_type === "import") {
+            return item.document_file_name || "—";
+          }
+          return item.output_file_name || item.report_type || "—";
+        },
+        sortAccessor: (item) => `${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
+      },
+      {
         key: "actions",
         header: "Дії",
         render: (item) => (
@@ -230,6 +292,33 @@ export function JobCenterPage() {
             >
               Оновити
             </button>
+            {(item.job.status === "queued" || item.job.status === "running") && (
+              <button
+                type="button"
+                className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700"
+                onClick={() => cancelJob(item)}
+              >
+                Скасувати
+              </button>
+            )}
+            {item.job.status === "failed" && (
+              <button
+                type="button"
+                className="rounded bg-indigo-100 px-2 py-1 text-xs font-semibold text-indigo-700"
+                onClick={() => retryJob(item)}
+              >
+                Повторити
+              </button>
+            )}
+            {item.job_type === "import" && item.job.status === "succeeded" && hasRollbackData(item) && (
+              <button
+                type="button"
+                className="rounded bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700"
+                onClick={() => rollbackImportJob(item)}
+              >
+                Відкликати імпорт
+              </button>
+            )}
             {item.job_type === "export" && item.job.status === "succeeded" && (
               <button
                 type="button"
@@ -357,8 +446,9 @@ export function JobCenterPage() {
           onRetry={() => loadJobs(true)}
           emptyText="Задачі не знайдено"
           search={{
-            placeholder: "Пошук за ID, типом, статусом або повідомленням",
-            getSearchText: (item) => `${item.job.id} ${item.job_type} ${item.job.status} ${item.job.message || ""}`
+            placeholder: "Пошук за ID, типом, статусом, повідомленням або назвою документа",
+            getSearchText: (item) =>
+              `${item.job.id} ${item.job_type} ${item.job.status} ${item.job.message || ""} ${item.document_file_name || ""} ${item.output_file_name || ""} ${item.report_type || ""}`
           }}
           initialPageSize={20}
           pageSizeOptions={[10, 20, 50, 100]}

@@ -1,5 +1,7 @@
 import csv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from docx import Document as DocxDocument
@@ -7,12 +9,15 @@ from fpdf import FPDF
 from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
+import xlrd
+from xlrd.xldate import xldate_as_datetime
 
 from app.models import (
     Document,
     DocumentType,
     ExportJob,
     Group,
+    GroupStatus,
     GroupMembership,
     ImportJob,
     JobStatus,
@@ -24,28 +29,278 @@ from app.models import (
 )
 from app.services.storage import storage_path
 
+PREFERRED_TRAINEE_SHEET_NAMES = ("Додаток", "додаток")
+HEADER_SCAN_LIMIT = 30
+ROW_SAMPLE_LIMIT = 20
+
+FIRST_NAME_ALIASES = {
+    "first_name",
+    "first name",
+    "firstname",
+    "ім'я",
+    "iм'я",
+    "імя",
+    "имя",
+    "імя слухача",
+}
+LAST_NAME_ALIASES = {
+    "last_name",
+    "last name",
+    "lastname",
+    "surname",
+    "прізвище",
+    "прiзвище",
+    "фамилия",
+}
+MIDDLE_NAME_ALIASES = {
+    "middle_name",
+    "middle name",
+    "patronymic",
+    "по батькові",
+    "по батькови",
+    "по-батькові",
+    "по батьковi",
+}
+FULL_NAME_ALIASES = {
+    "піб",
+    "пiб",
+    "п.i.б",
+    "п.і.б",
+    "пiб слухача",
+    "піб безробітного",
+    "пiб безробітного",
+    "прізвище ім'я по батькові",
+    "прізвище, ім'я, по батькові",
+    "фио",
+    "full_name",
+    "full name",
+}
+BIRTH_DATE_ALIASES = {
+    "birth_date",
+    "birth date",
+    "дата народження",
+    "дата народж.",
+    "дн",
+}
+STATUS_ALIASES = {"status", "статус"}
+GROUP_CODE_ALIASES = {"group_code", "код групи", "номер групи", "group", "група"}
+GROUP_NAME_ALIASES = {"group_name", "назва групи", "найменування групи"}
+
+TRAINEE_HEADER_HINTS = (
+    FIRST_NAME_ALIASES
+    | LAST_NAME_ALIASES
+    | FULL_NAME_ALIASES
+    | BIRTH_DATE_ALIASES
+    | STATUS_ALIASES
+    | GROUP_CODE_ALIASES
+    | GROUP_NAME_ALIASES
+)
+
 
 def _safe_pdf_text(value: str) -> str:
     # Built-in FPDF fonts only support latin-1; replace unsupported chars to avoid runtime crash.
     return value.encode("latin-1", errors="replace").decode("latin-1")
 
 
+def _normalize_header(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    raw = " ".join(raw.replace("\n", " ").replace("\r", " ").split())
+    return raw.replace("’", "'").replace("`", "'")
+
+
+def _normalize_text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return " ".join(value.replace("\n", " ").replace("\r", " ").split()).strip()
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+    return str(value).strip()
+
+
+def _pick_sheet_name(sheet_names: list[str]) -> str | None:
+    if not sheet_names:
+        return None
+    lowered = {name.lower(): name for name in sheet_names}
+    for preferred in PREFERRED_TRAINEE_SHEET_NAMES:
+        if preferred.lower() in lowered:
+            return lowered[preferred.lower()]
+    return sheet_names[0]
+
+
+def _row_is_empty(row: list[Any]) -> bool:
+    return all(_normalize_text_value(value) == "" for value in row)
+
+
+def _find_header_row_index(rows: list[list[Any]]) -> int:
+    best_index = 0
+    best_score = -1
+    for idx, row in enumerate(rows[:HEADER_SCAN_LIMIT]):
+        normalized = [_normalize_header(value) for value in row]
+        non_empty = [value for value in normalized if value]
+        if not non_empty:
+            continue
+        score = sum(1 for value in non_empty if value in TRAINEE_HEADER_HINTS)
+        if score > best_score:
+            best_score = score
+            best_index = idx
+            if score >= 2:
+                break
+    return best_index
+
+
+def _make_unique_headers(raw_headers: list[Any]) -> list[str]:
+    headers: list[str] = []
+    used: dict[str, int] = {}
+    for idx, header in enumerate(raw_headers):
+        candidate = _normalize_text_value(header) or f"column_{idx + 1}"
+        base = candidate
+        count = used.get(base, 0)
+        if count:
+            candidate = f"{base}_{count + 1}"
+        used[base] = count + 1
+        headers.append(candidate)
+    return headers
+
+
+def _rows_from_xlsx(file_path: str) -> tuple[str | None, list[list[Any]]]:
+    workbook = load_workbook(file_path, data_only=True, read_only=True)
+    sheet_name = _pick_sheet_name(workbook.sheetnames)
+    if not sheet_name:
+        workbook.close()
+        return None, []
+    worksheet = workbook[sheet_name]
+    rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
+    workbook.close()
+    return sheet_name, rows
+
+
+def _rows_from_xls(file_path: str) -> tuple[str | None, list[list[Any]]]:
+    workbook = xlrd.open_workbook(file_path)
+    sheet_name = _pick_sheet_name(workbook.sheet_names())
+    if not sheet_name:
+        return None, []
+    sheet = workbook.sheet_by_name(sheet_name)
+    rows: list[list[Any]] = []
+    for row_index in range(sheet.nrows):
+        row: list[Any] = []
+        for col_index in range(sheet.ncols):
+            cell = sheet.cell(row_index, col_index)
+            value: Any = cell.value
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                try:
+                    value = xldate_as_datetime(cell.value, workbook.datemode)
+                except Exception:
+                    value = cell.value
+            row.append(value)
+        rows.append(row)
+    return sheet_name, rows
+
+
+def _tabular_preview(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    preview: list[dict[str, Any]] = []
+    for row in data[:ROW_SAMPLE_LIMIT]:
+        payload = {str(key): _normalize_text_value(value) for key, value in row.items()}
+        preview.append(payload)
+    return preview
+
+
+def _parse_tabular_content(file_path: str) -> dict[str, Any]:
+    extension = Path(file_path).suffix.lower()
+    if extension == ".xls":
+        sheet_name, rows = _rows_from_xls(file_path)
+    else:
+        sheet_name, rows = _rows_from_xlsx(file_path)
+
+    if not rows:
+        return {"rows": 0, "headers": [], "data": [], "sheet_name": sheet_name}
+
+    header_idx = _find_header_row_index(rows)
+    headers = _make_unique_headers(rows[header_idx])
+    data: list[dict[str, Any]] = []
+    for raw_row in rows[header_idx + 1 :]:
+        if _row_is_empty(raw_row):
+            continue
+        payload: dict[str, Any] = {}
+        for idx, header in enumerate(headers):
+            payload[header] = raw_row[idx] if idx < len(raw_row) else None
+        data.append(payload)
+    return {
+        "rows": len(data),
+        "headers": headers,
+        "data": data,
+        "sheet_name": sheet_name,
+        "header_row_index": header_idx + 1,
+    }
+
+
+def _parse_date_value(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        # Excel serial dates are usually in this interval.
+        if 20000 <= float(value) <= 60000:
+            return (datetime(1899, 12, 30) + timedelta(days=float(value))).date()
+        return None
+    text = _normalize_text_value(value)
+    if not text:
+        return None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _split_full_name(full_name: str) -> tuple[str, str, str]:
+    parts = [part for part in full_name.split(" ") if part]
+    if not parts:
+        return "", "", ""
+    if len(parts) == 1:
+        return parts[0], "", ""
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    return parts[0], parts[1], " ".join(parts[2:])
+
+
+def _first_non_empty(keymap: dict[str, Any], aliases: set[str]) -> Any:
+    for alias in aliases:
+        value = keymap.get(alias)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    for key, value in keymap.items():
+        for alias in aliases:
+            if alias in key:
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                return value
+    return None
+
+
+def _has_any_alias(headers: set[str], aliases: set[str]) -> bool:
+    for header in headers:
+        for alias in aliases:
+            if header == alias or alias in header:
+                return True
+    return False
+
+
 def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     if doc_type == DocumentType.XLSX:
-        workbook = load_workbook(file_path, data_only=True)
-        sheet = workbook.active
-        rows = list(sheet.iter_rows(values_only=True))
-        if not rows:
-            return {"rows": 0, "data": []}
-        headers = [str(v).strip() if v is not None else "" for v in rows[0]]
-        data = []
-        for row in rows[1:]:
-            payload = {}
-            for idx, header in enumerate(headers):
-                key = header if header else f"column_{idx + 1}"
-                payload[key] = row[idx] if idx < len(row) else None
-            data.append(payload)
-        return {"rows": len(data), "headers": headers, "data": data[:100]}
+        return _parse_tabular_content(file_path)
 
     if doc_type == DocumentType.DOCX:
         doc = DocxDocument(file_path)
@@ -58,37 +313,135 @@ def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
         return {"rows": len(reader.pages), "text_preview": text[:3000]}
 
     if doc_type == DocumentType.CSV:
-        with open(file_path, "r", encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            data = list(reader)
-        return {"rows": len(data), "headers": reader.fieldnames or [], "data": data[:100]}
+        for encoding in ("utf-8-sig", "cp1251", "utf-8"):
+            try:
+                with open(file_path, "r", encoding=encoding, newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    data = list(reader)
+                return {"rows": len(data), "headers": reader.fieldnames or [], "data": data}
+            except UnicodeDecodeError:
+                continue
+        return {"rows": 0, "headers": [], "data": [], "note": "Не вдалося декодувати CSV"}
 
     return {"rows": 0, "data": []}
 
 
 def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
-    headers = [str(h).lower() for h in parsed.get("headers", [])]
-    required = {"first_name", "last_name"}
-    if not required.issubset(set(headers)):
-        return {"inserted": 0, "note": "Структура не схожа на реєстр слухачів"}
+    headers = {_normalize_header(h) for h in parsed.get("headers", [])}
+    required_match = bool(
+        (_has_any_alias(headers, FIRST_NAME_ALIASES) and _has_any_alias(headers, LAST_NAME_ALIASES))
+        or _has_any_alias(headers, FULL_NAME_ALIASES)
+    )
+    if not required_match:
+        return {"inserted": 0, "skipped_invalid": 0, "skipped_existing": 0, "note": "Структура не схожа на реєстр слухачів"}
 
     inserted = 0
+    skipped_invalid = 0
+    skipped_existing = 0
+    memberships_created = 0
+    inserted_ids: list[int] = []
+
+    group_cache: dict[str, Group] = {}
     for row in parsed.get("data", []):
-        keymap = {str(k).lower(): v for k, v in row.items()}
-        first_name = str(keymap.get("first_name") or "").strip()
-        last_name = str(keymap.get("last_name") or "").strip()
+        keymap = {_normalize_header(k): v for k, v in row.items()}
+
+        first_name = _normalize_text_value(_first_non_empty(keymap, FIRST_NAME_ALIASES))
+        last_name = _normalize_text_value(_first_non_empty(keymap, LAST_NAME_ALIASES))
+        middle_name = _normalize_text_value(_first_non_empty(keymap, MIDDLE_NAME_ALIASES))
+
         if not first_name or not last_name:
+            full_name_raw = _normalize_text_value(_first_non_empty(keymap, FULL_NAME_ALIASES))
+            if full_name_raw:
+                parsed_last, parsed_first, parsed_middle = _split_full_name(full_name_raw)
+                last_name = last_name or parsed_last
+                first_name = first_name or parsed_first
+                middle_name = middle_name or parsed_middle
+
+        if not first_name or not last_name:
+            skipped_invalid += 1
             continue
+
+        birth_date = _parse_date_value(_first_non_empty(keymap, BIRTH_DATE_ALIASES))
+        status_value = _normalize_text_value(_first_non_empty(keymap, STATUS_ALIASES)).lower() or "active"
+        status = status_value if status_value in {"active", "completed", "expelled"} else "active"
+
+        existing_query = db.query(Trainee).filter(
+            Trainee.branch_id == branch_id,
+            Trainee.first_name == first_name,
+            Trainee.last_name == last_name,
+        )
+        if birth_date:
+            existing_query = existing_query.filter(Trainee.birth_date == birth_date)
+        existing = existing_query.first()
+        if existing:
+            skipped_existing += 1
+            continue
+
         trainee = Trainee(
             branch_id=branch_id,
-            first_name=first_name,
+            first_name=first_name if not middle_name else f"{first_name} {middle_name}",
             last_name=last_name,
-            status=str(keymap.get("status") or "active"),
+            birth_date=birth_date,
+            status=status,
         )
         db.add(trainee)
+        db.flush()
         inserted += 1
+        inserted_ids.append(trainee.id)
+
+        group_code = _normalize_text_value(_first_non_empty(keymap, GROUP_CODE_ALIASES))
+        group_name = _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES))
+        if group_code or group_name:
+            code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
+            cache_key = code.lower()
+            group = group_cache.get(cache_key)
+            if not group:
+                group = (
+                    db.query(Group)
+                    .filter(Group.branch_id == branch_id, Group.code == code)
+                    .first()
+                )
+                if not group:
+                    group = Group(
+                        branch_id=branch_id,
+                        code=code,
+                        name=(group_name or code)[:255],
+                        status=GroupStatus.ACTIVE,
+                        capacity=30,
+                    )
+                    db.add(group)
+                    db.flush()
+                group_cache[cache_key] = group
+
+            membership_exists = (
+                db.query(GroupMembership)
+                .filter(
+                    GroupMembership.group_id == group.id,
+                    GroupMembership.trainee_id == trainee.id,
+                )
+                .first()
+            )
+            if not membership_exists:
+                db.add(
+                    GroupMembership(
+                        group_id=group.id,
+                        trainee_id=trainee.id,
+                        status=MembershipStatus.ACTIVE,
+                    )
+                )
+                memberships_created += 1
+
     db.commit()
-    return {"inserted": inserted}
+    return {
+        "inserted": inserted,
+        "inserted_ids": inserted_ids,
+        "skipped_invalid": skipped_invalid,
+        "skipped_existing": skipped_existing,
+        "memberships_created": memberships_created,
+        "already_loaded": skipped_existing > 0,
+        "sheet_name": parsed.get("sheet_name"),
+        "preview": _tabular_preview(parsed.get("data", [])),
+    }
 
 
 def collect_teacher_workload_summary(

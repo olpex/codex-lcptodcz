@@ -3,7 +3,7 @@ from pathlib import Path
 
 from docx import Document as DocxDocument
 
-from app.models import DraftStatus, MailMessage, MailStatus, OCRResult
+from app.models import DraftStatus, ImportJob, JobStatus, MailMessage, MailStatus, OCRResult
 from app.services import mail_ingest
 
 
@@ -52,7 +52,7 @@ def _build_message_with_docx_attachment(tmp_path: Path) -> bytes:
     return msg.as_bytes()
 
 
-def test_ingest_mailbox_creates_message_document_and_draft(db_session, monkeypatch, tmp_path: Path):
+def test_ingest_mailbox_creates_message_document_and_draft_or_import_job(db_session, monkeypatch, tmp_path: Path):
     raw_message = _build_message_with_docx_attachment(tmp_path)
     fake_client = FakeIMAP4SSL(raw_message)
 
@@ -69,6 +69,13 @@ def test_ingest_mailbox_creates_message_document_and_draft(db_session, monkeypat
     message = db_session.query(MailMessage).filter(MailMessage.message_id == "<test-message-1@example.com>").one()
     assert message.status == MailStatus.PROCESSED
     assert message.subject == "Тестовий лист"
+
+    import_job = db_session.query(ImportJob).order_by(ImportJob.id.desc()).first()
+    if import_job is not None:
+        assert import_job.status == JobStatus.SUCCEEDED
+        assert import_job.result_payload is not None
+        assert import_job.result_payload.get("source") == "mail"
+        return
 
     draft = db_session.query(OCRResult).order_by(OCRResult.id.desc()).first()
     assert draft is not None

@@ -17,15 +17,35 @@ router = APIRouter()
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
-    task = poll_mailbox_task.delay()
+    dispatch_mode = "queued"
+    task_id: str | None = None
+    inline_result: dict | None = None
+    try:
+        task = poll_mailbox_task.delay()
+        task_id = task.id
+    except Exception:
+        dispatch_mode = "inline"
+        inline_result = poll_mailbox_task.run()
+
     write_audit(
         db,
         actor_user_id=current_user.id,
         action="mail.poll_now",
         entity_type="task",
-        entity_id=task.id,
+        entity_id=task_id or "inline",
+        details={"dispatch_mode": dispatch_mode},
     )
-    return {"message": "Завдання опитування поштової скриньки поставлено в чергу", "task_id": task.id}
+    if dispatch_mode == "inline":
+        return {
+            "message": "Черга недоступна, опитування виконано одразу",
+            "dispatch_mode": dispatch_mode,
+            "result": inline_result or {},
+        }
+    return {
+        "message": "Завдання опитування поштової скриньки поставлено в чергу",
+        "task_id": task_id,
+        "dispatch_mode": dispatch_mode,
+    }
 
 
 @router.get("/mail/messages", response_model=list[MailMessageResponse])

@@ -14,7 +14,7 @@ def detect_document_type(filename: str | None) -> DocumentType:
     if not filename or "." not in filename:
         return DocumentType.OTHER
     ext = filename.rsplit(".", 1)[1].lower()
-    if ext == "xlsx":
+    if ext in {"xlsx", "xls"}:
         return DocumentType.XLSX
     if ext == "pdf":
         return DocumentType.PDF

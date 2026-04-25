@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     imap_mailbox: str = Field(default="INBOX")
     imap_branch_id: str = Field(default="main")
     imap_poll_interval_seconds: int = Field(default=300)
+    imap_allowed_senders: str = Field(default="")
 
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)
@@ -55,6 +56,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         return [part.strip() for part in self.cors_origins.split(",") if part.strip()]
+
+    @property
+    def imap_allowed_senders_list(self) -> List[str]:
+        return [part.strip().lower() for part in self.imap_allowed_senders.split(",") if part.strip()]
 
 
 @lru_cache

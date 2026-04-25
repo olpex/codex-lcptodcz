@@ -93,6 +93,8 @@ export interface JobListItem {
   export_format?: string | null;
   output_document_id?: number | null;
   document_id?: number | null;
+  document_file_name?: string | null;
+  output_file_name?: string | null;
 }
 
 export interface Draft {

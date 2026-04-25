@@ -305,6 +305,8 @@ class JobListItemResponse(BaseModel):
     export_format: str | None = None
     output_document_id: int | None = None
     document_id: int | None = None
+    document_file_name: str | None = None
+    output_file_name: str | None = None
 
 
 class MailMessageResponse(ORMModel):

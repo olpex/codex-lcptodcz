@@ -226,18 +226,18 @@ export function DocumentsPage() {
 
   return (
     <div className="space-y-5">
-      <Panel title="Імпорт документів (.xlsx, .pdf, .docx)">
+      <Panel title="Імпорт документів (.xls, .xlsx, .pdf, .docx, .csv)">
         <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport} aria-busy={isImporting}>
-          <FormField
-            label="Файл для імпорту"
-            required
-            helperText="Підтримуються .xlsx, .pdf, .docx"
-            errorText={importFieldError}
-          >
-            <input
-              type="file"
-              className={formControlClass}
-              accept=".xlsx,.pdf,.docx"
+            <FormField
+              label="Файл для імпорту"
+              required
+              helperText="Підтримуються .xls/.xlsx, .pdf, .docx, .csv"
+              errorText={importFieldError}
+            >
+              <input
+                type="file"
+                className={formControlClass}
+                accept=".xls,.xlsx,.pdf,.docx,.csv"
               onChange={(event) => {
                 setFile(event.target.files?.[0] || null);
                 setImportFieldError(undefined);

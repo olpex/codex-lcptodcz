@@ -57,8 +57,8 @@ def import_document(
     x_idempotency_key: str | None = Header(default=None),
 ) -> JobResponse:
     doc_type = detect_document_type(file.filename)
-    if doc_type.value not in {"xlsx", "pdf", "docx"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються лише .xlsx, .pdf, .docx")
+    if doc_type.value not in {"xlsx", "pdf", "docx", "csv"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються .xls/.xlsx, .pdf, .docx, .csv")
 
     raw_idem_key = x_idempotency_key or f"import-{uuid4().hex}"
     idem_key = f"{current_user.branch_id}:{raw_idem_key}"
