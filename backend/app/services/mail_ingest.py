@@ -50,6 +50,22 @@ def is_contract_sender(sender_name: str, sender_email: str) -> bool:
 
 
 def extract_contract_group_code(filename: str | None) -> str | None:
+    if not is_contract_attachment_filename(filename):
+        return None
+
+    stem = _normalized_contract_filename_stem(filename)
+    if stem is None:
+        return None
+
+    # Accept both "Договори 73-26 ..." and "73-26 ... Договори ...".
+    match = GROUP_CODE_PATTERN.search(stem)
+    if not match:
+        return None
+    raw_group = "".join(match.group(1).split())
+    return raw_group.replace("–", "-").replace("—", "-")
+
+
+def _normalized_contract_filename_stem(filename: str | None) -> str | None:
     if not filename:
         return None
     lower = filename.strip().lower()
@@ -62,19 +78,19 @@ def extract_contract_group_code(filename: str | None) -> str | None:
     normalized_stem = stem.replace("_", " ").replace("\u00a0", " ")
     for dash in DASH_VARIANTS:
         normalized_stem = normalized_stem.replace(dash, "-")
-    stem_compact = _normalize_compact(normalized_stem)
+    return _normalize_compact(normalized_stem)
+
+
+def is_contract_attachment_filename(filename: str | None) -> bool:
+    stem_compact = _normalized_contract_filename_stem(filename)
+    if not stem_compact:
+        return False
 
     keyword = _normalize_compact(settings.imap_contract_attachment_prefix)
     keyword_matched = (keyword and keyword in stem_compact) or (CONTRACT_KEYWORD_FALLBACK in stem_compact)
     if not keyword_matched:
-        return None
-
-    # Accept both "Договори 73-26 ..." and "73-26 ... Договори ...".
-    match = GROUP_CODE_PATTERN.search(stem_compact)
-    if not match:
-        return None
-    raw_group = "".join(match.group(1).split())
-    return raw_group.replace("–", "-").replace("—", "-")
+        return False
+    return True
 
 
 def _decode_header(value: str | None) -> str:
@@ -200,7 +216,8 @@ def ingest_mailbox(db: Session) -> dict:
                 record.raw_document_id = document.id
 
             contract_group_code = extract_contract_group_code(filename)
-            if sender_is_contract_source and contract_group_code and doc_type == DocumentType.XLSX:
+            is_contract_attachment = is_contract_attachment_filename(filename)
+            if sender_is_contract_source and is_contract_attachment and doc_type == DocumentType.XLSX:
                 import_mode = settings.imap_contract_update_mode if settings.imap_contract_update_mode in IMPORT_UPDATE_MODES else "overwrite"
                 job = ImportJob(
                     branch_id=branch_id,
@@ -250,7 +267,7 @@ def ingest_mailbox(db: Session) -> dict:
 
             if doc_type in {DocumentType.XLSX, DocumentType.CSV}:
                 attachment_notes.append(
-                    f"Excel-вкладення пропущено ({filename}): не відповідає правилу 'Договори + номер групи' або відправнику"
+                    f"Excel-вкладення пропущено ({filename}): не відповідає правилу 'Договори' або відправнику"
                 )
                 continue
 

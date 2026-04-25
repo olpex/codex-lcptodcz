@@ -10,7 +10,7 @@ from app.models import Document, DraftStatus, ImportJob, JobStatus, MailMessage,
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
-from app.services.mail_ingest import extract_contract_group_code, is_contract_sender
+from app.services.mail_ingest import extract_contract_group_code, is_contract_attachment_filename, is_contract_sender
 from app.services.storage import detect_document_type, persist_upload
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
@@ -126,12 +126,12 @@ def google_mail_contracts_webhook(
     if doc_type.value != "xlsx":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx вкладення")
 
-    group_code_hint = extract_contract_group_code(filename)
-    if not group_code_hint:
+    if not is_contract_attachment_filename(filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Назва файлу не відповідає шаблону договорів (ключове слово + номер групи)",
+            detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
         )
+    group_code_hint = extract_contract_group_code(filename)
 
     branch_id = settings.imap_branch_id or "main"
     safe_message_id = (message_id or f"google-script-{uuid4().hex}").strip()[:255]
