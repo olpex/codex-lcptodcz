@@ -256,43 +256,47 @@ export function DocumentsPage() {
       </Panel>
       <Panel title="Експорт звітів (.xlsx, .pdf, .csv)">
         <StickyActionBar>
-          <div className="flex flex-wrap items-center gap-3">
-          <FormField label="Тип звіту">
-            <select
-              className={formControlClass}
-              value={reportType}
-              onChange={(event) => setReportType(event.target.value)}
-              disabled={isExporting}
-            >
-              <option value="kpi">KPI</option>
-              <option value="trainees">Слухачі</option>
-              <option value="teacher_workload">Навантаження викладачів</option>
-              <option value="employment">Працевлаштування</option>
-              <option value="financial">Фінансовий звіт</option>
-              <option value="form_1pa">Форма 1-ПА</option>
-            </select>
-          </FormField>
-          <FormField label="Формат">
-            <select
-              className={formControlClass}
-              value={exportFormat}
-              onChange={(event) => setExportFormat(event.target.value)}
-              disabled={isExporting}
-            >
-              <option value="xlsx">XLSX</option>
-              <option value="pdf">PDF</option>
-              <option value="csv">CSV</option>
-            </select>
-          </FormField>
-          <button
-            type="button"
-            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
-            onClick={runExport}
-            disabled={isExporting}
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              runExport();
+            }}
           >
-            {isExporting ? "Генеруємо..." : "Згенерувати"}
-          </button>
-          </div>
+            <FormField label="Тип звіту" helperText="Оберіть набір даних для експорту">
+              <select
+                className={formControlClass}
+                value={reportType}
+                onChange={(event) => setReportType(event.target.value)}
+                disabled={isExporting}
+              >
+                <option value="kpi">KPI</option>
+                <option value="trainees">Слухачі</option>
+                <option value="teacher_workload">Навантаження викладачів</option>
+                <option value="employment">Працевлаштування</option>
+                <option value="financial">Фінансовий звіт</option>
+                <option value="form_1pa">Форма 1-ПА</option>
+              </select>
+            </FormField>
+            <FormField label="Формат" helperText="XLSX/PDF/CSV">
+              <select
+                className={formControlClass}
+                value={exportFormat}
+                onChange={(event) => setExportFormat(event.target.value)}
+                disabled={isExporting}
+              >
+                <option value="xlsx">XLSX</option>
+                <option value="pdf">PDF</option>
+                <option value="csv">CSV</option>
+              </select>
+            </FormField>
+            <FormSubmitButton
+              isLoading={isExporting}
+              idleLabel="Згенерувати"
+              loadingLabel="Генеруємо..."
+              className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+            />
+          </form>
         </StickyActionBar>
       </Panel>
       <Panel title="Статус job">

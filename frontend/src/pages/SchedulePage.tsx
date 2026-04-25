@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
-import { FormField, formControlClass } from "../components/FormField";
+import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
@@ -123,10 +123,12 @@ export function SchedulePage() {
   const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [days, setDays] = useState(5);
+  const [generateErrors, setGenerateErrors] = useState<{ startDate?: string; days?: string }>({});
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [showConflictsOnly, setShowConflictsOnly] = useState(false);
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
@@ -318,8 +320,24 @@ export function SchedulePage() {
     setExpandedDates({});
   };
 
-  const generate = async () => {
-    if (!canGenerate) return;
+  const generate = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!canGenerate || isGenerating) return;
+    const nextErrors: { startDate?: string; days?: string } = {};
+    if (!startDate) {
+      nextErrors.startDate = "Вкажіть дату старту";
+    }
+    if (!Number.isInteger(days) || days < 1 || days > 30) {
+      nextErrors.days = "Кількість днів має бути цілим числом від 1 до 30";
+    }
+    if (Object.keys(nextErrors).length) {
+      setGenerateErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
+      return;
+    }
+
+    setGenerateErrors({});
+    setIsGenerating(true);
     try {
       await request<ScheduleSlot[]>("/schedule/generate", {
         method: "POST",
@@ -332,6 +350,8 @@ export function SchedulePage() {
       showSuccess("Розклад успішно згенеровано");
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -339,29 +359,45 @@ export function SchedulePage() {
     <div className="space-y-5">
       {canGenerate && (
         <Panel title="Генерація розкладу">
-          <div className="flex flex-wrap items-center gap-3">
-            <FormField label="Дата старту">
+          <form className="flex flex-wrap items-end gap-3" onSubmit={generate}>
+            <FormField
+              label="Дата старту"
+              required
+              helperText="Дата першого дня генерації"
+              errorText={generateErrors.startDate}
+            >
               <input
                 type="date"
                 className={formControlClass}
                 value={startDate}
-                onChange={(event) => setStartDate(event.target.value)}
+                onChange={(event) => {
+                  setStartDate(event.target.value);
+                  setGenerateErrors((prev) => ({ ...prev, startDate: undefined }));
+                }}
+                required
               />
             </FormField>
-            <FormField label="Кількість днів" helperText="Від 1 до 30">
+            <FormField label="Кількість днів" required helperText="Від 1 до 30" errorText={generateErrors.days}>
               <input
                 type="number"
                 min={1}
                 max={30}
                 className={formControlClass}
                 value={days}
-                onChange={(event) => setDays(Number(event.target.value))}
+                onChange={(event) => {
+                  setDays(Number(event.target.value));
+                  setGenerateErrors((prev) => ({ ...prev, days: undefined }));
+                }}
+                required
               />
             </FormField>
-            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={generate}>
-              Згенерувати
-            </button>
-          </div>
+            <FormSubmitButton
+              isLoading={isGenerating}
+              idleLabel="Згенерувати"
+              loadingLabel="Генеруємо..."
+              className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+            />
+          </form>
         </Panel>
       )}
       <Panel title="Поточний розклад">

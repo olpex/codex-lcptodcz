@@ -20,6 +20,8 @@ export function WorkloadPage() {
   const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Workload[]>([]);
   const [annualLoadDrafts, setAnnualLoadDrafts] = useState<Record<number, string>>({});
+  const [annualLoadErrors, setAnnualLoadErrors] = useState<Record<number, string>>({});
+  const [savingTeacherId, setSavingTeacherId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<WorkloadSnapshot[]>([]);
@@ -63,6 +65,7 @@ export function WorkloadPage() {
       setAnnualLoadDrafts(
         Object.fromEntries(data.map((row) => [row.teacher_id, String(row.annual_load_hours ?? 0)]))
       );
+      setAnnualLoadErrors({});
     } catch (error) {
       const message = (error as Error).message;
       setLoadError(message);
@@ -87,12 +90,17 @@ export function WorkloadPage() {
   );
 
   const saveAnnualLoad = async (teacherId: number) => {
+    if (savingTeacherId !== null) return;
     const draftValue = annualLoadDrafts[teacherId];
     const value = Number(draftValue);
-    if (!Number.isFinite(value) || value < 0) {
-      showError("Річне педнавантаження має бути невід'ємним числом");
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+      const message = "Річне педнавантаження має бути невід'ємним цілим числом";
+      setAnnualLoadErrors((prev) => ({ ...prev, [teacherId]: message }));
+      showError(message);
       return;
     }
+    setAnnualLoadErrors((prev) => ({ ...prev, [teacherId]: "" }));
+    setSavingTeacherId(teacherId);
     try {
       await request(`/teachers/${teacherId}`, {
         method: "PUT",
@@ -102,6 +110,8 @@ export function WorkloadPage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setSavingTeacherId(null);
     }
   };
 
@@ -129,14 +139,26 @@ export function WorkloadPage() {
       header: "Річне педнавантаження",
       render: (row) =>
         canEditAnnualLoad ? (
-          <input
-            type="number"
-            min={0}
-            step={1}
-            className="w-28 rounded border border-slate-300 px-2 py-1"
-            value={annualLoadDrafts[row.teacher_id] ?? String(row.annual_load_hours ?? 0)}
-            onChange={(event) => setAnnualLoadDrafts((prev) => ({ ...prev, [row.teacher_id]: event.target.value }))}
-          />
+          <div className="min-w-[210px]">
+            <input
+              type="number"
+              min={0}
+              step={1}
+              className={`w-28 rounded border px-2 py-1 ${
+                annualLoadErrors[row.teacher_id] ? "border-red-400" : "border-slate-300"
+              }`}
+              value={annualLoadDrafts[row.teacher_id] ?? String(row.annual_load_hours ?? 0)}
+              onChange={(event) => {
+                const value = event.target.value;
+                setAnnualLoadDrafts((prev) => ({ ...prev, [row.teacher_id]: value }));
+                setAnnualLoadErrors((prev) => ({ ...prev, [row.teacher_id]: "" }));
+              }}
+              disabled={savingTeacherId === row.teacher_id}
+            />
+            {annualLoadErrors[row.teacher_id] && (
+              <p className="mt-1 max-w-[200px] text-xs font-semibold text-red-700">{annualLoadErrors[row.teacher_id]}</p>
+            )}
+          </div>
         ) : (
           row.annual_load_hours
         ),
@@ -155,10 +177,11 @@ export function WorkloadPage() {
             header: "Дія",
             render: (row: Workload) => (
               <button
-                className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink"
+                className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink disabled:opacity-50"
                 onClick={() => saveAnnualLoad(row.teacher_id)}
+                disabled={savingTeacherId !== null}
               >
-                Зберегти
+                {savingTeacherId === row.teacher_id ? "Збереження..." : "Зберегти"}
               </button>
             )
           }

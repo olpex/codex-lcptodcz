@@ -5,6 +5,7 @@ interface RequestOptions extends RequestInit {
 }
 
 function mapStatusToMessage(status: number): string {
+  if (status <= 0) return "Не вдалося підключитися до сервера. Перевірте інтернет-з'єднання.";
   if (status === 400) return "Некоректний запит. Перевірте введені дані.";
   if (status === 401) return "Сесія завершилась або вказані невірні облікові дані.";
   if (status === 403) return "У вас недостатньо прав для цієї дії.";
@@ -22,11 +23,23 @@ function sanitizeTechnicalMessage(rawMessage: string, status: number): string {
   }
 
   const withoutApiPath = trimmed
-    .replace(/\s*\(\/api\/[^)]+\)\s*$/i, "")
-    .replace(/\s*request url:\s*\/api\/\S+/gi, "")
+    .replace(/\s*\((?:https?:\/\/\S+|\/api\/[^)]+)\)\s*$/gi, "")
+    .replace(/\brequest url:\s*(?:https?:\/\/\S+|\/api\/\S+)/gi, "")
+    .replace(/\burl:\s*(?:https?:\/\/\S+|\/api\/\S+)/gi, "")
+    .replace(/\b\/api\/[^\s)]+/gi, "")
+    .replace(/https?:\/\/[^\s)]+/gi, "")
+    .replace(/\s{2,}/g, " ")
     .trim();
 
   if (!withoutApiPath) {
+    return mapStatusToMessage(status);
+  }
+
+  if (/traceback|stack trace|at\s+\S+|line\s+\d+/i.test(withoutApiPath)) {
+    return mapStatusToMessage(status);
+  }
+
+  if (/^api error\s*\d+$/i.test(withoutApiPath) || /^api помилка\s*\d+$/i.test(withoutApiPath)) {
     return mapStatusToMessage(status);
   }
 
@@ -43,12 +56,22 @@ function sanitizeTechnicalMessage(rawMessage: string, status: number): string {
     return mapStatusToMessage(500);
   }
 
+  if (/(?:^|\s)(?:err(or)?|exception|failure|fatal)(?:\s|:|$)/i.test(withoutApiPath) && withoutApiPath.length > 120) {
+    return mapStatusToMessage(status);
+  }
+
   return withoutApiPath;
 }
 
 function parsePayloadMessage(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
+  }
+  if ("errors" in payload && Array.isArray(payload.errors) && payload.errors.length > 0) {
+    return "Дані не пройшли валідацію. Перевірте заповнення полів.";
+  }
+  if ("detail" in payload && Array.isArray(payload.detail)) {
+    return "Дані не пройшли валідацію. Перевірте заповнення полів.";
   }
   if ("message" in payload && typeof payload.message === "string") {
     return payload.message;

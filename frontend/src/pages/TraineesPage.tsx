@@ -102,6 +102,7 @@ export function TraineesPage() {
   const [groupCode, setGroupCode] = useState("");
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [createErrors, setCreateErrors] = useState<{ firstName?: string; lastName?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -113,6 +114,7 @@ export function TraineesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editForm, setEditForm] = useState<TraineeEditForm | null>(null);
+  const [editErrors, setEditErrors] = useState<{ firstName?: string; lastName?: string; sourceRowNumber?: string }>({});
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [archiveTargetIds, setArchiveTargetIds] = useState<number[]>([]);
 
@@ -192,10 +194,15 @@ export function TraineesPage() {
   const createTrainee = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
-    if (!firstName.trim() || !lastName.trim()) {
-      showError("Вкажіть ім'я та прізвище");
+    const nextErrors: { firstName?: string; lastName?: string } = {};
+    if (!firstName.trim()) nextErrors.firstName = "Вкажіть ім'я";
+    if (!lastName.trim()) nextErrors.lastName = "Вкажіть прізвище";
+    if (Object.keys(nextErrors).length) {
+      setCreateErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
       return;
     }
+    setCreateErrors({});
     setIsSubmitting(true);
     try {
       await request("/trainees", {
@@ -212,6 +219,7 @@ export function TraineesPage() {
       setLastName("");
       setPhone("");
       setGroupCode("");
+      setCreateErrors({});
       await fetchTrainees(search);
       showSuccess("Слухача додано");
     } catch (error) {
@@ -362,12 +370,14 @@ export function TraineesPage() {
     }
     setEditingId(trainee.id);
     setEditForm(toEditForm(trainee));
+    setEditErrors({});
     setExpanded((prev) => ({ ...prev, [trainee.id]: true }));
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setEditForm(null);
+    setEditErrors({});
   };
 
   const updateEditField = (field: keyof TraineeEditForm, value: string) => {
@@ -377,16 +387,28 @@ export function TraineesPage() {
   const saveEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || !editingId || !editForm) return;
-    if (!editForm.first_name.trim() || !editForm.last_name.trim()) {
-      showError("Ім'я та прізвище є обов'язковими");
+    const nextErrors: { firstName?: string; lastName?: string; sourceRowNumber?: string } = {};
+    if (!editForm.first_name.trim()) nextErrors.firstName = "Вкажіть ім'я";
+    if (!editForm.last_name.trim()) nextErrors.lastName = "Вкажіть прізвище";
+    if (editForm.source_row_number.trim()) {
+      const sourceRowNumber = Number(editForm.source_row_number);
+      if (!Number.isFinite(sourceRowNumber) || sourceRowNumber < 1) {
+        nextErrors.sourceRowNumber = "Номер рядка має бути цілим числом від 1";
+      }
+    }
+    if (Object.keys(nextErrors).length) {
+      setEditErrors(nextErrors);
+      showError(Object.values(nextErrors)[0]);
       return;
     }
+    setEditErrors({});
     setIsSavingEdit(true);
     try {
+      const sourceRowNumber = editForm.source_row_number.trim() ? Number(editForm.source_row_number) : null;
       const payload = {
         first_name: editForm.first_name.trim(),
         last_name: editForm.last_name.trim(),
-        source_row_number: editForm.source_row_number ? Number(editForm.source_row_number) : null,
+        source_row_number: sourceRowNumber,
         employment_center: editForm.employment_center || null,
         birth_date: editForm.birth_date || null,
         contract_number: editForm.contract_number || null,
@@ -451,11 +473,27 @@ export function TraineesPage() {
       {canEdit && (
         <Panel title="Додати слухача вручну">
           <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" onSubmit={createTrainee}>
-            <FormField label="Ім'я" required>
-              <input className={formControlClass} value={firstName} onChange={(event) => setFirstName(event.target.value)} required />
+            <FormField label="Ім'я" required helperText="Ім'я слухача" errorText={createErrors.firstName}>
+              <input
+                className={formControlClass}
+                value={firstName}
+                onChange={(event) => {
+                  setFirstName(event.target.value);
+                  setCreateErrors((prev) => ({ ...prev, firstName: undefined }));
+                }}
+                required
+              />
             </FormField>
-            <FormField label="Прізвище" required>
-              <input className={formControlClass} value={lastName} onChange={(event) => setLastName(event.target.value)} required />
+            <FormField label="Прізвище" required helperText="Прізвище слухача" errorText={createErrors.lastName}>
+              <input
+                className={formControlClass}
+                value={lastName}
+                onChange={(event) => {
+                  setLastName(event.target.value);
+                  setCreateErrors((prev) => ({ ...prev, lastName: undefined }));
+                }}
+                required
+              />
             </FormField>
             <FormField label="Телефон">
               <input className={formControlClass} value={phone} onChange={(event) => setPhone(event.target.value)} />
@@ -642,21 +680,40 @@ export function TraineesPage() {
 
                     {canEdit && isEditing && editForm && (
                       <form className="grid gap-3 md:grid-cols-2" onSubmit={saveEdit}>
-                        <FormField label="Номер">
+                        <FormField label="Номер" errorText={editErrors.sourceRowNumber}>
                           <input
                             className={formControlClass}
                             value={editForm.source_row_number}
-                            onChange={(event) => updateEditField("source_row_number", event.target.value)}
+                            onChange={(event) => {
+                              updateEditField("source_row_number", event.target.value);
+                              setEditErrors((prev) => ({ ...prev, sourceRowNumber: undefined }));
+                            }}
                           />
                         </FormField>
                         <FormField label="Номер групи">
                           <input className={formControlClass} value={editForm.group_code} onChange={(event) => updateEditField("group_code", event.target.value)} />
                         </FormField>
-                        <FormField label="Прізвище" required>
-                          <input className={formControlClass} value={editForm.last_name} onChange={(event) => updateEditField("last_name", event.target.value)} required />
+                        <FormField label="Прізвище" required errorText={editErrors.lastName}>
+                          <input
+                            className={formControlClass}
+                            value={editForm.last_name}
+                            onChange={(event) => {
+                              updateEditField("last_name", event.target.value);
+                              setEditErrors((prev) => ({ ...prev, lastName: undefined }));
+                            }}
+                            required
+                          />
                         </FormField>
-                        <FormField label="Ім'я та по батькові" required>
-                          <input className={formControlClass} value={editForm.first_name} onChange={(event) => updateEditField("first_name", event.target.value)} required />
+                        <FormField label="Ім'я та по батькові" required errorText={editErrors.firstName}>
+                          <input
+                            className={formControlClass}
+                            value={editForm.first_name}
+                            onChange={(event) => {
+                              updateEditField("first_name", event.target.value);
+                              setEditErrors((prev) => ({ ...prev, firstName: undefined }));
+                            }}
+                            required
+                          />
                         </FormField>
                         <FormField className="md:col-span-2" label="Центр зайнятості">
                           <input className={formControlClass} value={editForm.employment_center} onChange={(event) => updateEditField("employment_center", event.target.value)} />

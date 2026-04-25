@@ -34,6 +34,9 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
+      <a href="#main-content" className="skip-link">
+        Перейти до основного контенту
+      </a>
       <header className="sticky top-0 z-40 border-b border-pine/10 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
@@ -61,7 +64,7 @@ export function AppLayout() {
       </header>
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-4 py-6 md:grid-cols-[220px_1fr]">
         <aside className="hidden rounded-2xl bg-white p-3 shadow-card md:block">
-          <nav className="space-y-1">
+          <nav className="space-y-1" aria-label="Головна навігація">
             {visibleItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -77,7 +80,7 @@ export function AppLayout() {
             ))}
           </nav>
         </aside>
-        <main className="space-y-5">
+        <main id="main-content" className="space-y-5">
           <Outlet />
         </main>
       </div>
@@ -94,7 +97,7 @@ export function AppLayout() {
                 Закрити
               </button>
             </div>
-            <nav className="space-y-1">
+            <nav className="space-y-1" aria-label="Мобільна навігація">
               {visibleItems.map((item) => (
                 <NavLink
                   key={item.to}

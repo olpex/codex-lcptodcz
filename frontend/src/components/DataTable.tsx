@@ -172,7 +172,11 @@ export function DataTable<T>({
       </div>
 
       {errorText && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2"
+          role="alert"
+          aria-live="assertive"
+        >
           <p className="text-sm text-red-700">{errorText}</p>
           {onRetry && (
             <button

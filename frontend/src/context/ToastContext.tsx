@@ -67,8 +67,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={item.id}
             className={`pointer-events-auto rounded-lg border px-4 py-3 shadow-card ${toastStyle(item.type)}`}
-            role="status"
-            aria-live="polite"
+            role={item.type === "error" ? "alert" : "status"}
+            aria-live={item.type === "error" ? "assertive" : "polite"}
           >
             <div className="flex items-start justify-between gap-3">
               <p className="text-sm">{item.message}</p>

@@ -14,6 +14,15 @@ const ORDER_TYPES = [
   { value: "expulsion", label: "Відрахування" }
 ] as const;
 
+const ORDER_STATUSES = [
+  { value: "draft", label: "Чернетка" },
+  { value: "approved", label: "Затверджено" },
+  { value: "archived", label: "Архівовано" }
+] as const;
+const ORDER_STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  ORDER_STATUSES.map((item) => [item.value, item.label])
+);
+
 export function OrdersPage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -22,13 +31,13 @@ export function OrdersPage() {
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [orderType, setOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [status, setStatus] = useState("draft");
-  const [createErrors, setCreateErrors] = useState<{ orderNumber?: string; orderDate?: string; status?: string }>({});
+  const [createErrors, setCreateErrors] = useState<{ orderNumber?: string; orderDate?: string }>({});
   const [editId, setEditId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState("");
   const [editOrderDate, setEditOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [editOrderType, setEditOrderType] = useState<(typeof ORDER_TYPES)[number]["value"]>("internal");
   const [editStatus, setEditStatus] = useState("draft");
-  const [editErrors, setEditErrors] = useState<{ orderNumber?: string; orderDate?: string; status?: string }>({});
+  const [editErrors, setEditErrors] = useState<{ orderNumber?: string; orderDate?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -70,10 +79,9 @@ export function OrdersPage() {
   const createOrder = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit) return;
-    const nextErrors: { orderNumber?: string; orderDate?: string; status?: string } = {};
+    const nextErrors: { orderNumber?: string; orderDate?: string } = {};
     if (!orderNumber.trim()) nextErrors.orderNumber = "Вкажіть номер наказу";
     if (!orderDate) nextErrors.orderDate = "Вкажіть дату наказу";
-    if (!status.trim()) nextErrors.status = "Вкажіть статус наказу";
     if (Object.keys(nextErrors).length) {
       setCreateErrors(nextErrors);
       showError(Object.values(nextErrors)[0]);
@@ -124,10 +132,9 @@ export function OrdersPage() {
   const saveEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canEdit || !editId) return;
-    const nextErrors: { orderNumber?: string; orderDate?: string; status?: string } = {};
+    const nextErrors: { orderNumber?: string; orderDate?: string } = {};
     if (!editOrderNumber.trim()) nextErrors.orderNumber = "Вкажіть номер наказу";
     if (!editOrderDate) nextErrors.orderDate = "Вкажіть дату наказу";
-    if (!editStatus.trim()) nextErrors.status = "Вкажіть статус наказу";
     if (Object.keys(nextErrors).length) {
       setEditErrors(nextErrors);
       showError(Object.values(nextErrors)[0]);
@@ -197,7 +204,7 @@ export function OrdersPage() {
       {
         key: "status",
         header: "Статус",
-        render: (row) => row.status,
+        render: (row) => ORDER_STATUS_LABELS[row.status] || row.status,
         sortAccessor: (row) => row.status
       },
       {
@@ -286,20 +293,19 @@ export function OrdersPage() {
             </FormField>
             <FormField
               label="Статус"
-              required
-              helperText="draft, approved, archived тощо"
-              errorText={createErrors.status}
+              helperText="Поточний стан наказу"
             >
-              <input
+              <select
                 className={formControlClass}
-                placeholder="draft"
                 value={status}
-                onChange={(event) => {
-                  setStatus(event.target.value);
-                  setCreateErrors((prev) => ({ ...prev, status: undefined }));
-                }}
-                required
-              />
+                onChange={(event) => setStatus(event.target.value)}
+              >
+                {ORDER_STATUSES.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
             </FormField>
             <div className="flex items-end">
               <FormSubmitButton
@@ -352,17 +358,18 @@ export function OrdersPage() {
                 required
               />
             </FormField>
-            <FormField label="Статус" required errorText={editErrors.status}>
-              <input
+            <FormField label="Статус" helperText="Поточний стан наказу">
+              <select
                 className={formControlClass}
-                placeholder="Статус"
                 value={editStatus}
-                onChange={(event) => {
-                  setEditStatus(event.target.value);
-                  setEditErrors((prev) => ({ ...prev, status: undefined }));
-                }}
-                required
-              />
+                onChange={(event) => setEditStatus(event.target.value)}
+              >
+                {ORDER_STATUSES.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
             </FormField>
             <div className="flex gap-2">
               <FormSubmitButton

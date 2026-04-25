@@ -20,6 +20,24 @@ button {
   cursor: pointer;
 }
 
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 12px;
+  z-index: 1000;
+  border-radius: 10px;
+  background: #1d4f47;
+  color: #fff;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  left: 12px;
+}
+
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
