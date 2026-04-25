@@ -10,6 +10,7 @@ Vercel не запускає довгоживучі процеси `celery worke
    - `SECRET_KEY`, `DATA_ENCRYPTION_KEY`,
    - IMAP/OCR змінні.
 4. Для serverless fallback також доступний Vercel Cron: `GET /api/api/v1/mail/poll-cron` (кожні 5 хв, див. `vercel.json`), захищений змінною `CRON_SECRET`.
+5. Для інтеграції з Google Apps Script задайте `MAIL_WEBHOOK_SECRET` і використовуйте endpoint `POST /api/api/v1/mail/google-webhook/contracts`.
 
 ## Запуск worker/beat
 

@@ -73,6 +73,10 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 Для Vercel додано cron (`vercel.json`), який викликає `GET /api/api/v1/mail/poll-cron` кожні 5 хвилин.
 Потрібно обов'язково задати `CRON_SECRET` у Vercel Environment Variables.
 
+Якщо IMAP для Gmail недоступний (немає `App Password`), використовуйте інтеграцію через Google Apps Script:
+
+- `docs/integrations/google-apps-script.md`
+
 ## Kubernetes
 
 Додатково доступні маніфести для розгортання у Kubernetes:

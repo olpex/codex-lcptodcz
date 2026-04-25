@@ -33,7 +33,7 @@ def _normalize_compact(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
-def _is_contract_sender(sender_name: str, sender_email: str) -> bool:
+def is_contract_sender(sender_name: str, sender_email: str) -> bool:
     expected_name = settings.imap_contract_sender_name_normalized
     expected_email = settings.imap_contract_sender_email_normalized
     if not expected_email:
@@ -47,7 +47,7 @@ def _is_contract_sender(sender_name: str, sender_email: str) -> bool:
     return True
 
 
-def _extract_contract_group_code(filename: str | None) -> str | None:
+def extract_contract_group_code(filename: str | None) -> str | None:
     if not filename:
         return None
     lower = filename.strip().lower()
@@ -132,7 +132,7 @@ def ingest_mailbox(db: Session) -> dict:
         sender_name, sender_email = parseaddr(sender)
         sender_name = _decode_header(sender_name)
         sender_email = sender_email.strip().lower()
-        sender_is_contract_source = _is_contract_sender(sender_name, sender_email)
+        sender_is_contract_source = is_contract_sender(sender_name, sender_email)
         received_at = datetime.now(timezone.utc)
 
         snippet = ""
@@ -192,7 +192,7 @@ def ingest_mailbox(db: Session) -> dict:
             if record.raw_document_id is None:
                 record.raw_document_id = document.id
 
-            contract_group_code = _extract_contract_group_code(filename)
+            contract_group_code = extract_contract_group_code(filename)
             if sender_is_contract_source and contract_group_code and doc_type == DocumentType.XLSX:
                 import_mode = settings.imap_contract_update_mode if settings.imap_contract_update_mode in IMPORT_UPDATE_MODES else "overwrite"
                 job = ImportJob(

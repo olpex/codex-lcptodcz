@@ -1,15 +1,32 @@
+import hashlib
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
-from app.models import DraftStatus, MailMessage, OCRResult, Order, OrderType, RoleName, Trainee
-from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, MailMessageResponse
+from app.models import Document, DraftStatus, ImportJob, JobStatus, MailMessage, MailStatus, OCRResult, Order, OrderType, RoleName, Trainee
+from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
-from app.tasks.worker import poll_mailbox_task, process_ocr_task
+from app.services.import_export import IMPORT_UPDATE_MODES
+from app.services.mail_ingest import extract_contract_group_code, is_contract_sender
+from app.services.storage import detect_document_type, persist_upload
+from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
 router = APIRouter()
+
+
+def _dispatch_import_with_fallback(import_job_id: int) -> str:
+    try:
+        process_import_job_task.delay(import_job_id)
+        return "queued"
+    except Exception:
+        try:
+            process_import_job_task.run(import_job_id)
+            return "inline"
+        except Exception:
+            return "inline_failed"
 
 
 @router.post(
@@ -78,6 +95,123 @@ def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
     if inline_result is not None:
         payload["result"] = inline_result
     return payload
+
+
+@router.post("/mail/google-webhook/contracts", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def google_mail_contracts_webhook(
+    db: DbSession,
+    file: UploadFile = File(...),
+    sender_email: str = Form(...),
+    sender_name: str = Form(default=""),
+    subject: str = Form(default=""),
+    message_id: str | None = Form(default=None),
+    update_existing_mode: str = Form(default="overwrite"),
+    authorization: str | None = Header(default=None),
+) -> JobResponse:
+    expected_secret = settings.mail_webhook_secret.strip()
+    if not expected_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MAIL_WEBHOOK_SECRET не налаштовано")
+    expected_header = f"Bearer {expected_secret}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний webhook-токен")
+
+    if update_existing_mode not in IMPORT_UPDATE_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний режим імпорту")
+
+    if not is_contract_sender(sender_name, sender_email):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Відправник не відповідає правилу автообробки")
+
+    filename = file.filename or "attachment.xlsx"
+    doc_type = detect_document_type(filename)
+    if doc_type.value != "xlsx":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx вкладення")
+
+    group_code_hint = extract_contract_group_code(filename)
+    if not group_code_hint:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Назва файлу не відповідає шаблону договорів (ключове слово + номер групи)",
+        )
+
+    branch_id = settings.imap_branch_id or "main"
+    safe_message_id = (message_id or f"google-script-{uuid4().hex}").strip()[:255]
+    idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
+    idempotency_key = f"{branch_id}:mail-webhook:{idem_digest}"
+
+    existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
+    if existing:
+        return JobResponse.model_validate(existing)
+
+    path, sha256 = persist_upload(file)
+    document = Document(
+        branch_id=branch_id,
+        file_name=filename,
+        file_path=path,
+        file_type=doc_type,
+        source="mail_google_script",
+        mime_type=file.content_type,
+        hash_sha256=sha256,
+    )
+    db.add(document)
+    db.flush()
+
+    message_row = (
+        db.query(MailMessage)
+        .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == safe_message_id)
+        .first()
+    )
+    if not message_row:
+        message_row = MailMessage(
+            branch_id=branch_id,
+            message_id=safe_message_id,
+            sender=f"{sender_name} <{sender_email}>".strip(),
+            subject=subject or "(без теми)",
+            received_at=datetime.now(timezone.utc),
+            snippet=f"Apps Script webhook: {filename}",
+            status=MailStatus.PROCESSED,
+            raw_document_id=document.id,
+        )
+        db.add(message_row)
+    else:
+        message_row.raw_document_id = document.id
+        db.add(message_row)
+
+    job = ImportJob(
+        branch_id=branch_id,
+        idempotency_key=idempotency_key,
+        document_id=document.id,
+        status=JobStatus.QUEUED,
+        message="Заявку на імпорт з Google Apps Script створено",
+        result_payload={
+            "source": "mail_google_script",
+            "message_id": safe_message_id,
+            "sender_name": sender_name,
+            "sender_email": sender_email,
+            "group_code_hint": group_code_hint,
+            "import_mode": update_existing_mode,
+            "channel": "google_apps_script",
+        },
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    dispatch_mode = _dispatch_import_with_fallback(job.id)
+    db.refresh(job)
+    if dispatch_mode == "inline":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга тимчасово недоступна. Імпорт виконано одразу.{suffix}"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    elif dispatch_mode == "inline_failed":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга недоступна, а inline-імпорт завершився помилкою.{suffix}"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+    return JobResponse.model_validate(job)
 
 
 @router.get("/mail/messages", response_model=list[MailMessageResponse])

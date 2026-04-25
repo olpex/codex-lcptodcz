@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     imap_contract_attachment_prefix: str = Field(default="Договори")
     imap_contract_update_mode: str = Field(default="overwrite")
     cron_secret: str = Field(default="")
+    mail_webhook_secret: str = Field(default="")
 
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)

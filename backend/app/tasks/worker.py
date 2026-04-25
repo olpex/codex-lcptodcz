@@ -75,7 +75,9 @@ def process_import_job_task(self, import_job_id: int) -> dict:
                 actor_user_id=job.document.created_by,
             )
 
+        initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
         payload = {
+            **initial_payload,
             "parsed": _parsed_snapshot(parsed),
             "import_mode": import_mode,
             "import_result": import_result,
