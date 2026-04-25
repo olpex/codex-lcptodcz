@@ -39,6 +39,22 @@
 - E2E (критичні): `cd frontend && npx playwright test tests/e2e/smoke.spec.ts tests/e2e/mvp-admin-flow.spec.ts tests/e2e/schedule-conflicts.spec.ts tests/e2e/a11y-keyboard.spec.ts`
 - Full nightly regression: `cd frontend && npm run test:e2e`
 
+## Підтвердження (останній прогін)
+
+Дата прогону: 25 квітня 2026
+
+- `npm run lint` — успішно.
+- `npm run build` — успішно.
+- `npm run test:a11y:lighthouse` — успішно.
+- Lighthouse accessibility score:
+  - `http://127.0.0.1:4173/` — `1.00`
+  - `http://127.0.0.1:4173/login` — `1.00`
+- Артефакти звітів: `frontend/lighthouseci/*.report.{html,json}`
+
+Примітка для Windows середовища:
+- Для стабільної локальної інсталяції optional binary-залежностей Rollup використовувати:
+  - `npm ci --os=win32 --include=optional`
+
 ## Обмеження поточного baseline
 
 - Не всі сторінки мають окремі цільові e2e-сценарії keyboard-only (пріоритетні маршрути вже покриті).
