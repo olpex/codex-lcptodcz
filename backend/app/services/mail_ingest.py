@@ -26,7 +26,7 @@ from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_conte
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
 
-GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/–—]\s*\d{1,4})")
 
 
 def _normalize_compact(value: str | None) -> str:
@@ -41,7 +41,9 @@ def _is_contract_sender(sender_name: str, sender_email: str) -> bool:
     if _normalize_compact(sender_email) != expected_email:
         return False
     if expected_name and _normalize_compact(sender_name) != expected_name:
-        return False
+        actual_name = _normalize_compact(sender_name)
+        if expected_name not in actual_name:
+            return False
     return True
 
 
@@ -64,7 +66,8 @@ def _extract_contract_group_code(filename: str | None) -> str | None:
     match = GROUP_CODE_PATTERN.search(stem)
     if not match:
         return None
-    return "".join(match.group(1).split())
+    raw_group = "".join(match.group(1).split())
+    return raw_group.replace("–", "-").replace("—", "-")
 
 
 def _decode_header(value: str | None) -> str:

@@ -164,8 +164,8 @@ def test_ingest_mailbox_auto_imports_contracts_for_configured_sender(db_session,
 def test_ingest_mailbox_auto_imports_when_group_code_is_before_keyword(db_session, monkeypatch, tmp_path: Path):
     xlsx_path = _build_contract_registry_xlsx(tmp_path)
     raw_message = _build_message_with_attachment(
-        sender="Львівський центр ПТО ДСЗ <lcptodcz@gmail.com>",
-        filename="73-26 Штучний інтелект Договори.xlsx",
+        sender="Львівський центр ПТО ДСЗ (навчання) <lcptodcz@gmail.com>",
+        filename="73–26 Штучний інтелект Договори.xlsx",
         payload=xlsx_path.read_bytes(),
         subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         message_id="<test-message-contracts-before-keyword@example.com>",
