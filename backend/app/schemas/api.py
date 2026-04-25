@@ -141,6 +141,17 @@ class TraineeBulkGroupUpdateResponse(BaseModel):
     group_code: str | None
 
 
+class TraineeBulkStatusUpdateRequest(BaseModel):
+    trainee_ids: list[int] = Field(min_length=1, max_length=500)
+    status: str = Field(pattern="^(active|completed|expelled)$")
+
+
+class TraineeBulkStatusUpdateResponse(BaseModel):
+    updated_count: int
+    updated_ids: list[int]
+    status: str
+
+
 class GroupBase(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)

@@ -34,6 +34,12 @@ type BulkGroupUpdateResponse = {
   group_code: string | null;
 };
 
+type BulkStatusUpdateResponse = {
+  updated_count: number;
+  updated_ids: number[];
+  status: "active" | "completed" | "expelled";
+};
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -90,6 +96,7 @@ export function TraineesPage() {
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [bulkGroupCode, setBulkGroupCode] = useState("");
+  const [bulkStatus, setBulkStatus] = useState<"active" | "completed" | "expelled">("active");
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -218,6 +225,31 @@ export function TraineesPage() {
       clearSelection();
       setBulkGroupCode("");
       showSuccess(`Оновлено слухачів: ${response.updated_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  const runBulkStatusUpdate = async (targetStatus: "active" | "completed" | "expelled") => {
+    if (!selectedIds.length) {
+      showError("Виберіть щонайменше одного слухача");
+      return;
+    }
+    setIsBulkUpdating(true);
+    try {
+      const payload = {
+        trainee_ids: selectedIds,
+        status: targetStatus
+      };
+      const response = await request<BulkStatusUpdateResponse>("/trainees/bulk/status", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      await fetchTrainees(search);
+      clearSelection();
+      showSuccess(`Оновлено статус (${response.status}) для ${response.updated_count} слухачів`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -369,6 +401,22 @@ export function TraineesPage() {
                   disabled={isBulkUpdating || !selectedIds.length}
                 >
                   Очистити групу
+                </button>
+                <select
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  value={bulkStatus}
+                  onChange={(event) => setBulkStatus(event.target.value as "active" | "completed" | "expelled")}
+                >
+                  <option value="active">active</option>
+                  <option value="completed">completed</option>
+                  <option value="expelled">expelled</option>
+                </select>
+                <button
+                  className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={() => runBulkStatusUpdate(bulkStatus)}
+                  disabled={isBulkUpdating || !selectedIds.length}
+                >
+                  Змінити статус
                 </button>
               </>
             )}
@@ -546,4 +594,3 @@ export function TraineesPage() {
     </div>
   );
 }
-

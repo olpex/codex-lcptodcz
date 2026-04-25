@@ -7,6 +7,8 @@ from app.models import RoleName, Trainee
 from app.schemas.api import (
     TraineeBulkGroupUpdateRequest,
     TraineeBulkGroupUpdateResponse,
+    TraineeBulkStatusUpdateRequest,
+    TraineeBulkStatusUpdateResponse,
     TraineeCreate,
     TraineeResponse,
     TraineeUpdate,
@@ -147,6 +149,46 @@ def bulk_update_group_code(
         updated_count=len(updated_ids),
         updated_ids=updated_ids,
         group_code=normalized_group_code,
+    )
+
+
+@router.post(
+    "/bulk/status",
+    response_model=TraineeBulkStatusUpdateResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_update_status(
+    payload: TraineeBulkStatusUpdateRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkStatusUpdateResponse:
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(payload.trainee_ids))
+        .all()
+    )
+    if not target_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для оновлення не знайдено")
+
+    updated_ids: list[int] = []
+    for trainee in target_rows:
+        trainee.status = payload.status
+        db.add(trainee)
+        updated_ids.append(trainee.id)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_update_status",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in updated_ids[:20]),
+        details={"updated_count": len(updated_ids), "status": payload.status},
+    )
+    return TraineeBulkStatusUpdateResponse(
+        updated_count=len(updated_ids),
+        updated_ids=updated_ids,
+        status=payload.status,
     )
 
 
