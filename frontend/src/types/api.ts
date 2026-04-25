@@ -21,9 +21,22 @@ export interface TokenPair {
 
 export interface Trainee {
   id: number;
+  source_row_number: number | null;
   first_name: string;
   last_name: string;
+  employment_center: string | null;
   birth_date: string | null;
+  contract_number: string | null;
+  certificate_number: string | null;
+  certificate_issue_date: string | null;
+  postal_index: string | null;
+  address: string | null;
+  passport_series: string | null;
+  passport_number: string | null;
+  passport_issued_by: string | null;
+  passport_issued_date: string | null;
+  tax_id: string | null;
+  group_code: string | null;
   status: string;
   phone: string | null;
   email: string | null;

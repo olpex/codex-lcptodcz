@@ -14,9 +14,22 @@ def _to_response(trainee: Trainee) -> TraineeResponse:
     return TraineeResponse(
         id=trainee.id,
         branch_id=trainee.branch_id,
+        source_row_number=trainee.source_row_number,
         first_name=trainee.first_name,
         last_name=trainee.last_name,
+        employment_center=cipher.decrypt(trainee.employment_center_encrypted),
         birth_date=trainee.birth_date,
+        contract_number=trainee.contract_number,
+        certificate_number=trainee.certificate_number,
+        certificate_issue_date=trainee.certificate_issue_date,
+        postal_index=trainee.postal_index,
+        address=cipher.decrypt(trainee.address_encrypted),
+        passport_series=cipher.decrypt(trainee.passport_series_encrypted),
+        passport_number=cipher.decrypt(trainee.passport_number_encrypted),
+        passport_issued_by=cipher.decrypt(trainee.passport_issued_by_encrypted),
+        passport_issued_date=trainee.passport_issued_date,
+        tax_id=cipher.decrypt(trainee.tax_id_encrypted),
+        group_code=trainee.group_code,
         status=trainee.status,
         phone=cipher.decrypt(trainee.phone_encrypted),
         email=cipher.decrypt(trainee.email_encrypted),
@@ -38,6 +51,8 @@ def list_trainees(
             or_(
                 Trainee.first_name.ilike(f"%{search}%"),
                 Trainee.last_name.ilike(f"%{search}%"),
+                Trainee.group_code.ilike(f"%{search}%"),
+                Trainee.contract_number.ilike(f"%{search}%"),
             )
         )
     trainees = query.order_by(Trainee.created_at.desc()).all()
@@ -55,7 +70,20 @@ def create_trainee(payload: TraineeCreate, db: DbSession, current_user: CurrentU
         branch_id=current_user.branch_id,
         first_name=payload.first_name.strip(),
         last_name=payload.last_name.strip(),
+        source_row_number=payload.source_row_number,
+        employment_center_encrypted=cipher.encrypt(payload.employment_center),
         birth_date=payload.birth_date,
+        contract_number=payload.contract_number,
+        certificate_number=payload.certificate_number,
+        certificate_issue_date=payload.certificate_issue_date,
+        postal_index=payload.postal_index,
+        address_encrypted=cipher.encrypt(payload.address),
+        passport_series_encrypted=cipher.encrypt(payload.passport_series),
+        passport_number_encrypted=cipher.encrypt(payload.passport_number),
+        passport_issued_by_encrypted=cipher.encrypt(payload.passport_issued_by),
+        passport_issued_date=payload.passport_issued_date,
+        tax_id_encrypted=cipher.encrypt(payload.tax_id),
+        group_code=payload.group_code,
         status=payload.status,
         phone_encrypted=cipher.encrypt(payload.phone),
         email_encrypted=cipher.encrypt(payload.email),
@@ -101,9 +129,33 @@ def update_trainee(
     ensure_same_branch(current_user, trainee, "Слухача")
 
     data = payload.model_dump(exclude_unset=True)
-    for field in ("first_name", "last_name", "birth_date", "status"):
+    for field in (
+        "first_name",
+        "last_name",
+        "source_row_number",
+        "birth_date",
+        "contract_number",
+        "certificate_number",
+        "certificate_issue_date",
+        "postal_index",
+        "passport_issued_date",
+        "group_code",
+        "status",
+    ):
         if field in data:
             setattr(trainee, field, data[field])
+    if "employment_center" in data:
+        trainee.employment_center_encrypted = cipher.encrypt(data["employment_center"])
+    if "address" in data:
+        trainee.address_encrypted = cipher.encrypt(data["address"])
+    if "passport_series" in data:
+        trainee.passport_series_encrypted = cipher.encrypt(data["passport_series"])
+    if "passport_number" in data:
+        trainee.passport_number_encrypted = cipher.encrypt(data["passport_number"])
+    if "passport_issued_by" in data:
+        trainee.passport_issued_by_encrypted = cipher.encrypt(data["passport_issued_by"])
+    if "tax_id" in data:
+        trainee.tax_id_encrypted = cipher.encrypt(data["tax_id"])
     if "phone" in data:
         trainee.phone_encrypted = cipher.encrypt(data["phone"])
     if "email" in data:

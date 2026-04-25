@@ -56,7 +56,20 @@ class UserResponse(ORMModel):
 class TraineeBase(BaseModel):
     first_name: str = Field(min_length=1, max_length=120)
     last_name: str = Field(min_length=1, max_length=120)
+    source_row_number: int | None = Field(default=None, ge=1)
+    employment_center: str | None = None
     birth_date: date | None = None
+    contract_number: str | None = None
+    certificate_number: str | None = None
+    certificate_issue_date: date | None = None
+    postal_index: str | None = None
+    address: str | None = None
+    passport_series: str | None = None
+    passport_number: str | None = None
+    passport_issued_by: str | None = None
+    passport_issued_date: date | None = None
+    tax_id: str | None = None
+    group_code: str | None = None
     phone: str | None = None
     email: EmailStr | None = None
     id_document: str | None = None
@@ -70,7 +83,20 @@ class TraineeCreate(TraineeBase):
 class TraineeUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
+    source_row_number: int | None = Field(default=None, ge=1)
+    employment_center: str | None = None
     birth_date: date | None = None
+    contract_number: str | None = None
+    certificate_number: str | None = None
+    certificate_issue_date: date | None = None
+    postal_index: str | None = None
+    address: str | None = None
+    passport_series: str | None = None
+    passport_number: str | None = None
+    passport_issued_by: str | None = None
+    passport_issued_date: date | None = None
+    tax_id: str | None = None
+    group_code: str | None = None
     phone: str | None = None
     email: EmailStr | None = None
     id_document: str | None = None
@@ -80,9 +106,22 @@ class TraineeUpdate(BaseModel):
 class TraineeResponse(ORMModel):
     id: int
     branch_id: str
+    source_row_number: int | None
     first_name: str
     last_name: str
+    employment_center: str | None
     birth_date: date | None
+    contract_number: str | None
+    certificate_number: str | None
+    certificate_issue_date: date | None
+    postal_index: str | None
+    address: str | None
+    passport_series: str | None
+    passport_number: str | None
+    passport_issued_by: str | None
+    passport_issued_date: date | None
+    tax_id: str | None
+    group_code: str | None
     status: str
     phone: str | None
     email: str | None

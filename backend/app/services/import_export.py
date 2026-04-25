@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 import xlrd
 from xlrd.xldate import xldate_as_datetime
 
+from app.core.crypto import cipher
 from app.models import (
     Document,
     DocumentType,
@@ -85,6 +86,23 @@ BIRTH_DATE_ALIASES = {
 STATUS_ALIASES = {"status", "статус"}
 GROUP_CODE_ALIASES = {"group_code", "код групи", "номер групи", "group", "група"}
 GROUP_NAME_ALIASES = {"group_name", "назва групи", "найменування групи"}
+ROW_NUMBER_ALIASES = {"№", "no", "номер", "№ з/п", "п/п", "n"}
+EMPLOYMENT_CENTER_ALIASES = {
+    "центр зайнятості, який направив безробітного на професійне навчання",
+    "центр зайнятості",
+    "цз",
+}
+CONTRACT_NUMBER_ALIASES = {"№ договору", "номер договору", "договору", "contract_number"}
+CERTIFICATE_NUMBER_ALIASES = {"сертифікат", "номер сертифікату", "certificate", "certificate_number"}
+CERTIFICATE_ISSUE_DATE_ALIASES = {"дата видачі сертифікату", "дата видачі сертифіката", "certificate_issue_date"}
+POSTAL_INDEX_ALIASES = {"індекс", "поштовий індекс", "postal_index"}
+ADDRESS_ALIASES = {"адреса", "address"}
+PASSPORT_SERIES_ALIASES = {"паспорт: серія", "паспорт серія", "серія паспорта", "passport_series"}
+PASSPORT_NUMBER_ALIASES = {"паспорт: №", "паспорт №", "номер паспорта", "passport_number"}
+PASSPORT_ISSUED_BY_ALIASES = {"ким виданий", "кем выдан", "passport_issued_by"}
+PASSPORT_ISSUED_DATE_ALIASES = {"коли виданий", "дата видачі паспорта", "passport_issued_date"}
+TAX_ID_ALIASES = {"ідентифікаційний код", "ідентифікаційний номер", "інн", "рнокпп", "tax_id"}
+PHONE_ALIASES = {"телефон", "номер телефону", "phone"}
 
 TRAINEE_HEADER_HINTS = (
     FIRST_NAME_ALIASES
@@ -362,27 +380,70 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
             continue
 
         birth_date = _parse_date_value(_first_non_empty(keymap, BIRTH_DATE_ALIASES))
+        source_row_number_raw = _first_non_empty(keymap, ROW_NUMBER_ALIASES)
+        source_row_number: int | None = None
+        try:
+            if source_row_number_raw is not None and _normalize_text_value(source_row_number_raw):
+                source_row_number = int(float(_normalize_text_value(source_row_number_raw)))
+        except ValueError:
+            source_row_number = None
+        employment_center = _normalize_text_value(_first_non_empty(keymap, EMPLOYMENT_CENTER_ALIASES)) or None
+        contract_number = _normalize_text_value(_first_non_empty(keymap, CONTRACT_NUMBER_ALIASES)) or None
+        certificate_number = _normalize_text_value(_first_non_empty(keymap, CERTIFICATE_NUMBER_ALIASES)) or None
+        certificate_issue_date = _parse_date_value(_first_non_empty(keymap, CERTIFICATE_ISSUE_DATE_ALIASES))
+        postal_index = _normalize_text_value(_first_non_empty(keymap, POSTAL_INDEX_ALIASES)) or None
+        address = _normalize_text_value(_first_non_empty(keymap, ADDRESS_ALIASES)) or None
+        passport_series = _normalize_text_value(_first_non_empty(keymap, PASSPORT_SERIES_ALIASES)) or None
+        passport_number = _normalize_text_value(_first_non_empty(keymap, PASSPORT_NUMBER_ALIASES)) or None
+        passport_issued_by = _normalize_text_value(_first_non_empty(keymap, PASSPORT_ISSUED_BY_ALIASES)) or None
+        passport_issued_date = _parse_date_value(_first_non_empty(keymap, PASSPORT_ISSUED_DATE_ALIASES))
+        tax_id = _normalize_text_value(_first_non_empty(keymap, TAX_ID_ALIASES)) or None
+        phone_value = _normalize_text_value(_first_non_empty(keymap, PHONE_ALIASES)) or None
         status_value = _normalize_text_value(_first_non_empty(keymap, STATUS_ALIASES)).lower() or "active"
         status = status_value if status_value in {"active", "completed", "expelled"} else "active"
 
-        existing_query = db.query(Trainee).filter(
-            Trainee.branch_id == branch_id,
-            Trainee.first_name == first_name,
-            Trainee.last_name == last_name,
-        )
-        if birth_date:
-            existing_query = existing_query.filter(Trainee.birth_date == birth_date)
-        existing = existing_query.first()
+        existing = None
+        if contract_number:
+            existing = (
+                db.query(Trainee)
+                .filter(
+                    Trainee.branch_id == branch_id,
+                    Trainee.contract_number == contract_number,
+                )
+                .first()
+            )
+        if not existing:
+            existing_query = db.query(Trainee).filter(
+                Trainee.branch_id == branch_id,
+                Trainee.first_name == first_name if not middle_name else f"{first_name} {middle_name}",
+                Trainee.last_name == last_name,
+            )
+            if birth_date:
+                existing_query = existing_query.filter(Trainee.birth_date == birth_date)
+            existing = existing_query.first()
         if existing:
             skipped_existing += 1
             continue
 
         trainee = Trainee(
             branch_id=branch_id,
+            source_row_number=source_row_number,
             first_name=first_name if not middle_name else f"{first_name} {middle_name}",
             last_name=last_name,
             birth_date=birth_date,
+            employment_center_encrypted=cipher.encrypt(employment_center),
+            contract_number=contract_number,
+            certificate_number=certificate_number,
+            certificate_issue_date=certificate_issue_date,
+            postal_index=postal_index,
+            address_encrypted=cipher.encrypt(address),
+            passport_series_encrypted=cipher.encrypt(passport_series),
+            passport_number_encrypted=cipher.encrypt(passport_number),
+            passport_issued_by_encrypted=cipher.encrypt(passport_issued_by),
+            passport_issued_date=passport_issued_date,
+            tax_id_encrypted=cipher.encrypt(tax_id),
             status=status,
+            phone_encrypted=cipher.encrypt(phone_value),
         )
         db.add(trainee)
         db.flush()
@@ -393,6 +454,7 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
         group_name = _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES))
         if group_code or group_name:
             code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
+            trainee.group_code = code
             cache_key = code.lower()
             group = group_cache.get(cache_key)
             if not group:

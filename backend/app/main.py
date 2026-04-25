@@ -29,6 +29,19 @@ def ensure_runtime_schema() -> None:
             ("teachers", "annual_load_hours", "FLOAT NOT NULL DEFAULT 0.0"),
             ("schedule_slots", "pair_number", "INTEGER NULL"),
             ("schedule_slots", "academic_hours", "FLOAT NOT NULL DEFAULT 2.0"),
+            ("trainees", "source_row_number", "INTEGER NULL"),
+            ("trainees", "employment_center_encrypted", "TEXT NULL"),
+            ("trainees", "contract_number", "VARCHAR(120) NULL"),
+            ("trainees", "certificate_number", "VARCHAR(120) NULL"),
+            ("trainees", "certificate_issue_date", "DATE NULL"),
+            ("trainees", "postal_index", "VARCHAR(20) NULL"),
+            ("trainees", "address_encrypted", "TEXT NULL"),
+            ("trainees", "passport_series_encrypted", "TEXT NULL"),
+            ("trainees", "passport_number_encrypted", "TEXT NULL"),
+            ("trainees", "passport_issued_by_encrypted", "TEXT NULL"),
+            ("trainees", "passport_issued_date", "DATE NULL"),
+            ("trainees", "tax_id_encrypted", "TEXT NULL"),
+            ("trainees", "group_code", "VARCHAR(50) NULL"),
         ]
         for table_name, column_name, ddl in column_plan:
             if table_name not in existing_tables:
