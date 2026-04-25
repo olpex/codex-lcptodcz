@@ -20,7 +20,6 @@
   "devDependencies": {
     "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.54.1",
-    "@rollup/rollup-win32-x64-msvc": "^4.60.2",
     "@types/node": "^22.18.0",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",
