@@ -44,7 +44,6 @@ function processContractsEmails() {
     let threadOk = true;
 
     messages.forEach((message) => {
-      const from = message.getFrom() || "";
       const attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true });
       attachments.forEach((att) => {
         const fileName = att.getName() || "";
@@ -94,7 +93,7 @@ function isContractsFilename_(name) {
   const normalized = (name || "").toLowerCase().replace(/_/g, " ");
   if (!normalized.includes("договор")) return false;
   // Matches 73-26, 73/26, 73–26, 73—26
-  return /\\d{1,4}\\s*[-/–—]\\s*\\d{1,4}/.test(normalized);
+  return /\d{1,4}\s*[-/–—]\s*\d{1,4}/.test(normalized);
 }
 
 function getExtension_(name) {
