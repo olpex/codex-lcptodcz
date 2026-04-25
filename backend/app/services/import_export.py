@@ -1,4 +1,5 @@
 import csv
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from docx import Document as DocxDocument
 from fpdf import FPDF
 from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import xlrd
 from xlrd.xldate import xldate_as_datetime
@@ -113,6 +115,7 @@ TRAINEE_HEADER_HINTS = (
     | GROUP_CODE_ALIASES
     | GROUP_NAME_ALIASES
 )
+GROUP_CONTEXT_PATTERN = re.compile(r"\bгрупа\s*([0-9a-zа-яіїєґ\/\-]+)\b", re.IGNORECASE)
 
 
 def _safe_pdf_text(value: str) -> str:
@@ -237,6 +240,7 @@ def _parse_tabular_content(file_path: str) -> dict[str, Any]:
         return {"rows": 0, "headers": [], "data": [], "sheet_name": sheet_name}
 
     header_idx = _find_header_row_index(rows)
+    group_context = _extract_group_context(rows, header_idx)
     headers = _make_unique_headers(rows[header_idx])
     data: list[dict[str, Any]] = []
     for raw_row in rows[header_idx + 1 :]:
@@ -252,7 +256,30 @@ def _parse_tabular_content(file_path: str) -> dict[str, Any]:
         "data": data,
         "sheet_name": sheet_name,
         "header_row_index": header_idx + 1,
+        **group_context,
     }
+
+
+def _extract_group_context(rows: list[list[Any]], header_idx: int) -> dict[str, Any]:
+    if not rows:
+        return {}
+
+    for row in reversed(rows[:header_idx]):
+        for cell in row:
+            raw_text = _normalize_text_value(cell)
+            if not raw_text:
+                continue
+            match = GROUP_CONTEXT_PATTERN.search(raw_text)
+            if not match:
+                continue
+            group_code = match.group(1).strip(" \"'«».,:;()[]{}")
+            group_name = raw_text[match.end() :].strip(" \"'«».,:;()[]{}-")
+            payload: dict[str, Any] = {"default_group_code": group_code}
+            if group_name:
+                payload["default_group_name"] = group_name
+            payload["group_context_source"] = raw_text
+            return payload
+    return {}
 
 
 def _parse_date_value(value: Any) -> date | None:
@@ -316,6 +343,82 @@ def _has_any_alias(headers: set[str], aliases: set[str]) -> bool:
     return False
 
 
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    return False
+
+
+def _set_if_missing(obj: Any, field: str, value: Any) -> bool:
+    if _is_missing(value):
+        return False
+    current = getattr(obj, field)
+    if not _is_missing(current):
+        return False
+    setattr(obj, field, value)
+    return True
+
+
+def _ensure_group_for_trainee(
+    db: Session,
+    trainee: Trainee,
+    branch_id: str,
+    group_cache: dict[str, Group],
+    group_code_raw: str | None,
+    group_name_raw: str | None,
+) -> tuple[int, bool]:
+    group_code = _normalize_text_value(group_code_raw)
+    group_name = _normalize_text_value(group_name_raw)
+    if not group_code and not group_name:
+        return 0, False
+
+    code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
+    trainee_group_changed = trainee.group_code != code
+    trainee.group_code = code
+
+    cache_key = code.lower()
+    group = group_cache.get(cache_key)
+    if not group:
+        group = (
+            db.query(Group)
+            .filter(Group.branch_id == branch_id, Group.code == code)
+            .first()
+        )
+        if not group:
+            group = Group(
+                branch_id=branch_id,
+                code=code,
+                name=(group_name or code)[:255],
+                status=GroupStatus.ACTIVE,
+                capacity=30,
+            )
+            db.add(group)
+            db.flush()
+        group_cache[cache_key] = group
+
+    membership_exists = (
+        db.query(GroupMembership)
+        .filter(
+            GroupMembership.group_id == group.id,
+            GroupMembership.trainee_id == trainee.id,
+        )
+        .first()
+    )
+    if membership_exists:
+        return 0, trainee_group_changed
+
+    db.add(
+        GroupMembership(
+            group_id=group.id,
+            trainee_id=trainee.id,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+    return 1, True
+
+
 def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     if doc_type == DocumentType.XLSX:
         return _parse_tabular_content(file_path)
@@ -354,10 +457,14 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
         return {"inserted": 0, "skipped_invalid": 0, "skipped_existing": 0, "note": "Структура не схожа на реєстр слухачів"}
 
     inserted = 0
+    updated_existing = 0
     skipped_invalid = 0
     skipped_existing = 0
     memberships_created = 0
     inserted_ids: list[int] = []
+
+    default_group_code = _normalize_text_value(parsed.get("default_group_code"))
+    default_group_name = _normalize_text_value(parsed.get("default_group_name"))
 
     group_cache: dict[str, Group] = {}
     for row in parsed.get("data", []):
@@ -401,6 +508,8 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
         phone_value = _normalize_text_value(_first_non_empty(keymap, PHONE_ALIASES)) or None
         status_value = _normalize_text_value(_first_non_empty(keymap, STATUS_ALIASES)).lower() or "active"
         status = status_value if status_value in {"active", "completed", "expelled"} else "active"
+        group_code = _normalize_text_value(_first_non_empty(keymap, GROUP_CODE_ALIASES)) or default_group_code
+        group_name = _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES)) or default_group_name
 
         existing = None
         if contract_number:
@@ -413,16 +522,62 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
                 .first()
             )
         if not existing:
+            normalized_first_name = first_name if not middle_name else f"{first_name} {middle_name}"
             existing_query = db.query(Trainee).filter(
                 Trainee.branch_id == branch_id,
-                Trainee.first_name == first_name if not middle_name else f"{first_name} {middle_name}",
+                Trainee.first_name == normalized_first_name,
                 Trainee.last_name == last_name,
             )
             if birth_date:
-                existing_query = existing_query.filter(Trainee.birth_date == birth_date)
+                existing_query = existing_query.filter(
+                    or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
+                )
             existing = existing_query.first()
+        if not existing and middle_name:
+            fallback_query = db.query(Trainee).filter(
+                Trainee.branch_id == branch_id,
+                Trainee.last_name == last_name,
+                Trainee.first_name.ilike(f"{first_name}%"),
+            )
+            if birth_date:
+                fallback_query = fallback_query.filter(
+                    or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
+                )
+            existing = fallback_query.first()
         if existing:
-            skipped_existing += 1
+            changed = False
+            changed = _set_if_missing(existing, "source_row_number", source_row_number) or changed
+            changed = _set_if_missing(existing, "birth_date", birth_date) or changed
+            changed = _set_if_missing(existing, "employment_center_encrypted", cipher.encrypt(employment_center)) or changed
+            changed = _set_if_missing(existing, "contract_number", contract_number) or changed
+            changed = _set_if_missing(existing, "certificate_number", certificate_number) or changed
+            changed = _set_if_missing(existing, "certificate_issue_date", certificate_issue_date) or changed
+            changed = _set_if_missing(existing, "postal_index", postal_index) or changed
+            changed = _set_if_missing(existing, "address_encrypted", cipher.encrypt(address)) or changed
+            changed = _set_if_missing(existing, "passport_series_encrypted", cipher.encrypt(passport_series)) or changed
+            changed = _set_if_missing(existing, "passport_number_encrypted", cipher.encrypt(passport_number)) or changed
+            changed = _set_if_missing(existing, "passport_issued_by_encrypted", cipher.encrypt(passport_issued_by)) or changed
+            changed = _set_if_missing(existing, "passport_issued_date", passport_issued_date) or changed
+            changed = _set_if_missing(existing, "tax_id_encrypted", cipher.encrypt(tax_id)) or changed
+            changed = _set_if_missing(existing, "phone_encrypted", cipher.encrypt(phone_value)) or changed
+            changed = _set_if_missing(existing, "status", status) or changed
+
+            memberships_added, group_changed = _ensure_group_for_trainee(
+                db,
+                existing,
+                branch_id,
+                group_cache,
+                group_code,
+                group_name,
+            )
+            memberships_created += memberships_added
+            changed = changed or group_changed
+
+            if changed:
+                db.add(existing)
+                updated_existing += 1
+            else:
+                skipped_existing += 1
             continue
 
         trainee = Trainee(
@@ -450,58 +605,28 @@ def try_import_trainees(db: Session, parsed: dict, branch_id: str) -> dict:
         inserted += 1
         inserted_ids.append(trainee.id)
 
-        group_code = _normalize_text_value(_first_non_empty(keymap, GROUP_CODE_ALIASES))
-        group_name = _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES))
-        if group_code or group_name:
-            code = (group_code or f"AUTO-{group_name[:32] or trainee.id}")[:50]
-            trainee.group_code = code
-            cache_key = code.lower()
-            group = group_cache.get(cache_key)
-            if not group:
-                group = (
-                    db.query(Group)
-                    .filter(Group.branch_id == branch_id, Group.code == code)
-                    .first()
-                )
-                if not group:
-                    group = Group(
-                        branch_id=branch_id,
-                        code=code,
-                        name=(group_name or code)[:255],
-                        status=GroupStatus.ACTIVE,
-                        capacity=30,
-                    )
-                    db.add(group)
-                    db.flush()
-                group_cache[cache_key] = group
-
-            membership_exists = (
-                db.query(GroupMembership)
-                .filter(
-                    GroupMembership.group_id == group.id,
-                    GroupMembership.trainee_id == trainee.id,
-                )
-                .first()
-            )
-            if not membership_exists:
-                db.add(
-                    GroupMembership(
-                        group_id=group.id,
-                        trainee_id=trainee.id,
-                        status=MembershipStatus.ACTIVE,
-                    )
-                )
-                memberships_created += 1
+        memberships_added, _ = _ensure_group_for_trainee(
+            db,
+            trainee,
+            branch_id,
+            group_cache,
+            group_code,
+            group_name,
+        )
+        memberships_created += memberships_added
 
     db.commit()
     return {
         "inserted": inserted,
+        "updated_existing": updated_existing,
         "inserted_ids": inserted_ids,
         "skipped_invalid": skipped_invalid,
         "skipped_existing": skipped_existing,
         "memberships_created": memberships_created,
-        "already_loaded": skipped_existing > 0,
+        "already_loaded": skipped_existing > 0 and inserted == 0 and updated_existing == 0,
         "sheet_name": parsed.get("sheet_name"),
+        "default_group_code": default_group_code or None,
+        "default_group_name": default_group_name or None,
         "preview": _tabular_preview(parsed.get("data", [])),
     }
 

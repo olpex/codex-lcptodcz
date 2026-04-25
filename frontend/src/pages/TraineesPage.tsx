@@ -78,6 +78,14 @@ function buildDisplayName(trainee: Trainee): string {
   return `${trainee.last_name} ${trainee.first_name}`.trim();
 }
 
+function resolveGroupBucket(groupCode: string | null | undefined): { key: string; label: string } {
+  const normalized = (groupCode || "").trim();
+  if (!normalized) {
+    return { key: "__no_group__", label: "Без групи" };
+  }
+  return { key: normalized, label: normalized };
+}
+
 function toEditForm(trainee: Trainee): TraineeEditForm {
   return {
     first_name: trainee.first_name || "",
@@ -115,6 +123,7 @@ export function TraineesPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [bulkGroupCode, setBulkGroupCode] = useState("");
@@ -142,6 +151,34 @@ export function TraineesPage() {
       }),
     [trainees]
   );
+
+  const groupedTrainees = useMemo(() => {
+    const buckets = new Map<string, { key: string; label: string; trainees: Trainee[] }>();
+    for (const trainee of sortedTrainees) {
+      const bucket = resolveGroupBucket(trainee.group_code);
+      const existing = buckets.get(bucket.key);
+      if (existing) {
+        existing.trainees.push(trainee);
+        continue;
+      }
+      buckets.set(bucket.key, { key: bucket.key, label: bucket.label, trainees: [trainee] });
+    }
+    const groups = [...buckets.values()];
+    groups.sort((a, b) => {
+      if (a.key === "__no_group__") return 1;
+      if (b.key === "__no_group__") return -1;
+      return a.label.localeCompare(b.label, "uk", { numeric: true, sensitivity: "base" });
+    });
+    return groups;
+  }, [sortedTrainees]);
+
+  const rowNumberById = useMemo(() => {
+    const entries: Record<number, number> = {};
+    sortedTrainees.forEach((trainee, idx) => {
+      entries[trainee.id] = trainee.source_row_number ?? idx + 1;
+    });
+    return entries;
+  }, [sortedTrainees]);
 
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, checked]) => checked).map(([id]) => Number(id)),
@@ -242,13 +279,23 @@ export function TraineesPage() {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const toggleGroupExpanded = (groupKey: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
+  };
+
   const expandAll = () => {
     const next: Record<number, boolean> = {};
     for (const trainee of sortedTrainees) next[trainee.id] = true;
     setExpanded(next);
+    const nextGroups: Record<string, boolean> = {};
+    for (const group of groupedTrainees) nextGroups[group.key] = true;
+    setExpandedGroups(nextGroups);
   };
 
-  const collapseAll = () => setExpanded({});
+  const collapseAll = () => {
+    setExpanded({});
+    setExpandedGroups({});
+  };
 
   const toggleSelected = (id: number) => {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -381,6 +428,8 @@ export function TraineesPage() {
     setEditingId(trainee.id);
     setEditForm(toEditForm(trainee));
     setEditErrors({});
+    const bucket = resolveGroupBucket(trainee.group_code);
+    setExpandedGroups((prev) => ({ ...prev, [bucket.key]: true }));
     setExpanded((prev) => ({ ...prev, [trainee.id]: true }));
   };
 
@@ -613,202 +662,229 @@ export function TraineesPage() {
         {isLoading && <p className="text-sm text-slate-600">Завантаження...</p>}
         {!isLoading && sortedTrainees.length === 0 && <p className="text-sm text-slate-600">Слухачі відсутні</p>}
         <div className="space-y-2">
-          {sortedTrainees.map((trainee, index) => {
-            const isExpanded = Boolean(expanded[trainee.id]);
-            const isEditing = editingId === trainee.id;
-            const number = trainee.source_row_number ?? index + 1;
-            const isSelected = Boolean(selected[trainee.id]);
+          {groupedTrainees.map((group) => {
+            const groupExpanded = Boolean(expandedGroups[group.key]);
             return (
-              <article key={trainee.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <div className="flex items-center gap-2 px-3 py-2">
-                  {canEdit && (
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelected(trainee.id)}
-                      aria-label={`Вибрати слухача ${buildDisplayName(trainee)}`}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between gap-3 text-left"
-                    onClick={() => toggleExpanded(trainee.id)}
-                    aria-expanded={isExpanded}
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {number}. {buildDisplayName(trainee)}
-                      </p>
-                      <p className="truncate text-xs text-slate-600">
-                        Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
-                      </p>
-                      <p className="truncate text-xs text-slate-600">
-                        Статус: {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}
-                      </p>
-                      {trainee.is_deleted && (
-                        <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
-                          В архіві
-                        </p>
-                      )}
-                    </div>
-                    <span className="text-xl leading-none text-slate-500">{isExpanded ? "−" : "+"}</span>
-                  </button>
-                </div>
-                {isExpanded && (
-                  <div className="space-y-3 border-t border-slate-200 px-4 py-3 text-sm">
-                    {!isEditing && (
-                      <div className="grid gap-2 md:grid-cols-2">
-                        <p><span className="font-semibold">Номер:</span> {number}</p>
-                        <p><span className="font-semibold">Прізвище, ім'я, по батькові:</span> {buildDisplayName(trainee)}</p>
-                        <p><span className="font-semibold">Центр зайнятості:</span> {trainee.employment_center || "—"}</p>
-                        <p><span className="font-semibold">Дата народження:</span> {formatDate(trainee.birth_date)}</p>
-                        <p><span className="font-semibold">№ Договору:</span> {trainee.contract_number || "—"}</p>
-                        <p><span className="font-semibold">Сертифікат:</span> {trainee.certificate_number || "—"}</p>
-                        <p><span className="font-semibold">Дата видачі сертифікату:</span> {formatDate(trainee.certificate_issue_date)}</p>
-                        <p><span className="font-semibold">Індекс:</span> {trainee.postal_index || "—"}</p>
-                        <p className="md:col-span-2"><span className="font-semibold">Адреса:</span> {trainee.address || "—"}</p>
-                        <p><span className="font-semibold">Паспорт: СЕРІЯ:</span> {trainee.passport_series || "—"}</p>
-                        <p><span className="font-semibold">Паспорт: №:</span> {trainee.passport_number || "—"}</p>
-                        <p className="md:col-span-2"><span className="font-semibold">Ким виданий:</span> {trainee.passport_issued_by || "—"}</p>
-                        <p><span className="font-semibold">Коли виданий:</span> {formatDate(trainee.passport_issued_date)}</p>
-                        <p><span className="font-semibold">Ідентифікаційний код:</span> {trainee.tax_id || "—"}</p>
-                        <p><span className="font-semibold">Телефон:</span> {trainee.phone || "—"}</p>
-                        <p><span className="font-semibold">Номер групи:</span> {trainee.group_code || "—"}</p>
-                        <p><span className="font-semibold">Статус:</span> {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}</p>
-                      </div>
-                    )}
+              <section key={group.key} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 bg-slate-50 px-3 py-2 text-left"
+                  onClick={() => toggleGroupExpanded(group.key)}
+                  aria-expanded={groupExpanded}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">
+                      Група: {group.label}
+                    </p>
+                    <p className="truncate text-xs text-slate-600">
+                      Слухачів: {group.trainees.length}
+                    </p>
+                  </div>
+                  <span className="text-xl leading-none text-slate-500">{groupExpanded ? "−" : "+"}</span>
+                </button>
+                {groupExpanded && (
+                  <div className="space-y-2 border-t border-slate-200 px-3 py-3">
+                    {group.trainees.map((trainee) => {
+                      const isExpanded = Boolean(expanded[trainee.id]);
+                      const isEditing = editingId === trainee.id;
+                      const number = rowNumberById[trainee.id] ?? trainee.id;
+                      const isSelected = Boolean(selected[trainee.id]);
+                      return (
+                        <article key={trainee.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                          <div className="flex items-center gap-2 px-3 py-2">
+                            {canEdit && (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelected(trainee.id)}
+                                aria-label={`Вибрати слухача ${buildDisplayName(trainee)}`}
+                              />
+                            )}
+                            <button
+                              type="button"
+                              className="flex w-full items-center justify-between gap-3 text-left"
+                              onClick={() => toggleExpanded(trainee.id)}
+                              aria-expanded={isExpanded}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-900">
+                                  {number}. {buildDisplayName(trainee)}
+                                </p>
+                                <p className="truncate text-xs text-slate-600">
+                                  Номер групи: {trainee.group_code || "—"} · № договору: {trainee.contract_number || "—"}
+                                </p>
+                                <p className="truncate text-xs text-slate-600">
+                                  Статус: {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}
+                                </p>
+                                {trainee.is_deleted && (
+                                  <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                                    В архіві
+                                  </p>
+                                )}
+                              </div>
+                              <span className="text-xl leading-none text-slate-500">{isExpanded ? "−" : "+"}</span>
+                            </button>
+                          </div>
+                          {isExpanded && (
+                            <div className="space-y-3 border-t border-slate-200 px-4 py-3 text-sm">
+                              {!isEditing && (
+                                <div className="grid gap-2 md:grid-cols-2">
+                                  <p><span className="font-semibold">Номер:</span> {number}</p>
+                                  <p><span className="font-semibold">Прізвище, ім'я, по батькові:</span> {buildDisplayName(trainee)}</p>
+                                  <p><span className="font-semibold">Центр зайнятості:</span> {trainee.employment_center || "—"}</p>
+                                  <p><span className="font-semibold">Дата народження:</span> {formatDate(trainee.birth_date)}</p>
+                                  <p><span className="font-semibold">№ Договору:</span> {trainee.contract_number || "—"}</p>
+                                  <p><span className="font-semibold">Сертифікат:</span> {trainee.certificate_number || "—"}</p>
+                                  <p><span className="font-semibold">Дата видачі сертифікату:</span> {formatDate(trainee.certificate_issue_date)}</p>
+                                  <p><span className="font-semibold">Індекс:</span> {trainee.postal_index || "—"}</p>
+                                  <p className="md:col-span-2"><span className="font-semibold">Адреса:</span> {trainee.address || "—"}</p>
+                                  <p><span className="font-semibold">Паспорт: СЕРІЯ:</span> {trainee.passport_series || "—"}</p>
+                                  <p><span className="font-semibold">Паспорт: №:</span> {trainee.passport_number || "—"}</p>
+                                  <p className="md:col-span-2"><span className="font-semibold">Ким виданий:</span> {trainee.passport_issued_by || "—"}</p>
+                                  <p><span className="font-semibold">Коли виданий:</span> {formatDate(trainee.passport_issued_date)}</p>
+                                  <p><span className="font-semibold">Ідентифікаційний код:</span> {trainee.tax_id || "—"}</p>
+                                  <p><span className="font-semibold">Телефон:</span> {trainee.phone || "—"}</p>
+                                  <p><span className="font-semibold">Номер групи:</span> {trainee.group_code || "—"}</p>
+                                  <p><span className="font-semibold">Статус:</span> {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}</p>
+                                </div>
+                              )}
 
-                    {canEdit && !isEditing && (
-                      <div>
-                        {!trainee.is_deleted ? (
-                          <button
-                            type="button"
-                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
-                            onClick={() => startEdit(trainee)}
-                          >
-                            Редагувати
-                          </button>
-                        ) : (
-                          <p className="text-xs font-semibold text-rose-700">Редагування недоступне для архівного запису</p>
-                        )}
-                      </div>
-                    )}
+                              {canEdit && !isEditing && (
+                                <div>
+                                  {!trainee.is_deleted ? (
+                                    <button
+                                      type="button"
+                                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
+                                      onClick={() => startEdit(trainee)}
+                                    >
+                                      Редагувати
+                                    </button>
+                                  ) : (
+                                    <p className="text-xs font-semibold text-rose-700">Редагування недоступне для архівного запису</p>
+                                  )}
+                                </div>
+                              )}
 
-                    {canEdit && isEditing && editForm && (
-                      <form className="grid gap-3 md:grid-cols-2" onSubmit={saveEdit}>
-                        <FormField label="Номер" errorText={editErrors.sourceRowNumber}>
-                          <input
-                            className={formControlClass}
-                            value={editForm.source_row_number}
-                            onChange={(event) => {
-                              updateEditField("source_row_number", event.target.value);
-                              setEditErrors((prev) => ({ ...prev, sourceRowNumber: undefined }));
-                            }}
-                          />
-                        </FormField>
-                        <FormField label="Номер групи">
-                          <input className={formControlClass} value={editForm.group_code} onChange={(event) => updateEditField("group_code", event.target.value)} />
-                        </FormField>
-                        <FormField label="Прізвище" required errorText={editErrors.lastName}>
-                          <input
-                            className={formControlClass}
-                            value={editForm.last_name}
-                            onChange={(event) => {
-                              updateEditField("last_name", event.target.value);
-                              setEditErrors((prev) => ({ ...prev, lastName: undefined }));
-                            }}
-                            required
-                          />
-                        </FormField>
-                        <FormField label="Ім'я та по батькові" required errorText={editErrors.firstName}>
-                          <input
-                            className={formControlClass}
-                            value={editForm.first_name}
-                            onChange={(event) => {
-                              updateEditField("first_name", event.target.value);
-                              setEditErrors((prev) => ({ ...prev, firstName: undefined }));
-                            }}
-                            required
-                          />
-                        </FormField>
-                        <FormField className="md:col-span-2" label="Центр зайнятості">
-                          <input className={formControlClass} value={editForm.employment_center} onChange={(event) => updateEditField("employment_center", event.target.value)} />
-                        </FormField>
-                        <FormField label="Дата народження">
-                          <input type="date" className={formControlClass} value={editForm.birth_date} onChange={(event) => updateEditField("birth_date", event.target.value)} />
-                        </FormField>
-                        <FormField label="№ Договору">
-                          <input className={formControlClass} value={editForm.contract_number} onChange={(event) => updateEditField("contract_number", event.target.value)} />
-                        </FormField>
-                        <FormField label="Сертифікат">
-                          <input className={formControlClass} value={editForm.certificate_number} onChange={(event) => updateEditField("certificate_number", event.target.value)} />
-                        </FormField>
-                        <FormField label="Дата видачі сертифікату">
-                          <input
-                            type="date"
-                            className={formControlClass}
-                            value={editForm.certificate_issue_date}
-                            onChange={(event) => updateEditField("certificate_issue_date", event.target.value)}
-                          />
-                        </FormField>
-                        <FormField label="Індекс">
-                          <input className={formControlClass} value={editForm.postal_index} onChange={(event) => updateEditField("postal_index", event.target.value)} />
-                        </FormField>
-                        <FormField className="md:col-span-2" label="Адреса">
-                          <input className={formControlClass} value={editForm.address} onChange={(event) => updateEditField("address", event.target.value)} />
-                        </FormField>
-                        <FormField label="Паспорт: СЕРІЯ">
-                          <input className={formControlClass} value={editForm.passport_series} onChange={(event) => updateEditField("passport_series", event.target.value)} />
-                        </FormField>
-                        <FormField label="Паспорт: №">
-                          <input className={formControlClass} value={editForm.passport_number} onChange={(event) => updateEditField("passport_number", event.target.value)} />
-                        </FormField>
-                        <FormField className="md:col-span-2" label="Ким виданий">
-                          <input className={formControlClass} value={editForm.passport_issued_by} onChange={(event) => updateEditField("passport_issued_by", event.target.value)} />
-                        </FormField>
-                        <FormField label="Коли виданий">
-                          <input
-                            type="date"
-                            className={formControlClass}
-                            value={editForm.passport_issued_date}
-                            onChange={(event) => updateEditField("passport_issued_date", event.target.value)}
-                          />
-                        </FormField>
-                        <FormField label="Ідентифікаційний код">
-                          <input className={formControlClass} value={editForm.tax_id} onChange={(event) => updateEditField("tax_id", event.target.value)} />
-                        </FormField>
-                        <FormField label="Телефон">
-                          <input className={formControlClass} value={editForm.phone} onChange={(event) => updateEditField("phone", event.target.value)} />
-                        </FormField>
-                        <FormField label="Статус">
-                          <select className={formControlClass} value={editForm.status} onChange={(event) => updateEditField("status", event.target.value)}>
-                            {TRAINEE_STATUS_OPTIONS.map((item) => (
-                              <option key={item.value} value={item.value}>
-                                {item.label}
-                              </option>
-                            ))}
-                          </select>
-                        </FormField>
-                        <div className="md:col-span-2 flex flex-wrap gap-2">
-                          <FormSubmitButton
-                            isLoading={isSavingEdit}
-                            idleLabel="Зберегти"
-                            loadingLabel="Збереження..."
-                            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
-                          />
-                          <button
-                            type="button"
-                            className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
-                            onClick={cancelEdit}
-                          >
-                            Скасувати
-                          </button>
-                        </div>
-                      </form>
-                    )}
+                              {canEdit && isEditing && editForm && (
+                                <form className="grid gap-3 md:grid-cols-2" onSubmit={saveEdit}>
+                                  <FormField label="Номер" errorText={editErrors.sourceRowNumber}>
+                                    <input
+                                      className={formControlClass}
+                                      value={editForm.source_row_number}
+                                      onChange={(event) => {
+                                        updateEditField("source_row_number", event.target.value);
+                                        setEditErrors((prev) => ({ ...prev, sourceRowNumber: undefined }));
+                                      }}
+                                    />
+                                  </FormField>
+                                  <FormField label="Номер групи">
+                                    <input className={formControlClass} value={editForm.group_code} onChange={(event) => updateEditField("group_code", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Прізвище" required errorText={editErrors.lastName}>
+                                    <input
+                                      className={formControlClass}
+                                      value={editForm.last_name}
+                                      onChange={(event) => {
+                                        updateEditField("last_name", event.target.value);
+                                        setEditErrors((prev) => ({ ...prev, lastName: undefined }));
+                                      }}
+                                      required
+                                    />
+                                  </FormField>
+                                  <FormField label="Ім'я та по батькові" required errorText={editErrors.firstName}>
+                                    <input
+                                      className={formControlClass}
+                                      value={editForm.first_name}
+                                      onChange={(event) => {
+                                        updateEditField("first_name", event.target.value);
+                                        setEditErrors((prev) => ({ ...prev, firstName: undefined }));
+                                      }}
+                                      required
+                                    />
+                                  </FormField>
+                                  <FormField className="md:col-span-2" label="Центр зайнятості">
+                                    <input className={formControlClass} value={editForm.employment_center} onChange={(event) => updateEditField("employment_center", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Дата народження">
+                                    <input type="date" className={formControlClass} value={editForm.birth_date} onChange={(event) => updateEditField("birth_date", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="№ Договору">
+                                    <input className={formControlClass} value={editForm.contract_number} onChange={(event) => updateEditField("contract_number", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Сертифікат">
+                                    <input className={formControlClass} value={editForm.certificate_number} onChange={(event) => updateEditField("certificate_number", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Дата видачі сертифікату">
+                                    <input
+                                      type="date"
+                                      className={formControlClass}
+                                      value={editForm.certificate_issue_date}
+                                      onChange={(event) => updateEditField("certificate_issue_date", event.target.value)}
+                                    />
+                                  </FormField>
+                                  <FormField label="Індекс">
+                                    <input className={formControlClass} value={editForm.postal_index} onChange={(event) => updateEditField("postal_index", event.target.value)} />
+                                  </FormField>
+                                  <FormField className="md:col-span-2" label="Адреса">
+                                    <input className={formControlClass} value={editForm.address} onChange={(event) => updateEditField("address", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Паспорт: СЕРІЯ">
+                                    <input className={formControlClass} value={editForm.passport_series} onChange={(event) => updateEditField("passport_series", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Паспорт: №">
+                                    <input className={formControlClass} value={editForm.passport_number} onChange={(event) => updateEditField("passport_number", event.target.value)} />
+                                  </FormField>
+                                  <FormField className="md:col-span-2" label="Ким виданий">
+                                    <input className={formControlClass} value={editForm.passport_issued_by} onChange={(event) => updateEditField("passport_issued_by", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Коли виданий">
+                                    <input
+                                      type="date"
+                                      className={formControlClass}
+                                      value={editForm.passport_issued_date}
+                                      onChange={(event) => updateEditField("passport_issued_date", event.target.value)}
+                                    />
+                                  </FormField>
+                                  <FormField label="Ідентифікаційний код">
+                                    <input className={formControlClass} value={editForm.tax_id} onChange={(event) => updateEditField("tax_id", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Телефон">
+                                    <input className={formControlClass} value={editForm.phone} onChange={(event) => updateEditField("phone", event.target.value)} />
+                                  </FormField>
+                                  <FormField label="Статус">
+                                    <select className={formControlClass} value={editForm.status} onChange={(event) => updateEditField("status", event.target.value)}>
+                                      {TRAINEE_STATUS_OPTIONS.map((item) => (
+                                        <option key={item.value} value={item.value}>
+                                          {item.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </FormField>
+                                  <div className="md:col-span-2 flex flex-wrap gap-2">
+                                    <FormSubmitButton
+                                      isLoading={isSavingEdit}
+                                      idleLabel="Зберегти"
+                                      loadingLabel="Збереження..."
+                                      className="rounded-lg bg-pine px-4 py-2 font-semibold text-white"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
+                                      onClick={cancelEdit}
+                                    >
+                                      Скасувати
+                                    </button>
+                                  </div>
+                                </form>
+                              )}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
-              </article>
+              </section>
             );
           })}
         </div>
