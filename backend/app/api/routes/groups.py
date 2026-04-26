@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Group, GroupMembership, MembershipStatus, RoleName, Trainee
+from app.models import Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Trainee
 from app.schemas.api import (
     EnrollRequest,
     ExpelRequest,
@@ -119,6 +119,23 @@ def delete_group(
             db.add(trainee)
         deleted_trainees_count = len(trainees_to_delete)
 
+    # Explicitly clean related rows to avoid FK violations in production DBs.
+    deleted_schedule_slots = (
+        db.query(ScheduleSlot)
+        .filter(ScheduleSlot.group_id == group_id)
+        .delete(synchronize_session=False)
+    )
+    deleted_memberships = (
+        db.query(GroupMembership)
+        .filter(GroupMembership.group_id == group_id)
+        .delete(synchronize_session=False)
+    )
+    deleted_performances = (
+        db.query(Performance)
+        .filter(Performance.group_id == group_id)
+        .delete(synchronize_session=False)
+    )
+
     db.delete(group)
     db.commit()
     write_audit(
@@ -127,7 +144,13 @@ def delete_group(
         action="group.delete",
         entity_type="group",
         entity_id=str(group_id),
-        details={"delete_trainees": delete_trainees, "deleted_trainees_count": deleted_trainees_count},
+        details={
+            "delete_trainees": delete_trainees,
+            "deleted_trainees_count": deleted_trainees_count,
+            "deleted_schedule_slots": deleted_schedule_slots,
+            "deleted_memberships": deleted_memberships,
+            "deleted_performances": deleted_performances,
+        },
     )
 
 

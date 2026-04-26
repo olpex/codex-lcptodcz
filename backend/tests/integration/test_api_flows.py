@@ -1,4 +1,6 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+
+from app.models import Group, GroupMembership, Performance, Room, ScheduleSlot, Subject, Teacher
 
 
 def test_auth_login_and_me(client):
@@ -195,3 +197,67 @@ def test_bulk_archive_restore_flow(client, auth_headers):
     assert len(restored_by_id) == 2
     assert all(row["is_deleted"] is False for row in restored_by_id.values())
     assert all(row["deleted_at"] is None for row in restored_by_id.values())
+
+
+def test_delete_group_cleans_related_rows(client, auth_headers, db_session):
+    trainee_response = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Оксана", "last_name": "Тест", "status": "active"},
+        headers=auth_headers,
+    )
+    assert trainee_response.status_code == 201
+    trainee_id = trainee_response.json()["id"]
+
+    group_response = client.post(
+        "/api/v1/groups",
+        json={"code": "GRP-DEL-001", "name": "Група на видалення", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    enroll_response = client.post(
+        f"/api/v1/groups/{group_id}/enroll",
+        json={"trainee_id": trainee_id},
+        headers=auth_headers,
+    )
+    assert enroll_response.status_code == 201
+
+    teacher = Teacher(branch_id="main", first_name="Тест", last_name="Викладач", hourly_rate=0.0, annual_load_hours=10.0)
+    subject = Subject(branch_id="main", name="Тестовий предмет", hours_total=12)
+    room = Room(branch_id="main", name="Аудиторія 999", capacity=20)
+    db_session.add_all([teacher, subject, room])
+    db_session.flush()
+
+    slot_start = datetime.now(timezone.utc).replace(microsecond=0)
+    db_session.add(
+        ScheduleSlot(
+            group_id=group_id,
+            teacher_id=teacher.id,
+            subject_id=subject.id,
+            room_id=room.id,
+            starts_at=slot_start,
+            ends_at=slot_start + timedelta(hours=2),
+            pair_number=1,
+            academic_hours=2.0,
+        )
+    )
+    db_session.add(
+        Performance(
+            branch_id="main",
+            trainee_id=trainee_id,
+            group_id=group_id,
+            progress_pct=10.0,
+            attendance_pct=90.0,
+            employment_flag=False,
+        )
+    )
+    db_session.commit()
+
+    delete_response = client.delete(f"/api/v1/groups/{group_id}?delete_trainees=true", headers=auth_headers)
+    assert delete_response.status_code == 204
+
+    assert db_session.get(Group, group_id) is None
+    assert db_session.query(GroupMembership).filter(GroupMembership.group_id == group_id).count() == 0
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group_id).count() == 0
+    assert db_session.query(Performance).filter(Performance.group_id == group_id).count() == 0
