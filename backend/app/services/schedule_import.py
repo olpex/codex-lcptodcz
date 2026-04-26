@@ -2,6 +2,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from docx import Document as DocxDocument
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Group, GroupStatus, Room, ScheduleSlot, Subject, Teacher
@@ -221,6 +222,72 @@ def parse_schedule_docx(file_path: str) -> dict:
     }
 
 
+def _merge_duplicate_teachers(db: Session, branch_id: str, teacher_ids: list[int]) -> int:
+    """Merge any duplicate Teacher records that share the same normalised last name.
+
+    When two imports run in close succession (e.g. concurrent Vercel lambdas) or
+    when the same surname appears in different cases (ALL-CAPS vs proper case),
+    the lookup may fail and create a second record.  This function:
+      1. Finds all teachers in *branch_id* whose normalised last_name collides
+         with any teacher in *teacher_ids*.
+      2. Keeps the record with the smallest id (the 'canonical' one).
+      3. Reassigns all ScheduleSlot rows from duplicates to the canonical record.
+      4. Deletes the duplicate Teacher rows.
+
+    Returns the number of duplicate records removed.
+    """
+    if not teacher_ids:
+        return 0
+
+    # Fetch the teachers we just touched in this import
+    touched = db.query(Teacher).filter(Teacher.id.in_(teacher_ids)).all()
+    merged = 0
+    seen_last: dict[str, Teacher] = {}  # normalised_last_name -> canonical teacher
+
+    for t in sorted(touched, key=lambda x: x.id):
+        key = (t.last_name or "").strip().lower()
+        if key in seen_last:
+            # This teacher is a duplicate of an already-seen canonical record
+            canonical = seen_last[key]
+            # Reassign all slots that belong to the duplicate
+            db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == t.id).update(
+                {"teacher_id": canonical.id}, synchronize_session=False
+            )
+            db.delete(t)
+            merged += 1
+        else:
+            seen_last[key] = t
+
+    # Also look for pre-existing duplicates across ALL teachers in the branch
+    # that share a normalised last_name with any teacher we just created/used.
+    for norm_last, canonical in list(seen_last.items()):
+        others = (
+            db.query(Teacher)
+            .filter(
+                Teacher.branch_id == branch_id,
+                func.lower(Teacher.last_name) == norm_last,
+                Teacher.id != canonical.id,
+            )
+            .all()
+        )
+        for dup in others:
+            # Prefer the teacher with a longer / more complete first name
+            dup_first = (dup.first_name or "").strip()
+            can_first = (canonical.first_name or "").strip()
+            if len(dup_first) > len(can_first) and "." not in dup_first:
+                canonical.first_name = dup_first
+                db.add(canonical)
+            db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == dup.id).update(
+                {"teacher_id": canonical.id}, synchronize_session=False
+            )
+            db.delete(dup)
+            merged += 1
+
+    if merged:
+        db.flush()
+    return merged
+
+
 def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user_id: int | None = None) -> dict:
     parsed = parse_schedule_docx(file_path)
     group_code = parsed["group_code"]
@@ -264,9 +331,14 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         teacher_full_name = _norm(entry["teacher_name"])
         if teacher_full_name not in teacher_cache:
             last_name, first_name = _split_teacher_name(teacher_full_name)
+            # Case-insensitive lookup — Ukrainian DOCX files often store surnames
+            # in ALL-CAPS while the DB may have them in proper case (or vice versa).
             existing_teachers = (
                 db.query(Teacher)
-                .filter(Teacher.branch_id == branch_id, Teacher.last_name == last_name)
+                .filter(
+                    Teacher.branch_id == branch_id,
+                    func.lower(Teacher.last_name) == last_name.lower(),
+                )
                 .all()
             )
             teacher = None
@@ -442,6 +514,11 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         display_name = candidate["teacher_name"] if len(candidate["teacher_name"]) > len(prev_name) else prev_name
         teacher_hours[tid] = (display_name, prev_hours + candidate["academic_hours"])
 
+    # Merge any duplicate teacher records that may have been created by concurrent
+    # imports or case-mismatch lookups (e.g. ALL-CAPS surname vs. proper case).
+    all_teacher_ids = list(teacher_id_cache.keys())
+    merged_count = _merge_duplicate_teachers(db, branch_id, all_teacher_ids)
+
     return {
         "import_kind": "schedule_docx",
         "group_code": group.code,
@@ -449,6 +526,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         "group_total_hours": parsed["group_total_hours"],
         "deleted_slots": deleted_count,
         "created_slots": len(candidates),
+        "merged_duplicate_teachers": merged_count,
         "teachers": len(teacher_id_cache),
         "subjects": len(subject_cache),
         "teacher_workload_hours": {name: round(hours, 2) for (_tid, (name, hours)) in teacher_hours.items()},
