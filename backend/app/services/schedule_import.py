@@ -254,31 +254,6 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         db.add(room)
         db.flush()
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Idempotent import: wipe existing slots for this group within the document
-    # date range before inserting fresh ones.  This guarantees that:
-    #   • re-importing the same file produces exactly the same result;
-    #   • slots that belonged to a previously-deleted teacher are never left as
-    #     orphaned rows blocking the new teacher from appearing on the calendar.
-    # ──────────────────────────────────────────────────────────────────────────
-    doc_start_date = date.fromisoformat(parsed["start_date"]) if parsed["start_date"] else None
-    doc_end_date   = date.fromisoformat(parsed["end_date"])   if parsed["end_date"]   else None
-
-    if doc_start_date and doc_end_date:
-        window_start = datetime.combine(doc_start_date, time.min, tzinfo=timezone.utc)
-        window_end   = datetime.combine(doc_end_date,   time.max, tzinfo=timezone.utc)
-        deleted_count = (
-            db.query(ScheduleSlot)
-            .filter(
-                ScheduleSlot.group_id == group.id,
-                ScheduleSlot.starts_at >= window_start,
-                ScheduleSlot.starts_at <= window_end,
-            )
-            .delete(synchronize_session=False)
-        )
-        db.flush()
-    else:
-        deleted_count = 0
 
     teacher_cache: dict[str, Teacher] = {}  # keyed by normalised name string from the document
     teacher_id_cache: dict[int, Teacher] = {}  # keyed by DB teacher.id for deduplication
@@ -371,6 +346,27 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
 
     min_start = min(item["starts_at"] for item in candidates)
     max_end = max(item["ends_at"] for item in candidates)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Idempotent import: wipe THIS group's slots in the exact date window that
+    # the document covers before inserting fresh ones.
+    # Using actual entry dates (not the unreliable header) guarantees the wipe
+    # always runs, even when the DOCX omits a date-range header line.
+    # This prevents hours from doubling on every re-import of the same file.
+    # ──────────────────────────────────────────────────────────────────────────
+    deleted_count = (
+        db.query(ScheduleSlot)
+        .filter(
+            ScheduleSlot.group_id == group.id,
+            ScheduleSlot.starts_at >= min_start,
+            ScheduleSlot.starts_at <= max_end,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.flush()
+
+    # Conflict detection: look for clashes with OTHER groups in the same window
+    # (run AFTER the wipe so this group's old slots don't create false alarms)
     existing_slots = (
         db.query(ScheduleSlot)
         .join(Group, Group.id == ScheduleSlot.group_id)
