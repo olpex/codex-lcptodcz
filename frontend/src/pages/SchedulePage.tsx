@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { DataTable, type DataTableColumn } from "../components/DataTable";
+
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
@@ -36,6 +36,17 @@ type ConflictAnalysis = {
   conflictSlotIds: Set<number>;
   conflictSlotCountByDate: Map<string, number>;
 };
+
+
+function shortName(name: string | undefined | null) {
+  if (!name) return "—";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  if (parts.length >= 3) {
+    return `${parts[0]} ${parts[1][0]}.${parts[2][0]}.`;
+  }
+  return `${parts[0]} ${parts[1][0]}.`;
+}
 
 function toSlotHours(slot: ScheduleSlot): number {
   if (typeof slot.academic_hours === "number" && Number.isFinite(slot.academic_hours)) {
@@ -170,67 +181,111 @@ export function SchedulePage() {
     }
   };
 
-  const slotColumns = useMemo<DataTableColumn<ScheduleSlot>[]>(
-    () => [
-      {
-        key: "conflict",
-        header: "⚠",
-        render: (slot) =>
-          conflictAnalysis.conflictSlotIds.has(slot.id) ? (
-            <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Конфлікт</span>
-          ) : (
-            "—"
-          ),
-        sortAccessor: (slot) => (conflictAnalysis.conflictSlotIds.has(slot.id) ? 1 : 0)
-      },
-      {
-        key: "pair",
-        header: "Пара",
-        render: (slot) => slot.pair_number ?? "—",
-        sortAccessor: (slot) => slot.pair_number ?? 999
-      },
-      {
-        key: "time",
-        header: "Час",
-        render: (slot) =>
-          `${new Date(slot.starts_at).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })} - ${new Date(
-            slot.ends_at
-          ).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })}`,
-        sortAccessor: (slot) => slot.starts_at
-      },
-      {
-        key: "group",
-        header: "Група",
-        render: (slot) => (slot.group_code ? `${slot.group_code} (${slot.group_name || ""})` : slot.group_id),
-        sortAccessor: (slot) => slot.group_code || slot.group_name || String(slot.group_id)
-      },
-      {
-        key: "subject",
-        header: "Предмет",
-        render: (slot) => slot.subject_name || slot.subject_id,
-        sortAccessor: (slot) => slot.subject_name || String(slot.subject_id)
-      },
-      {
-        key: "teacher",
-        header: "Викладач",
-        render: (slot) => slot.teacher_name || slot.teacher_id,
-        sortAccessor: (slot) => slot.teacher_name || String(slot.teacher_id)
-      },
-      {
-        key: "hours",
-        header: "Год.",
-        render: (slot) => slot.academic_hours ?? "—",
-        sortAccessor: (slot) => slot.academic_hours ?? 0
-      },
-      {
-        key: "room",
-        header: "Аудиторія",
-        render: (slot) => slot.room_name || slot.room_id,
-        sortAccessor: (slot) => slot.room_name || String(slot.room_id)
+  
+const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string; slots: ScheduleSlot[]; conflictAnalysis: ConflictAnalysis }) => {
+  const [yearStr, monthStr] = monthKey.split("-");
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10) - 1;
+
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay = new Date(year, month, 1).getDay();
+  const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+
+  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  const slotsByDay = useMemo(() => {
+    const map = new Map<number, ScheduleSlot[]>();
+    for (const slot of slots) {
+      const d = parseInt(slot.starts_at.slice(8, 10), 10);
+      const existing = map.get(d) || [];
+      existing.push(slot);
+      map.set(d, existing);
+    }
+    return map;
+  }, [slots]);
+
+  const conflictGroups = useMemo(() => {
+    const map = new Map<string, ScheduleSlot[]>();
+    for (const slot of slots) {
+      if (conflictAnalysis.conflictSlotIds.has(slot.id)) {
+        const key = `${slot.starts_at.slice(0, 10)} (Пара ${slot.pair_number ?? '-'})`;
+        const existing = map.get(key) || [];
+        existing.push(slot);
+        map.set(key, existing);
       }
-    ],
-    [conflictAnalysis]
+    }
+    return map;
+  }, [slots, conflictAnalysis]);
+
+  return (
+    <div className="flex flex-col">
+      {conflictGroups.size > 0 && (
+        <div className="p-4 bg-red-50 border-b border-red-100">
+          <h4 className="text-red-800 font-semibold mb-2">⚠ Накладки (співпадіння часу, викладача чи аудиторії):</h4>
+          <ul className="text-sm text-red-700 space-y-2">
+            {Array.from(conflictGroups.entries()).map(([key, cSlots]) => (
+              <li key={key}>
+                <strong>{key}:</strong>
+                <ul className="list-disc pl-5 mt-1 text-red-600">
+                  {cSlots.map(s => (
+                    <li key={s.id}>Група {s.group_code || s.group_id}, Викладач: {shortName(s.teacher_name)}, Ауд: {s.room_name || s.room_id || "—"}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="grid grid-cols-7 gap-px bg-slate-200">
+        {["Пн", "Вв", "Ср", "Чт", "Пт", "Сб", "Нд"].map(d => (
+          <div key={d} className="bg-slate-100 p-2 text-center text-xs font-semibold text-slate-600 uppercase">{d}</div>
+        ))}
+        {Array.from({ length: startOffset }).map((_, i) => (
+          <div key={`empty-${i}`} className="bg-slate-50 min-h-[120px]" />
+        ))}
+        {days.map(day => {
+          const daySlots = slotsByDay.get(day) || [];
+          daySlots.sort((a, b) => (a.pair_number ?? 999) - (b.pair_number ?? 999));
+          const hasConflicts = daySlots.some(s => conflictAnalysis.conflictSlotIds.has(s.id));
+          
+          return (
+            <div key={day} className={`bg-white p-2 min-h-[120px] relative group hover:bg-slate-50 transition-colors ${hasConflicts ? 'bg-red-50/30' : ''}`}>
+              <span className={`text-sm font-semibold ${hasConflicts ? 'text-red-600' : 'text-slate-700'}`}>{day}</span>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {daySlots.map(slot => {
+                  const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
+                  return (
+                    <div 
+                      key={slot.id} 
+                      className={`w-3 h-3 rounded-full ${isConflict ? 'bg-red-500 shadow-[0_0_0_2px_rgba(239,68,68,0.2)]' : 'bg-pine'}`}
+                    />
+                  );
+                })}
+              </div>
+              
+              {daySlots.length > 0 && (
+                <div className="hidden group-hover:block absolute z-20 bottom-[calc(100%-10px)] left-1/2 -translate-x-1/2 mb-2 w-max max-w-[280px] p-2.5 bg-slate-800 text-white text-xs rounded shadow-xl">
+                  <div className="font-bold mb-1.5 border-b border-slate-600 pb-1.5">Заняття ({day} число)</div>
+                  {daySlots.map(slot => {
+                    const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
+                    return (
+                      <div key={slot.id} className={`mb-1.5 last:mb-0 ${isConflict ? 'text-red-300 font-medium' : ''}`}>
+                        <span className="opacity-75">Пара {slot.pair_number ?? '-'}:</span> {slot.group_code || slot.group_id} — {shortName(slot.teacher_name)}
+                        {isConflict && " ⚠️ Накладка"}
+                      </div>
+                    );
+                  })}
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
+};
+
 
   useEffect(() => {
     fetchSchedule();
@@ -239,26 +294,24 @@ export function SchedulePage() {
   const groupedSchedule = useMemo(() => {
     const grouped = new Map<string, ScheduleSlot[]>();
     for (const slot of slots) {
-      const dateKey = slot.starts_at.slice(0, 10);
-      grouped.set(dateKey, [...(grouped.get(dateKey) || []), slot]);
+      const monthKey = slot.starts_at.slice(0, 7);
+      grouped.set(monthKey, [...(grouped.get(monthKey) || []), slot]);
     }
 
     const result: GroupedSchedule[] = [];
-    for (const [dateKey, daySlots] of grouped.entries()) {
+    for (const [monthKey, daySlots] of grouped.entries()) {
       const sortedSlots = [...daySlots].sort((a, b) => {
         const pairA = a.pair_number ?? 999;
         const pairB = b.pair_number ?? 999;
         if (pairA !== pairB) return pairA - pairB;
         return a.starts_at.localeCompare(b.starts_at);
       });
-      const label = new Date(`${dateKey}T00:00:00Z`).toLocaleDateString("uk-UA", {
-        weekday: "long",
-        day: "2-digit",
-        month: "2-digit",
+      const label = new Date(`${monthKey}-01T00:00:00Z`).toLocaleDateString("uk-UA", {
+        month: "long",
         year: "numeric"
       });
       const totalHours = sortedSlots.reduce((acc, slot) => acc + (slot.academic_hours ?? 0), 0);
-      result.push({ dateKey, label, slots: sortedSlots, totalHours: Number(totalHours.toFixed(2)) });
+      result.push({ dateKey: monthKey, label, slots: sortedSlots, totalHours: Number(totalHours.toFixed(2)) });
     }
 
     return result.sort((a, b) =>
@@ -508,20 +561,7 @@ export function SchedulePage() {
 
                 {isExpanded && (
                   <div id={`schedule-day-${group.dateKey}`} className="border-t border-slate-200 px-3 py-2">
-                    <DataTable
-                      data={group.slots}
-                      columns={slotColumns}
-                      rowKey={(slot) => slot.id}
-                      rowClassName={(slot) =>
-                        conflictAnalysis.conflictSlotIds.has(slot.id) ? "bg-amber-50/70" : undefined
-                      }
-                      caption={`Розклад на ${group.label}`}
-                      ariaLabel={`Таблиця розкладу на ${group.label}`}
-                      isLoading={isLoading}
-                      emptyText="Занять за цю дату немає"
-                      initialPageSize={20}
-                      pageSizeOptions={[10, 20, 50]}
-                    />
+                    <MonthCalendar monthKey={group.dateKey} slots={group.slots} conflictAnalysis={conflictAnalysis} />
                   </div>
                 )}
               </div>
