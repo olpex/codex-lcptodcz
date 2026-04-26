@@ -139,19 +139,31 @@ def gmail_api_contracts_webhook(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл порожній")
 
     doc_type = detect_document_type(filename)
-    if doc_type.value != "xlsx":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx вкладення")
+    if doc_type.value not in {"xlsx", "docx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx (договори) або .docx (розклади)")
 
-    if not is_contract_attachment_filename(filename):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
-        )
+    group_code_hint = None
+    mime_type = "application/octet-stream"
+
+    if doc_type.value == "xlsx":
+        if not is_contract_attachment_filename(filename):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
+            )
+        group_code_hint = extract_contract_group_code(filename)
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif doc_type.value == "docx":
+        if "розклад" not in filename.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Назва файлу не відповідає шаблону розкладів (ключове слово 'розклад')",
+            )
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     sender_email = settings.imap_contract_sender_email
     sender_name = settings.imap_contract_sender_name
 
-    group_code_hint = extract_contract_group_code(filename)
     branch_id = settings.imap_branch_id or "main"
 
     idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
@@ -173,7 +185,7 @@ def gmail_api_contracts_webhook(
         file_path=str(out_path),
         file_type=doc_type,
         source="mail_gmail_api",
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime_type=mime_type,
         hash_sha256=sha256,
     )
     db.add(document)
@@ -265,15 +277,27 @@ def google_mail_contracts_webhook(
 
     filename = file.filename or "attachment.xlsx"
     doc_type = detect_document_type(filename)
-    if doc_type.value != "xlsx":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx вкладення")
+    if doc_type.value not in {"xlsx", "docx"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx (договори) або .docx (розклади)")
 
-    if not is_contract_attachment_filename(filename):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
-        )
-    group_code_hint = extract_contract_group_code(filename)
+    group_code_hint = None
+    mime_type = "application/octet-stream"
+
+    if doc_type.value == "xlsx":
+        if not is_contract_attachment_filename(filename):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
+            )
+        group_code_hint = extract_contract_group_code(filename)
+        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif doc_type.value == "docx":
+        if "розклад" not in filename.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Назва файлу не відповідає шаблону розкладів (ключове слово 'розклад')",
+            )
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     branch_id = settings.imap_branch_id or "main"
     safe_message_id = (message_id or f"google-script-{uuid4().hex}").strip()[:255]
