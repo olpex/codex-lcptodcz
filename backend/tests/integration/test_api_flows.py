@@ -322,3 +322,36 @@ def test_clear_orphan_group_codes_endpoint(client, auth_headers):
     valid_row = next(item for item in rows if item["id"] == valid_trainee.json()["id"])
     assert orphan_row["group_code"] is None
     assert valid_row["group_code"] == "GRP-VALID-001"
+
+
+def test_archive_unassigned_group_trainees_endpoint(client, auth_headers):
+    no_group_one = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "А", "last_name": "БезГрупи1", "status": "active"},
+        headers=auth_headers,
+    )
+    no_group_two = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Б", "last_name": "БезГрупи2", "status": "active", "group_code": ""},
+        headers=auth_headers,
+    )
+    with_group = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "В", "last_name": "ЗГрупою", "status": "active", "group_code": "73-26"},
+        headers=auth_headers,
+    )
+    assert no_group_one.status_code == 201
+    assert no_group_two.status_code == 201
+    assert with_group.status_code == 201
+
+    archive_response = client.post("/api/v1/trainees/bulk/archive-unassigned-group", headers=auth_headers)
+    assert archive_response.status_code == 200
+    payload = archive_response.json()
+    assert payload["deleted_count"] == 2
+
+    active_rows = client.get("/api/v1/trainees", headers=auth_headers)
+    assert active_rows.status_code == 200
+    active_ids = {item["id"] for item in active_rows.json()}
+    assert no_group_one.json()["id"] not in active_ids
+    assert no_group_two.json()["id"] not in active_ids
+    assert with_group.json()["id"] in active_ids

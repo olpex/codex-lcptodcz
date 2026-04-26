@@ -86,7 +86,7 @@ function buildDisplayName(trainee: Trainee): string {
 function resolveGroupBucket(groupCode: string | null | undefined): { key: string; label: string } {
   const normalized = (groupCode || "").trim();
   if (!normalized) {
-    return { key: "__no_group__", label: "Без групи" };
+    return { key: "__no_group__", label: "Без призначеної групи" };
   }
   return { key: normalized, label: normalized };
 }
@@ -461,13 +461,36 @@ export function TraineesPage() {
 
   const runClearOrphanGroupCodes = async () => {
     if (!canEdit) return;
+    const unassignedCount = trainees.filter((item) => !item.is_deleted && !(item.group_code || "").trim()).length;
     setIsBulkUpdating(true);
     try {
       const response = await request<ClearOrphanGroupsResponse>("/trainees/bulk/clear-orphan-group-codes", {
         method: "POST"
       });
       await fetchTrainees(search);
-      showSuccess(`Очищено невідомі групи у слухачів: ${response.cleared_count}`);
+      if (response.cleared_count > 0) {
+        showSuccess(`Очищено невідомі групи у слухачів: ${response.cleared_count}`);
+      } else if (unassignedCount > 0) {
+        showSuccess(`Невідомих кодів груп не знайдено. Слухачів без призначеної групи: ${unassignedCount}`);
+      } else {
+        showSuccess("Невідомих кодів груп не знайдено");
+      }
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  const runArchiveUnassignedGroup = async () => {
+    if (!canEdit) return;
+    setIsBulkUpdating(true);
+    try {
+      const response = await request<BulkDeleteResponse>("/trainees/bulk/archive-unassigned-group", {
+        method: "POST"
+      });
+      await fetchTrainees(search);
+      showSuccess(`Архівовано слухачів без призначеної групи: ${response.deleted_count}`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -685,6 +708,13 @@ export function TraineesPage() {
                 >
                   Очистити невідомі групи
                 </button>
+                <button
+                  className="rounded-lg bg-rose-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={runArchiveUnassignedGroup}
+                  disabled={isBulkUpdating}
+                >
+                  Архівувати без групи
+                </button>
                 <select
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   value={bulkStatus}
@@ -736,7 +766,7 @@ export function TraineesPage() {
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-slate-900">
-                      Група: {group.label}
+                      {group.key === "__no_group__" ? group.label : `Група: ${group.label}`}
                     </p>
                     <p className="truncate text-xs text-slate-600">
                       Слухачів: {group.trainees.length}

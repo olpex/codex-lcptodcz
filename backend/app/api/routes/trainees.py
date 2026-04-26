@@ -244,6 +244,48 @@ def bulk_delete_trainees(
 
 
 @router.post(
+    "/bulk/archive-unassigned-group",
+    response_model=TraineeBulkDeleteResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_archive_unassigned_group_trainees(
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkDeleteResponse:
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(
+            Trainee.is_deleted.is_(False),
+            or_(Trainee.group_code.is_(None), Trainee.group_code == ""),
+        )
+        .all()
+    )
+    target_ids: list[int] = []
+    deleted_count = 0
+    timestamp = datetime.now(timezone.utc)
+    for trainee in target_rows:
+        # Guard against whitespace-only values that may bypass SQL equality checks.
+        if (trainee.group_code or "").strip():
+            continue
+        trainee.is_deleted = True
+        trainee.deleted_at = timestamp
+        db.add(trainee)
+        target_ids.append(trainee.id)
+        deleted_count += 1
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_archive_unassigned_group",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in target_ids[:20]),
+        details={"deleted_count": deleted_count, "mode": "soft_delete_unassigned_group"},
+    )
+    return TraineeBulkDeleteResponse(deleted_count=deleted_count, deleted_ids=target_ids)
+
+
+@router.post(
     "/bulk/restore",
     response_model=TraineeBulkRestoreResponse,
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
