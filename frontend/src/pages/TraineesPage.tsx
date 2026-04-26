@@ -51,6 +51,11 @@ type BulkRestoreResponse = {
   restored_ids: number[];
 };
 
+type ClearOrphanGroupsResponse = {
+  cleared_count: number;
+  cleared_ids: number[];
+};
+
 const TRAINEE_STATUS_OPTIONS = [
   { value: "active", label: "Активний" },
   { value: "completed", label: "Завершив навчання" },
@@ -454,6 +459,22 @@ export function TraineesPage() {
     }
   };
 
+  const runClearOrphanGroupCodes = async () => {
+    if (!canEdit) return;
+    setIsBulkUpdating(true);
+    try {
+      const response = await request<ClearOrphanGroupsResponse>("/trainees/bulk/clear-orphan-group-codes", {
+        method: "POST"
+      });
+      await fetchTrainees(search);
+      showSuccess(`Очищено невідомі групи у слухачів: ${response.cleared_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
   const startEdit = (trainee: Trainee) => {
     if (trainee.is_deleted) {
       showError("Слухач в архіві. Спочатку відновіть запис");
@@ -656,6 +677,13 @@ export function TraineesPage() {
                   disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Очистити групу
+                </button>
+                <button
+                  className="rounded-lg bg-orange-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={runClearOrphanGroupCodes}
+                  disabled={isBulkUpdating}
+                >
+                  Очистити невідомі групи
                 </button>
                 <select
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm"

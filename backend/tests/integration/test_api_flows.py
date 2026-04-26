@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
-from app.models import Group, GroupMembership, Performance, Room, ScheduleSlot, Subject, Teacher
+from app.models import Group, GroupMembership, Performance, Room, ScheduleSlot, Subject, Teacher, Trainee
 
 
 def test_auth_login_and_me(client):
@@ -261,3 +261,64 @@ def test_delete_group_cleans_related_rows(client, auth_headers, db_session):
     assert db_session.query(GroupMembership).filter(GroupMembership.group_id == group_id).count() == 0
     assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group_id).count() == 0
     assert db_session.query(Performance).filter(Performance.group_id == group_id).count() == 0
+
+
+def test_delete_group_clears_trainee_group_code_when_trainees_kept(client, auth_headers, db_session):
+    trainee_response = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Іван", "last_name": "Код", "status": "active", "group_code": "GRP-ORPH-001"},
+        headers=auth_headers,
+    )
+    assert trainee_response.status_code == 201
+    trainee_id = trainee_response.json()["id"]
+
+    group_response = client.post(
+        "/api/v1/groups",
+        json={"code": "GRP-ORPH-001", "name": "Група для очищення коду", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    delete_response = client.delete(f"/api/v1/groups/{group_id}", headers=auth_headers)
+    assert delete_response.status_code == 204
+
+    trainee = db_session.get(Trainee, trainee_id)
+    assert trainee is not None
+    assert trainee.is_deleted is False
+    assert trainee.group_code is None
+
+
+def test_clear_orphan_group_codes_endpoint(client, auth_headers):
+    valid_group_response = client.post(
+        "/api/v1/groups",
+        json={"code": "GRP-VALID-001", "name": "Валідна група", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    assert valid_group_response.status_code == 201
+
+    orphan_trainee = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Олена", "last_name": "Сирота", "status": "active", "group_code": "NO-SUCH-GROUP"},
+        headers=auth_headers,
+    )
+    valid_trainee = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Марія", "last_name": "Валідна", "status": "active", "group_code": "GRP-VALID-001"},
+        headers=auth_headers,
+    )
+    assert orphan_trainee.status_code == 201
+    assert valid_trainee.status_code == 201
+
+    cleanup_response = client.post("/api/v1/trainees/bulk/clear-orphan-group-codes", headers=auth_headers)
+    assert cleanup_response.status_code == 200
+    payload = cleanup_response.json()
+    assert payload["cleared_count"] == 1
+
+    trainees_response = client.get("/api/v1/trainees", headers=auth_headers)
+    assert trainees_response.status_code == 200
+    rows = trainees_response.json()
+    orphan_row = next(item for item in rows if item["id"] == orphan_trainee.json()["id"])
+    valid_row = next(item for item in rows if item["id"] == valid_trainee.json()["id"])
+    assert orphan_row["group_code"] is None
+    assert valid_row["group_code"] == "GRP-VALID-001"

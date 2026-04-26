@@ -172,6 +172,11 @@ class TraineeBulkRestoreResponse(BaseModel):
     restored_ids: list[int]
 
 
+class TraineeClearOrphanGroupsResponse(BaseModel):
+    cleared_count: int
+    cleared_ids: list[int]
+
+
 class GroupBase(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)

@@ -5,7 +5,7 @@ from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
-from app.models import RoleName, Trainee
+from app.models import Group, RoleName, Trainee
 from app.schemas.api import (
     TraineeBulkDeleteRequest,
     TraineeBulkDeleteResponse,
@@ -15,6 +15,7 @@ from app.schemas.api import (
     TraineeBulkRestoreResponse,
     TraineeBulkStatusUpdateRequest,
     TraineeBulkStatusUpdateResponse,
+    TraineeClearOrphanGroupsResponse,
     TraineeCreate,
     TraineeResponse,
     TraineeUpdate,
@@ -277,6 +278,50 @@ def bulk_restore_trainees(
         details={"restored_count": len(restored_ids)},
     )
     return TraineeBulkRestoreResponse(restored_count=len(restored_ids), restored_ids=restored_ids)
+
+
+@router.post(
+    "/bulk/clear-orphan-group-codes",
+    response_model=TraineeClearOrphanGroupsResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def clear_orphan_group_codes(
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeClearOrphanGroupsResponse:
+    valid_group_codes = {
+        item.code.strip()
+        for item in apply_branch_scope(db.query(Group), Group, current_user.branch_id).all()
+        if (item.code or "").strip()
+    }
+    rows_with_group = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.group_code.is_not(None))
+        .all()
+    )
+    cleared_ids: list[int] = []
+    for trainee in rows_with_group:
+        normalized = (trainee.group_code or "").strip()
+        if not normalized:
+            trainee.group_code = None
+            db.add(trainee)
+            cleared_ids.append(trainee.id)
+            continue
+        if normalized not in valid_group_codes:
+            trainee.group_code = None
+            db.add(trainee)
+            cleared_ids.append(trainee.id)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.clear_orphan_group_codes",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in cleared_ids[:20]),
+        details={"cleared_count": len(cleared_ids)},
+    )
+    return TraineeClearOrphanGroupsResponse(cleared_count=len(cleared_ids), cleared_ids=cleared_ids)
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)

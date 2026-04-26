@@ -102,6 +102,7 @@ def delete_group(
     ensure_same_branch(current_user, group, "Групу")
 
     deleted_trainees_count = 0
+    cleared_trainee_group_codes = 0
     if delete_trainees and group.code:
         now = datetime.now(timezone.utc)
         trainees_to_delete = (
@@ -118,6 +119,15 @@ def delete_group(
             trainee.deleted_at = now
             db.add(trainee)
         deleted_trainees_count = len(trainees_to_delete)
+    if group.code:
+        cleared_trainee_group_codes = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == group.branch_id,
+                Trainee.group_code == group.code,
+            )
+            .update({"group_code": None}, synchronize_session=False)
+        )
 
     # Explicitly clean related rows to avoid FK violations in production DBs.
     deleted_schedule_slots = (
@@ -147,6 +157,7 @@ def delete_group(
         details={
             "delete_trainees": delete_trainees,
             "deleted_trainees_count": deleted_trainees_count,
+            "cleared_trainee_group_codes": cleared_trainee_group_codes,
             "deleted_schedule_slots": deleted_schedule_slots,
             "deleted_memberships": deleted_memberships,
             "deleted_performances": deleted_performances,
