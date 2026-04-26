@@ -6,7 +6,7 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import type { Trainee } from "../types/api";
+import type { Trainee, Group } from "../types/api";
 
 type TraineeEditForm = {
   first_name: string;
@@ -112,7 +112,10 @@ function toEditForm(trainee: Trainee): TraineeEditForm {
 export function TraineesPage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
+  
   const [trainees, setTrainees] = useState<Trainee[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
@@ -206,15 +209,21 @@ export function TraineesPage() {
   const fetchTrainees = async (term = "") => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (term.trim()) {
-        params.set("search", term.trim());
-      }
-      if (showArchived) {
-        params.set("include_deleted", "true");
-      }
-      const query = params.toString() ? `?${params.toString()}` : "";
-      const data = await request<Trainee[]>(`/trainees${query}`);
+      const [groupsData, data] = await Promise.all([
+        request<Group[]>("/groups"),
+        (async () => {
+          const params = new URLSearchParams();
+          if (term.trim()) {
+            params.set("search", term.trim());
+          }
+          if (showArchived) {
+            params.set("include_deleted", "true");
+          }
+          const query = params.toString() ? `?${params.toString()}` : "";
+          return request<Trainee[]>(`/trainees${query}`);
+        })()
+      ]);
+      setGroups(groupsData);
       setTrainees(data);
       setSelected((prev) => {
         const next: Record<number, boolean> = {};
@@ -236,6 +245,31 @@ export function TraineesPage() {
   useEffect(() => {
     fetchTrainees(search);
   }, [showArchived]);
+
+  
+  const [groupToDelete, setGroupToDelete] = useState<Group | null>(null);
+
+  const confirmDeleteGroup = async () => {
+    if (!groupToDelete) return;
+    try {
+      await request(`/groups/${groupToDelete.id}?delete_trainees=true`, { method: "DELETE" });
+      setGroupToDelete(null);
+      showSuccess("Групу та її слухачів успішно видалено");
+      fetchTrainees(search);
+    } catch (error) {
+      showError((error as Error).message);
+    }
+  };
+
+  const handleGroupDeleteClick = (groupCode: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const groupObj = groups.find(g => g.code === groupCode);
+    if (groupObj) {
+      setGroupToDelete(groupObj);
+    } else {
+      showError("Групу не знайдено в базі даних (можливо, це віртуальна група).");
+    }
+  };
 
   const createTrainee = async (event: FormEvent) => {
     event.preventDefault();
