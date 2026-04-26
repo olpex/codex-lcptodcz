@@ -1,121 +1,137 @@
-# Google Apps Script: автоімпорт договорів з Gmail
+# Google Apps Script: автоімпорт договорів та розкладів з Gmail
 
-Цей сценарій потрібен, якщо IMAP для Gmail недоступний (немає `App Password`).
+Цей сценарій обробляє **одразу два типи** вкладень з одного листа:
 
-## 1) Підготуйте backend
+| Тип файлу | Ключове слово в назві | Endpoint |
+|---|---|---|
+| Договори (`.xlsx`) | `договори` | `/mail/gmail-api-webhook/contracts` |
+| Розклади (`.docx`) | `розклад` | `/mail/gmail-api-webhook/contracts` |
 
-У Vercel задайте:
+> Один запит = один файл. Якщо в листі 3 вкладення — скрипт надсилає 3 окремих HTTP-запити.
 
-- `MAIL_WEBHOOK_SECRET=<довгий випадковий секрет>`
-- `IMAP_CONTRACT_SENDER_NAME=Львівський центр ПТО ДСЗ`
-- `IMAP_CONTRACT_SENDER_EMAIL=lcptodcz@gmail.com`
-- `IMAP_CONTRACT_ATTACHMENT_PREFIX=Договори`
-- `IMAP_CONTRACT_UPDATE_MODE=overwrite`
+## 1) Налаштуйте backend (Vercel)
 
-Endpoint:
+| Змінна | Значення |
+|---|---|
+| `MAIL_WEBHOOK_SECRET` | довгий випадковий секрет |
+| `IMAP_CONTRACT_SENDER_NAME` | `Львівський центр ПТО ДСЗ` |
+| `IMAP_CONTRACT_SENDER_EMAIL` | `lcptodcz@gmail.com` |
+| `IMAP_CONTRACT_ATTACHMENT_PREFIX` | `Договори` |
+| `IMAP_CONTRACT_UPDATE_MODE` | `overwrite` |
 
-- `POST https://<your-domain>/api/api/v1/mail/google-webhook/contracts`
-
-## 2) Додайте Apps Script
+## 2) Apps Script (повна версія)
 
 1. В акаунті `lcptodcz.audyt@gmail.com` відкрийте [script.new](https://script.new).
-2. Вставте код нижче.
-3. У `PROJECT_BASE_URL` та `WEBHOOK_SECRET` вкажіть ваші значення.
+2. Замініть весь вміст на код нижче.
+3. Вкажіть свої значення у `PROJECT_BASE_URL` та `WEBHOOK_SECRET`.
 4. Збережіть проект.
-5. Запустіть `processContractsEmails()` вручну 1 раз (надайте дозволи).
-6. Створіть тригер: `processContractsEmails`, time-driven, кожні 5 хвилин.
+5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
+6. Створіть тригер: `processIncomingEmails`, time-driven, кожні 5 хвилин.
 
 ```javascript
-const PROJECT_BASE_URL = "https://codex-lcptodcz.vercel.app";
-const WEBHOOK_SECRET = "REPLACE_WITH_MAIL_WEBHOOK_SECRET";
-const SENDER_EMAIL = "lcptodcz@gmail.com";
-const SENDER_NAME = "Львівський центр ПТО ДСЗ";
-const LABEL_PROCESSED = "suptc/processed";
-const LABEL_FAILED = "suptc/failed";
+// ─── Налаштування ───────────────────────────────────────────────────────────
+const PROJECT_BASE_URL  = "https://codex-lcptodcz.vercel.app";
+const WEBHOOK_SECRET    = "olppara13091972olppara13091972"; // ← ваш секрет
+const SENDER_EMAIL      = "lcptodcz@gmail.com";
+const LABEL_PROCESSED   = "suptc/processed";
+const LABEL_FAILED      = "suptc/failed";
+// ────────────────────────────────────────────────────────────────────────────
 
-function processContractsEmails() {
+function processIncomingEmails() {
   const query = 'in:inbox is:unread has:attachment from:' + SENDER_EMAIL;
   const threads = GmailApp.search(query, 0, 30);
-  const okLabel = getOrCreateLabel_(LABEL_PROCESSED);
+  const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
   const failLabel = getOrCreateLabel_(LABEL_FAILED);
 
-  threads.forEach((thread) => {
+  threads.forEach(function(thread) {
     const messages = thread.getMessages();
     let threadOk = true;
     let hasMatchedAttachment = false;
 
-    messages.forEach((message) => {
-      const attachments = message.getAttachments({ includeInlineImages: false, includeAttachments: true });
-      attachments.forEach((att) => {
-        const fileName = (att.getName() || "").trim();
-        if (!isContractsFilename_(fileName)) return;
+    messages.forEach(function(message) {
+      const attachments = message.getAttachments({
+        includeInlineImages: false,
+        includeAttachments: true,
+      });
 
-        const ext = getExtension_(fileName);
-        if (ext !== "xlsx" && ext !== "xls") return;
+      // ── Обробляємо КОЖНЕ вкладення окремим HTTP-запитом ──────────────────
+      attachments.forEach(function(att) {
+        const fileName = (att.getName() || "").trim();
+        const ext      = getExtension_(fileName);
+        const nameLow  = fileName.toLowerCase();
+
+        // Договори: .xlsx з "договор" в назві
+        const isContract = (ext === "xlsx" || ext === "xls") &&
+                           nameLow.includes("договор");
+
+        // Розклади: .docx з "розклад" в назві
+        const isSchedule = ext === "docx" && nameLow.includes("розклад");
+
+        if (!isContract && !isSchedule) {
+          Logger.log("Пропущено (не підходить): " + fileName);
+          return; // наступне вкладення
+        }
 
         hasMatchedAttachment = true;
 
+        // Кодуємо вміст у Base64 (URL-safe, як вимагає backend)
+        const bytes   = att.getBytes();
+        const b64     = Utilities.base64EncodeWebSafe(bytes);
+
+        const payload = JSON.stringify({
+          filename:    fileName,
+          messageId:   message.getId(),
+          fileBase64:  b64,
+        });
+
         const options = {
-          method: "post",
-          headers: { Authorization: "Bearer " + WEBHOOK_SECRET },
-          payload: {
-            sender_email: SENDER_EMAIL,
-            sender_name: SENDER_NAME,
-            subject: message.getSubject() || "",
-            message_id: message.getId(),
-            update_existing_mode: "overwrite",
-            file: att.copyBlob().setName(fileName),
-          },
+          method:           "post",
+          contentType:      "application/json",
+          headers:          { Authorization: "Bearer " + WEBHOOK_SECRET },
+          payload:          payload,
           muteHttpExceptions: true,
         };
 
-        const url = PROJECT_BASE_URL + "/api/api/v1/mail/google-webhook/contracts";
+        const url  = PROJECT_BASE_URL + "/api/api/v1/mail/gmail-api-webhook/contracts";
         const resp = UrlFetchApp.fetch(url, options);
         const code = resp.getResponseCode();
-        let body = {};
-        try {
-          body = JSON.parse(resp.getContentText() || "{}");
-        } catch (e) {
-          body = { raw: resp.getContentText() };
-        }
 
-        // 2xx is transport success, but backend job can still be failed.
+        let body = {};
+        try { body = JSON.parse(resp.getContentText() || "{}"); }
+        catch(e) { body = { raw: resp.getContentText() }; }
+
         const jobFailed = body && body.status === "failed";
         if (code < 200 || code >= 300 || jobFailed) {
           threadOk = false;
-          Logger.log("Webhook error %s for file '%s': %s", code, fileName, resp.getContentText());
+          Logger.log("❌ Помилка %s для '%s': %s", code, fileName, resp.getContentText());
         } else {
-          Logger.log("Webhook success %s for file '%s': %s", code, fileName, resp.getContentText());
+          Logger.log("✅ Успіх %s для '%s': job_id=%s", code, fileName, body.id || "?");
         }
       });
+      // ─────────────────────────────────────────────────────────────────────
     });
 
     if (!hasMatchedAttachment) {
-      Logger.log("Thread skipped (no matching attachments): %s", thread.getFirstMessageSubject());
+      Logger.log("Лист пропущено (немає відповідних вкладень): " + thread.getFirstMessageSubject());
       return;
     }
 
     if (threadOk) {
       thread.addLabel(okLabel);
       thread.markRead();
-      Logger.log("Thread processed and marked read: %s", thread.getFirstMessageSubject());
+      Logger.log("✅ Лист оброблено: " + thread.getFirstMessageSubject());
     } else {
       thread.addLabel(failLabel);
-      Logger.log("Thread marked failed: %s", thread.getFirstMessageSubject());
+      Logger.log("❌ Лист позначено як помилковий: " + thread.getFirstMessageSubject());
     }
   });
 }
 
-function isContractsFilename_(name) {
-  const normalized = (name || "").toLowerCase().replace(/_/g, " ");
-  // Let backend validate full business rules; here only coarse filter.
-  return normalized.includes("договор");
-}
+// ─── Допоміжні функції ───────────────────────────────────────────────────────
 
 function getExtension_(name) {
   const parts = (name || "").toLowerCase().split(".");
-  if (parts.length < 2) return "";
-  return parts[parts.length - 1];
+  return parts.length < 2 ? "" : parts[parts.length - 1];
 }
 
 function getOrCreateLabel_(labelName) {
@@ -127,8 +143,16 @@ function getOrCreateLabel_(labelName) {
 
 1. Надішліть тестовий лист на `lcptodcz.audyt@gmail.com`:
    - від `lcptodcz@gmail.com`,
-   - вкладення `.xls/.xlsx`,
-   - у назві файлу є `договори` та номер групи (до/після слова).
-2. Через 1-5 хв перевірте `/jobs`:
-   - імпорт з джерелом `Пошта: Google Script`.
-3. Перевірте `/trainees` на нових/оновлених слухачів.
+   - **кілька вкладень**: наприклад `Розклад_46-26.docx` + `Розклад_47-26.docx`.
+2. Запустіть `processIncomingEmails()` вручну або зачекайте тригер (5 хв).
+3. В Google Apps Script → **Виконання** перевірте логи — має бути рядок `✅ Успіх` для **кожного** файлу.
+4. Перевірте `/schedule` — обидві групи мають з'явитися в календарі.
+
+## 4) Типові помилки
+
+| HTTP-код | Причина | Рішення |
+|---|---|---|
+| `401` | Невірний `WEBHOOK_SECRET` | Порівняйте з `MAIL_WEBHOOK_SECRET` у Vercel |
+| `400` | Назва файлу без "розклад"/"договор" | Перейменуйте файл |
+| `400` | Неправильний Base64 | Перевірте, що скрипт використовує `base64EncodeWebSafe` |
+| `503` | `MAIL_WEBHOOK_SECRET` не задано у Vercel | Додайте змінну у Vercel Dashboard |
