@@ -1,8 +1,11 @@
+import base64
 import hashlib
 from datetime import date, datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
@@ -11,7 +14,7 @@ from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequ
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.mail_ingest import extract_contract_group_code, is_contract_attachment_filename, is_contract_sender
-from app.services.storage import detect_document_type, persist_upload
+from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
 router = APIRouter()
@@ -95,6 +98,145 @@ def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
     if inline_result is not None:
         payload["result"] = inline_result
     return payload
+
+
+class GmailApiContractWebhookRequest(BaseModel):
+    """Payload надісланий Postman Flow після отримання вкладення через Gmail REST API."""
+
+    filename: str = Field(min_length=1, max_length=512)
+    messageId: str = Field(min_length=1, max_length=255)
+    fileBase64: str = Field(min_length=1, description="URL-safe Base64 даних файлу (формат Gmail API)")
+
+
+@router.post("/mail/gmail-api-webhook/contracts", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def gmail_api_contracts_webhook(
+    body: GmailApiContractWebhookRequest,
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+) -> JobResponse:
+    """Endpoint для Postman Flow: приймає вкладення договорів з Gmail REST API (Base64 JSON)."""
+    expected_secret = settings.mail_webhook_secret.strip()
+    if not expected_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MAIL_WEBHOOK_SECRET не налаштовано")
+    expected_header = f"Bearer {expected_secret}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний webhook-токен")
+
+    filename = body.filename.strip()
+    safe_message_id = body.messageId.strip()[:255]
+
+    # Gmail API повертає URL-safe Base64 (символи - та _ замість + та /), відновлюємо стандартний padding
+    b64_data = body.fileBase64.replace("-", "+").replace("_", "/")
+    padding_needed = len(b64_data) % 4
+    if padding_needed:
+        b64_data += "=" * (4 - padding_needed)
+    try:
+        file_bytes = base64.b64decode(b64_data)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Помилка декодування Base64: {exc}") from exc
+
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл порожній")
+
+    doc_type = detect_document_type(filename)
+    if doc_type.value != "xlsx":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються тільки .xls/.xlsx вкладення")
+
+    if not is_contract_attachment_filename(filename):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
+        )
+
+    sender_email = settings.imap_contract_sender_email
+    sender_name = settings.imap_contract_sender_name
+
+    group_code_hint = extract_contract_group_code(filename)
+    branch_id = settings.imap_branch_id or "main"
+
+    idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
+    idempotency_key = f"{branch_id}:mail-gmail-api:{idem_digest}"
+
+    existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
+    if existing:
+        return JobResponse.model_validate(existing)
+
+    # Зберігаємо файл на диск
+    out_path = storage_path() / f"{uuid4().hex}_{filename}"
+    with Path(out_path).open("wb") as fh:
+        fh.write(file_bytes)
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+
+    document = Document(
+        branch_id=branch_id,
+        file_name=filename,
+        file_path=str(out_path),
+        file_type=doc_type,
+        source="mail_gmail_api",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        hash_sha256=sha256,
+    )
+    db.add(document)
+    db.flush()
+
+    message_row = (
+        db.query(MailMessage)
+        .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == safe_message_id)
+        .first()
+    )
+    if not message_row:
+        message_row = MailMessage(
+            branch_id=branch_id,
+            message_id=safe_message_id,
+            sender=f"{sender_name} <{sender_email}>".strip(),
+            subject=f"Gmail API webhook: {filename}",
+            received_at=datetime.now(timezone.utc),
+            snippet=f"Postman Flow / Gmail API webhook: {filename}",
+            status=MailStatus.PROCESSED,
+            raw_document_id=document.id,
+        )
+        db.add(message_row)
+    else:
+        message_row.raw_document_id = document.id
+        db.add(message_row)
+
+    import_mode = settings.imap_contract_update_mode if settings.imap_contract_update_mode in IMPORT_UPDATE_MODES else "overwrite"
+    job = ImportJob(
+        branch_id=branch_id,
+        idempotency_key=idempotency_key,
+        document_id=document.id,
+        status=JobStatus.QUEUED,
+        message="Заявку на імпорт з Gmail API (Postman Flow) створено",
+        result_payload={
+            "source": "mail_gmail_api",
+            "message_id": safe_message_id,
+            "sender_name": sender_name,
+            "sender_email": sender_email,
+            "group_code_hint": group_code_hint,
+            "import_mode": import_mode,
+            "channel": "postman_flow_gmail_api",
+        },
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    dispatch_mode = _dispatch_import_with_fallback(job.id)
+    db.refresh(job)
+    if dispatch_mode == "inline":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга тимчасово недоступна. Імпорт виконано одразу.{suffix}"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    elif dispatch_mode == "inline_failed":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга недоступна, а inline-імпорт завершився помилкою.{suffix}"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+    return JobResponse.model_validate(job)
 
 
 @router.post("/mail/google-webhook/contracts", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
