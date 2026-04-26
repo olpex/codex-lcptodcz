@@ -262,12 +262,29 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         teacher_full_name = _norm(entry["teacher_name"])
         if teacher_full_name not in teacher_cache:
             last_name, first_name = _split_teacher_name(teacher_full_name)
-            teacher = (
+            existing_teachers = (
                 db.query(Teacher)
-                .filter(Teacher.branch_id == branch_id, Teacher.last_name == last_name, Teacher.first_name == first_name)
-                .first()
+                .filter(Teacher.branch_id == branch_id, Teacher.last_name == last_name)
+                .all()
             )
-            if not teacher:
+            teacher = None
+            if existing_teachers:
+                for t in existing_teachers:
+                    if not t.first_name or not first_name:
+                        teacher = t
+                        break
+                    if t.first_name[0].lower() == first_name[0].lower():
+                        teacher = t
+                        break
+                if not teacher:
+                    teacher = existing_teachers[0]
+                
+                # Upgrade first name to full name if the new one is longer and without dots
+                if len(first_name) > len(teacher.first_name or "") and "." not in first_name:
+                    teacher.first_name = first_name
+                    db.add(teacher)
+                    db.flush()
+            else:
                 teacher = Teacher(
                     branch_id=branch_id,
                     last_name=last_name,
