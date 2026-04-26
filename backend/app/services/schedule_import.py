@@ -254,6 +254,32 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         db.add(room)
         db.flush()
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Idempotent import: wipe existing slots for this group within the document
+    # date range before inserting fresh ones.  This guarantees that:
+    #   • re-importing the same file produces exactly the same result;
+    #   • slots that belonged to a previously-deleted teacher are never left as
+    #     orphaned rows blocking the new teacher from appearing on the calendar.
+    # ──────────────────────────────────────────────────────────────────────────
+    doc_start_date = date.fromisoformat(parsed["start_date"]) if parsed["start_date"] else None
+    doc_end_date   = date.fromisoformat(parsed["end_date"])   if parsed["end_date"]   else None
+
+    if doc_start_date and doc_end_date:
+        window_start = datetime.combine(doc_start_date, time.min, tzinfo=timezone.utc)
+        window_end   = datetime.combine(doc_end_date,   time.max, tzinfo=timezone.utc)
+        deleted_count = (
+            db.query(ScheduleSlot)
+            .filter(
+                ScheduleSlot.group_id == group.id,
+                ScheduleSlot.starts_at >= window_start,
+                ScheduleSlot.starts_at <= window_end,
+            )
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+    else:
+        deleted_count = 0
+
     teacher_cache: dict[str, Teacher] = {}
     subject_cache: dict[str, Subject] = {}
     candidates: list[dict] = []
@@ -406,6 +432,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         "group_code": group.code,
         "group_name": group.name,
         "group_total_hours": parsed["group_total_hours"],
+        "deleted_slots": deleted_count,
         "created_slots": len(candidates),
         "teachers": len(teacher_cache),
         "subjects": len(subject_cache),

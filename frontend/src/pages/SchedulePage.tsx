@@ -287,9 +287,18 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
 };
 
 
+
   useEffect(() => {
     fetchSchedule();
+    // Auto-refresh every 30 s so background mail imports appear without a
+    // manual click (e.g. after re-importing a schedule that had a deleted teacher).
+    const intervalId = setInterval(() => {
+      fetchSchedule();
+    }, 30_000);
+    return () => clearInterval(intervalId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const groupedSchedule = useMemo(() => {
     const grouped = new Map<string, ScheduleSlot[]>();
