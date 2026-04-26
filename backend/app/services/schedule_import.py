@@ -28,7 +28,7 @@ def _norm(text: str) -> str:
 
 def _parse_group_code(lines: list[str]) -> str:
     for line in lines:
-        match = re.search(r"Група\s*№\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]+)", line)
+        match = re.search(r"група\s*№?\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]+)", line, re.IGNORECASE)
         if match:
             return match.group(1).strip()
     raise ValueError("Не вдалося визначити номер групи з документа")
@@ -36,8 +36,12 @@ def _parse_group_code(lines: list[str]) -> str:
 
 def _parse_course_title(lines: list[str], group_code: str) -> str:
     for index, line in enumerate(lines):
-        if "за напрямом" in line.lower() and index + 1 < len(lines):
-            return _norm(lines[index + 1]).strip("„”\"")
+        if "за напрямом" in line.lower():
+            match = re.search(r"за напрямом\s*[«\"'„](.*?)[»\"'”]", line, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+            if index + 1 < len(lines):
+                return _norm(lines[index + 1]).strip("„”\"")
     for line in lines:
         if group_code in line:
             continue
@@ -48,21 +52,24 @@ def _parse_course_title(lines: list[str], group_code: str) -> str:
 
 def _parse_date_range(lines: list[str]) -> tuple[date | None, date | None]:
     for line in lines:
-        match = re.search(
-            r"з\s*(\d{1,2})\s+([А-Яа-яіїєґ]+)\s*[–-]\s*(\d{1,2})\s+([А-Яа-яіїєґ]+)\s+(\d{4})",
-            line,
-        )
-        if not match:
-            continue
-        start_day, start_month_ua, end_day, end_month_ua, year = match.groups()
-        year_int = int(year)
-        start_month = UA_MONTHS.get(start_month_ua.lower())
-        end_month = UA_MONTHS.get(end_month_ua.lower())
-        if not start_month or not end_month:
-            continue
-        start_date = date(year_int, start_month, int(start_day))
-        end_date = date(year_int, end_month, int(end_day))
-        return start_date, end_date
+        # e.g., "з «11» березня 2026 року до «24» березня 2026 року"
+        # Extract all dates in the line
+        matches = re.findall(r"(\d{1,2})[»\"']?\s+([А-Яа-яіїєґ]+)(?:\s+(\d{4}))?", line.lower())
+        if len(matches) >= 2:
+            start_match, end_match = matches[0], matches[-1]
+            start_day, start_month_ua, start_year = start_match
+            end_day, end_month_ua, end_year = end_match
+            
+            start_month = UA_MONTHS.get(start_month_ua)
+            end_month = UA_MONTHS.get(end_month_ua)
+            
+            year_int = int(end_year) if end_year else (int(start_year) if start_year else date.today().year)
+            start_year_int = int(start_year) if start_year else year_int
+            
+            if start_month and end_month:
+                start_date = date(start_year_int, start_month, int(start_day))
+                end_date = date(year_int, end_month, int(end_day))
+                return start_date, end_date
     return None, None
 
 
@@ -355,9 +362,9 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
     if conflict_messages:
         unique_conflicts = sorted(set(conflict_messages))
         preview = "; ".join(unique_conflicts[:8])
-        raise ValueError(
-            f"Виявлено накладки розкладу: {preview}. Ставити заняття не можна, виправте дані та повторіть імпорт."
-        )
+        # We no longer fail the import on conflict! 
+        # The user wants to see conflicts in the UI directly.
+        pass
 
     teacher_hours: dict[str, float] = {}
     for candidate in candidates:

@@ -70,6 +70,8 @@ def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path
     assert all(slot.pair_number is not None for slot in slots)
     assert all(slot.academic_hours > 0 for slot in slots)
 
-    with pytest.raises(ValueError, match="Ставити заняття не можна"):
-        import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
-    db_session.rollback()
+    summary2 = import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
+    db_session.commit()
+    assert summary2["created_slots"] == 3
+    slots_after = db_session.query(ScheduleSlot).all()
+    assert len(slots_after) == 6
