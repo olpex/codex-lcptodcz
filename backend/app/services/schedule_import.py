@@ -280,7 +280,8 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
     else:
         deleted_count = 0
 
-    teacher_cache: dict[str, Teacher] = {}
+    teacher_cache: dict[str, Teacher] = {}  # keyed by normalised name string from the document
+    teacher_id_cache: dict[int, Teacher] = {}  # keyed by DB teacher.id for deduplication
     subject_cache: dict[str, Subject] = {}
     candidates: list[dict] = []
 
@@ -296,20 +297,28 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
             teacher = None
             if existing_teachers:
                 for t in existing_teachers:
-                    if not t.first_name or not first_name:
+                    t_first = (t.first_name or "").strip()
+                    new_first = (first_name or "").strip()
+                    # Match when either side has no first name, or first letters agree
+                    if not t_first or not new_first:
                         teacher = t
                         break
-                    if t.first_name[0].lower() == first_name[0].lower():
+                    if t_first[0].lower() == new_first[0].lower():
                         teacher = t
                         break
                 if not teacher:
                     teacher = existing_teachers[0]
-                
-                # Upgrade first name to full name if the new one is longer and without dots
-                if len(first_name) > len(teacher.first_name or "") and "." not in first_name:
-                    teacher.first_name = first_name
+
+                # If the incoming name is more complete (longer, no dots), upgrade the DB record
+                t_first = (teacher.first_name or "").strip()
+                new_first = (first_name or "").strip()
+                if new_first and len(new_first) > len(t_first) and "." not in new_first:
+                    teacher.first_name = new_first
                     db.add(teacher)
                     db.flush()
+                    # Invalidate any previous cache entry that pointed to this teacher
+                    if teacher.id in teacher_id_cache:
+                        teacher_id_cache[teacher.id] = teacher
             else:
                 teacher = Teacher(
                     branch_id=branch_id,
@@ -320,6 +329,13 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                 )
                 db.add(teacher)
                 db.flush()
+
+            # Use the canonical teacher object (deduplicated by ID)
+            if teacher.id in teacher_id_cache:
+                teacher = teacher_id_cache[teacher.id]
+            else:
+                teacher_id_cache[teacher.id] = teacher
+
             teacher_cache[teacher_full_name] = teacher
         teacher = teacher_cache[teacher_full_name]
 
@@ -409,7 +425,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         # The user wants to see conflicts in the UI directly.
         pass
 
-    teacher_hours: dict[str, float] = {}
+    teacher_hours: dict[int, tuple[str, float]] = {}  # teacher_id -> (display_name, hours)
     for candidate in candidates:
         db.add(
             ScheduleSlot(
@@ -424,8 +440,11 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                 generated_by=actor_user_id,
             )
         )
-        teacher_hours.setdefault(candidate["teacher_name"], 0.0)
-        teacher_hours[candidate["teacher_name"]] += candidate["academic_hours"]
+        tid = candidate["teacher_id"]
+        prev_name, prev_hours = teacher_hours.get(tid, (candidate["teacher_name"], 0.0))
+        # Prefer the longer (more complete) display name
+        display_name = candidate["teacher_name"] if len(candidate["teacher_name"]) > len(prev_name) else prev_name
+        teacher_hours[tid] = (display_name, prev_hours + candidate["academic_hours"])
 
     return {
         "import_kind": "schedule_docx",
@@ -434,7 +453,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         "group_total_hours": parsed["group_total_hours"],
         "deleted_slots": deleted_count,
         "created_slots": len(candidates),
-        "teachers": len(teacher_cache),
+        "teachers": len(teacher_id_cache),
         "subjects": len(subject_cache),
-        "teacher_workload_hours": {name: round(hours, 2) for name, hours in teacher_hours.items()},
+        "teacher_workload_hours": {name: round(hours, 2) for (_tid, (name, hours)) in teacher_hours.items()},
     }
