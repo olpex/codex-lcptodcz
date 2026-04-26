@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { Panel } from "../components/Panel";
 import { TrendStatCard } from "../components/TrendStatCard";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import type { Workload } from "../types/api";
@@ -22,6 +23,8 @@ export function WorkloadPage() {
   const [annualLoadDrafts, setAnnualLoadDrafts] = useState<Record<number, string>>({});
   const [annualLoadErrors, setAnnualLoadErrors] = useState<Record<number, string>>({});
   const [savingTeacherId, setSavingTeacherId] = useState<number | null>(null);
+  const [deletingTeacher, setDeletingTeacher] = useState<Workload | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<WorkloadSnapshot[]>([]);
@@ -115,6 +118,21 @@ export function WorkloadPage() {
     }
   };
 
+  const handleDeleteTeacher = async () => {
+    if (!deletingTeacher) return;
+    setIsDeleting(true);
+    try {
+      await request(`/teachers/${deletingTeacher.teacher_id}`, { method: "DELETE" });
+      showSuccess(`Викладача ${deletingTeacher.teacher_name} успішно видалено`);
+      setDeletingTeacher(null);
+      await load();
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const columns: DataTableColumn<Workload>[] = [
     {
       key: "row_number",
@@ -176,13 +194,22 @@ export function WorkloadPage() {
             key: "actions",
             header: "Дія",
             render: (row: Workload) => (
-              <button
-                className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink disabled:opacity-50"
-                onClick={() => saveAnnualLoad(row.teacher_id)}
-                disabled={savingTeacherId !== null}
-              >
-                {savingTeacherId === row.teacher_id ? "Збереження..." : "Зберегти"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded bg-amber px-2 py-1 text-xs font-semibold text-ink disabled:opacity-50"
+                  onClick={() => saveAnnualLoad(row.teacher_id)}
+                  disabled={savingTeacherId !== null}
+                >
+                  {savingTeacherId === row.teacher_id ? "Збереження..." : "Зберегти"}
+                </button>
+                <button
+                  className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-200 disabled:opacity-50"
+                  onClick={() => setDeletingTeacher(row)}
+                  disabled={savingTeacherId !== null || isDeleting}
+                >
+                  Видалити
+                </button>
+              </div>
             )
           }
         ]
@@ -254,6 +281,18 @@ export function WorkloadPage() {
           }}
         />
       </Panel>
+
+      <ConfirmDialog
+        open={!!deletingTeacher}
+        title="Видалення викладача"
+        description={deletingTeacher ? `Ви впевнені, що хочете видалити викладача "${deletingTeacher.teacher_name}"? Ця дія призведе до видалення всіх пов'язаних записів у розкладі та навантаженні.` : ""}
+        confirmLabel="Видалити"
+        cancelLabel="Скасувати"
+        confirmVariant="danger"
+        confirmDisabled={isDeleting}
+        onConfirm={handleDeleteTeacher}
+        onCancel={() => setDeletingTeacher(null)}
+      />
     </div>
   );
 }
