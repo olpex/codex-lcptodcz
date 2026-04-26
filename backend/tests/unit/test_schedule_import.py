@@ -46,6 +46,43 @@ def _build_schedule_docx(path: Path) -> None:
     doc.save(path)
 
 
+def _build_schedule_docx_with_short_year_and_merged_teacher(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("2 пара – 11.10 – 12.45")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Організація трудових відносин")
+    doc.add_paragraph("Група № 167-26")
+    doc.add_paragraph("з 21 жовтня – 24 жовтня 25-го року")
+
+    table = doc.add_table(rows=4, cols=8)
+    headers = [
+        "№п/п",
+        "Назва предмета",
+        "К-сть год.",
+        "21.10",
+        "22.10",
+        "23.10",
+        "24.10",
+        "Прізвище, ім'я, по-батькові викладача",
+    ]
+    for idx, value in enumerate(headers):
+        table.cell(0, idx).text = value
+
+    row1 = ["1", "Трудовий договір", "4", "1п/2год", "", "", "", "Войтехівська Галина Михайлівна"]
+    row2 = ["2", "Охорона праці", "2", "", "2п/2год", "", "", ""]
+    total = ["", "Загальний обсяг навчального часу:", "6", "2", "2", "0", "0", ""]
+
+    for idx, value in enumerate(row1):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(row2):
+        table.cell(2, idx).text = value
+    for idx, value in enumerate(total):
+        table.cell(3, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -55,6 +92,19 @@ def test_parse_schedule_docx(tmp_path: Path):
     assert payload["group_total_hours"] == 5
     assert payload["entries"]
     assert any(item["pair_number"] == 1 for item in payload["entries"])
+
+
+def test_parse_schedule_docx_supports_short_year_and_teacher_carryover(tmp_path: Path):
+    file_path = tmp_path / "schedule-short-year.docx"
+    _build_schedule_docx_with_short_year_and_merged_teacher(file_path)
+
+    payload = parse_schedule_docx(str(file_path))
+    assert payload["group_code"] == "167-26"
+    assert payload["start_date"] == "2025-10-21"
+    assert payload["end_date"] == "2025-10-24"
+    assert payload["group_total_hours"] == 6
+    assert payload["entries"]
+    assert all(item["teacher_name"] == "Войтехівська Галина Михайлівна" for item in payload["entries"])
 
 
 def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path):

@@ -52,21 +52,36 @@ def _parse_course_title(lines: list[str], group_code: str) -> str:
 
 
 def _parse_date_range(lines: list[str]) -> tuple[date | None, date | None]:
+    def _year_to_int(value: str | None) -> int | None:
+        if not value:
+            return None
+        normalized = value.strip()
+        if not normalized.isdigit():
+            return None
+        if len(normalized) == 2:
+            return 2000 + int(normalized)
+        if len(normalized) == 4:
+            return int(normalized)
+        return None
+
     for line in lines:
         # e.g., "з «11» березня 2026 року до «24» березня 2026 року"
         # Extract all dates in the line
-        matches = re.findall(r"(\d{1,2})[»\"']?\s+([А-Яа-яіїєґ]+)(?:\s+(\d{4}))?", line.lower())
+        matches = re.findall(
+            r"(\d{1,2})[»\"']?\s+([А-Яа-яіїєґ]+)(?:\s+(\d{2,4})(?:-?го)?)?",
+            line.lower(),
+        )
         if len(matches) >= 2:
             start_match, end_match = matches[0], matches[-1]
             start_day, start_month_ua, start_year = start_match
             end_day, end_month_ua, end_year = end_match
-            
+
             start_month = UA_MONTHS.get(start_month_ua)
             end_month = UA_MONTHS.get(end_month_ua)
-            
-            year_int = int(end_year) if end_year else (int(start_year) if start_year else date.today().year)
-            start_year_int = int(start_year) if start_year else year_int
-            
+
+            year_int = _year_to_int(end_year) or _year_to_int(start_year) or date.today().year
+            start_year_int = _year_to_int(start_year) or year_int
+
             if start_month and end_month:
                 start_date = date(start_year_int, start_month, int(start_day))
                 end_date = date(year_int, end_month, int(end_day))
@@ -166,12 +181,15 @@ def parse_schedule_docx(file_path: str) -> dict:
 
     entries: list[dict] = []
     total_group_hours = 0.0
+    previous_teacher_name = ""
     for row in table.rows[1:]:
         cells = row.cells
         index_cell = _norm(cells[0].text)
         subject_name = _norm(cells[1].text)
         declared_subject_hours = _parse_hours(cells[2].text)
-        teacher_name = _norm(cells[-1].text)
+        teacher_name = _norm(cells[-1].text) or previous_teacher_name
+        if teacher_name:
+            previous_teacher_name = teacher_name
 
         if not subject_name:
             continue
