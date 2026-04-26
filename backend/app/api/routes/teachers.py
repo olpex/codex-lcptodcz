@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import RoleName, Teacher
+from app.models import RoleName, Teacher, ScheduleSlot
 from app.schemas.api import TeacherCreate, TeacherResponse, TeacherUpdate
 from app.services.audit import write_audit
 
@@ -70,6 +70,7 @@ def delete_teacher(teacher_id: int, db: DbSession, current_user: CurrentUser) ->
     if not teacher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Викладача не знайдено")
     ensure_same_branch(current_user, teacher, "Викладача")
+    db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == teacher_id).delete(synchronize_session=False)
     db.delete(teacher)
     db.commit()
     write_audit(
