@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Group, GroupMembership, MembershipStatus, RoleName, Trainee
@@ -90,11 +90,35 @@ def update_group(group_id: int, payload: GroupUpdate, db: DbSession, current_use
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
-def delete_group(group_id: int, db: DbSession, current_user: CurrentUser) -> None:
+def delete_group(
+    group_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    delete_trainees: bool = Query(default=False, description="Також soft-delete усіх слухачів цієї групи"),
+) -> None:
     group = db.get(Group, group_id)
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
     ensure_same_branch(current_user, group, "Групу")
+
+    deleted_trainees_count = 0
+    if delete_trainees and group.code:
+        now = datetime.now(timezone.utc)
+        trainees_to_delete = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == group.branch_id,
+                Trainee.group_code == group.code,
+                Trainee.is_deleted.is_(False),
+            )
+            .all()
+        )
+        for trainee in trainees_to_delete:
+            trainee.is_deleted = True
+            trainee.deleted_at = now
+            db.add(trainee)
+        deleted_trainees_count = len(trainees_to_delete)
+
     db.delete(group)
     db.commit()
     write_audit(
@@ -103,7 +127,9 @@ def delete_group(group_id: int, db: DbSession, current_user: CurrentUser) -> Non
         action="group.delete",
         entity_type="group",
         entity_id=str(group_id),
+        details={"delete_trainees": delete_trainees, "deleted_trainees_count": deleted_trainees_count},
     )
+
 
 
 @router.get("/{group_id}/members", response_model=list[MembershipResponse])

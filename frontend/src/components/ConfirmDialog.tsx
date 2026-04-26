@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { ReactNode, useEffect, useId, useRef } from "react";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -10,6 +10,8 @@ type ConfirmDialogProps = {
   onCancel: () => void;
   confirmVariant?: "danger" | "primary";
   confirmDisabled?: boolean;
+  /** Додатковий вміст між описом і кнопками (наприклад, чекбокс) */
+  children?: ReactNode;
 };
 
 export function ConfirmDialog({
@@ -21,7 +23,8 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   confirmVariant = "danger",
-  confirmDisabled = false
+  confirmDisabled = false,
+  children
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -94,6 +97,7 @@ export function ConfirmDialog({
         <p id={descriptionId} className="mt-2 text-sm text-slate-600">
           {description}
         </p>
+        {children && <div className="mt-3">{children}</div>}
         <div className="mt-5 flex justify-end gap-2">
           <button
             ref={cancelButtonRef}

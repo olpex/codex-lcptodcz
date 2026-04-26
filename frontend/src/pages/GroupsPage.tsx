@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
@@ -18,6 +19,13 @@ export function GroupsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // --- Стан видалення групи ---
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<Group | null>(null);
+  const [deleteTrainees, setDeleteTrainees] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
@@ -48,9 +56,30 @@ export function GroupsPage() {
         header: "Місткість",
         render: (group) => group.capacity,
         sortAccessor: (group) => group.capacity
-      }
+      },
+      ...(canEdit
+        ? [
+            {
+              key: "actions" as const,
+              header: "",
+              render: (group: Group) => (
+                <button
+                  type="button"
+                  id={`delete-group-${group.id}`}
+                  className="rounded-lg border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openDeleteDialog(group);
+                  }}
+                >
+                  Видалити
+                </button>
+              )
+            }
+          ]
+        : [])
     ],
-    []
+    [canEdit]
   );
 
   const loadGroups = async () => {
@@ -109,6 +138,40 @@ export function GroupsPage() {
       setIsSubmitting(false);
     }
   };
+
+  const openDeleteDialog = (group: Group) => {
+    setGroupToDelete(group);
+    setDeleteTrainees(false);
+    setDeleteDialogOpen(true);
+  };
+
+  const closeDeleteDialog = () => {
+    if (isDeleting) return;
+    setDeleteDialogOpen(false);
+    setGroupToDelete(null);
+    setDeleteTrainees(false);
+  };
+
+  const confirmDeleteGroup = async () => {
+    if (!groupToDelete || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      const params = deleteTrainees ? "?delete_trainees=true" : "";
+      await request(`/groups/${groupToDelete.id}${params}`, { method: "DELETE" });
+      await loadGroups();
+      const suffix = deleteTrainees ? " разом зі слухачами" : "";
+      showSuccess(`Групу «${groupToDelete.code}» видалено${suffix}`);
+      closeDeleteDialog();
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const deleteDialogDescription = groupToDelete
+    ? `Видалити групу «${groupToDelete.code} — ${groupToDelete.name}»? Цю дію не можна скасувати.`
+    : "";
 
   return (
     <div className="space-y-5">
@@ -188,6 +251,32 @@ export function GroupsPage() {
           }}
         />
       </Panel>
+
+      {/* Діалог підтвердження видалення групи */}
+      {canEdit && (
+        <ConfirmDialog
+          open={deleteDialogOpen}
+          title="Видалити групу"
+          description={deleteDialogDescription}
+          confirmLabel={isDeleting ? "Видаляємо..." : "Видалити"}
+          cancelLabel="Скасувати"
+          confirmVariant="danger"
+          confirmDisabled={isDeleting}
+          onConfirm={confirmDeleteGroup}
+          onCancel={closeDeleteDialog}
+        >
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              id="delete-trainees-checkbox"
+              checked={deleteTrainees}
+              onChange={(e) => setDeleteTrainees(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            Також перемістити всіх слухачів групи до архіву
+          </label>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
