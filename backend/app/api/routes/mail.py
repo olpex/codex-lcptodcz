@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -13,11 +14,27 @@ from app.models import Document, DraftStatus, ImportJob, JobStatus, MailMessage,
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
-from app.services.mail_ingest import extract_contract_group_code, is_contract_attachment_filename, is_contract_sender
+from app.services.mail_ingest import is_contract_sender
 from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
 router = APIRouter()
+GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+
+
+def _extract_group_code_from_filename(filename: str) -> str | None:
+    match = GROUP_CODE_PATTERN.search(filename)
+    if not match:
+        return None
+    return "".join(match.group(1).split()).replace("–", "-").replace("—", "-")
+
+
+def _is_schedule_filename(filename: str) -> bool:
+    return "розклад" in filename.lower()
+
+
+def _is_contracts_filename(filename: str) -> bool:
+    return "договор" in filename.lower()
 
 
 def _dispatch_import_with_fallback(import_job_id: int) -> str:
@@ -146,18 +163,18 @@ def gmail_api_contracts_webhook(
     mime_type = "application/octet-stream"
 
     if doc_type.value == "xlsx":
-        if not is_contract_attachment_filename(filename):
+        if not _is_contracts_filename(filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
+                detail="Назва Excel файлу має містити ключове слово 'договори'",
             )
-        group_code_hint = extract_contract_group_code(filename)
+        group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        if "розклад" not in filename.lower():
+        if not _is_schedule_filename(filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва файлу не відповідає шаблону розкладів (ключове слово 'розклад')",
+                detail="Назва DOCX файлу має містити ключове слово 'розклад'",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -284,18 +301,18 @@ def google_mail_contracts_webhook(
     mime_type = "application/octet-stream"
 
     if doc_type.value == "xlsx":
-        if not is_contract_attachment_filename(filename):
+        if not _is_contracts_filename(filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва файлу не відповідає шаблону договорів (ключове слово 'Договори')",
+                detail="Назва Excel файлу має містити ключове слово 'договори'",
             )
-        group_code_hint = extract_contract_group_code(filename)
+        group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        if "розклад" not in filename.lower():
+        if not _is_schedule_filename(filename):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва файлу не відповідає шаблону розкладів (ключове слово 'розклад')",
+                detail="Назва DOCX файлу має містити ключове слово 'розклад'",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

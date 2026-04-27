@@ -1,5 +1,6 @@
 import io
 
+from docx import Document as DocxDocument
 from openpyxl import Workbook
 
 from app.api.routes import mail as mail_routes
@@ -25,6 +26,15 @@ def _contracts_xlsx_bytes() -> bytes:
     )
     sheet.append([1, "Львівський ОЦЗ", "Іваненко Іван Іванович", "01.02.2000", "73-26/001", "+380501112233"])
     workbook.save(stream)
+    stream.seek(0)
+    return stream.read()
+
+
+def _schedule_docx_bytes() -> bytes:
+    stream = io.BytesIO()
+    document = DocxDocument()
+    document.add_paragraph("Розклад навчання")
+    document.save(stream)
     stream.seek(0)
     return stream.read()
 
@@ -94,3 +104,61 @@ def test_google_webhook_rejects_sender_mismatch(client, monkeypatch):
     )
     assert response.status_code == 400
     assert "Відправник" in response.json()["detail"]
+
+
+def test_google_webhook_rejects_docx_without_schedule_keyword(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda _job_id: "queued")
+
+    response = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data={
+            "sender_email": "lcptodcz@gmail.com",
+            "sender_name": "Львівський центр ПТО ДСЗ",
+            "subject": "Файл групи",
+            "message_id": "<google-webhook-docx-test-1@example.com>",
+            "update_existing_mode": "overwrite",
+        },
+        files={
+            "file": (
+                "167-26 Осінній модуль.docx",
+                _schedule_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+    assert "розклад" in response.json()["detail"].lower()
+
+
+def test_google_webhook_accepts_docx_with_schedule_keyword(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda _job_id: "queued")
+
+    response = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data={
+            "sender_email": "lcptodcz@gmail.com",
+            "sender_name": "Львівський центр ПТО ДСЗ",
+            "subject": "Розклад групи",
+            "message_id": "<google-webhook-docx-test-2@example.com>",
+            "update_existing_mode": "overwrite",
+        },
+        files={
+            "file": (
+                "167-26 Розклад осінній модуль.docx",
+                _schedule_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 202
