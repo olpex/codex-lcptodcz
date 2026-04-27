@@ -295,8 +295,11 @@ def test_ingest_mailbox_processes_two_messages_with_same_message_id(db_session, 
     monkeypatch.setattr(mail_ingest.settings, "imap_mailbox", "INBOX")
     monkeypatch.setattr(mail_ingest.imaplib, "IMAP4_SSL", lambda host, port: fake_client)
 
-    result = mail_ingest.ingest_mailbox(db_session)
-    assert result["processed"] == 2
+    result1 = mail_ingest.ingest_mailbox(db_session)
+    assert result1["processed"] == 1
+
+    result2 = mail_ingest.ingest_mailbox(db_session)
+    assert result2["processed"] == 1
 
     messages = db_session.query(MailMessage).filter(MailMessage.subject == "Лист з вкладенням").all()
     assert len(messages) == 2

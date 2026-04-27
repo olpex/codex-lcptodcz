@@ -26,6 +26,8 @@ from app.models import (
 from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content, try_import_trainees
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
+from app.services.schedule_import import parse_schedule_docx
+from app.models import ScheduleSlot, Group, Trainee
 
 GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
 CONTRACT_KEYWORD_FALLBACK = "договор"
@@ -124,6 +126,41 @@ def _extract_text_from_file(path: str, doc_type: DocumentType) -> str:
     return ocr_image_file(path)
 
 
+def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_path: str, doc_type: DocumentType) -> bool:
+    if doc_type == DocumentType.XLSX and is_contract_attachment_filename(filename):
+        group_code = extract_contract_group_code(filename)
+        if group_code:
+            exists = db.query(Trainee).filter(
+                Trainee.branch_id == branch_id,
+                Trainee.group_code == group_code,
+                Trainee.is_deleted == False
+            ).first()
+            if exists:
+                return True
+    elif doc_type == DocumentType.DOCX:
+        try:
+            parsed = parse_schedule_docx(file_path)
+            group_code = parsed.get("group_code")
+            entries = parsed.get("entries", [])
+            
+            if group_code and entries:
+                group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+                if group:
+                    min_start = min(item["starts_at"] for item in entries)
+                    max_end = max(item["ends_at"] for item in entries)
+                    
+                    exists = db.query(ScheduleSlot).filter(
+                        ScheduleSlot.group_id == group.id,
+                        ScheduleSlot.starts_at >= min_start,
+                        ScheduleSlot.ends_at <= max_end
+                    ).first()
+                    if exists:
+                        return True
+        except Exception:
+            pass
+    return False
+
+
 def ingest_mailbox(db: Session) -> dict:
     if not settings.imap_host or not settings.imap_user or not settings.imap_password:
         return {"processed": 0, "message": "IMAP не налаштовано"}
@@ -214,7 +251,7 @@ def ingest_mailbox(db: Session) -> dict:
             record.status = MailStatus.PROCESSED
             record.snippet = (record.snippet or "") + " [Пропущено: відправник не у списку дозволених]"
             processed += 1
-            continue
+            break
 
         attachment_notes: list[str] = []
         for part in parsed.walk():
@@ -231,6 +268,11 @@ def ingest_mailbox(db: Session) -> dict:
             out_path = storage_path() / f"{uuid4().hex}_{filename}"
             with Path(out_path).open("wb") as handle:
                 handle.write(payload)
+
+            if is_duplicate_attachment(db, branch_id, filename, str(out_path), doc_type):
+                out_path.unlink(missing_ok=True)
+                attachment_notes.append(f"Пропущено дублікат ({filename})")
+                continue
 
             document = Document(
                 branch_id=branch_id,
@@ -324,6 +366,7 @@ def ingest_mailbox(db: Session) -> dict:
 
         record.status = MailStatus.PROCESSED
         processed += 1
+        break
 
     db.commit()
     mailbox.logout()

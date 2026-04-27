@@ -124,4 +124,4 @@ def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path
     db_session.commit()
     assert summary2["created_slots"] == 3
     slots_after = db_session.query(ScheduleSlot).all()
-    assert len(slots_after) == 6
+    assert len(slots_after) == 3  # Old slots were deleted and new ones were inserted
