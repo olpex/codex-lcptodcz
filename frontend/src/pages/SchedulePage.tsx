@@ -402,7 +402,7 @@ export function SchedulePage() {
         appendSnapshot(next);
         return next;
       });
-      showSuccess("Розклад оновлено");
+      // showSuccess("Розклад оновлено"); // Removed to prevent annoying toast on drag-and-drop
     } catch (err) {
       showError((err as Error).message);
     }

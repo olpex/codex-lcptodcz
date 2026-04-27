@@ -218,7 +218,7 @@ def update_schedule_slot(
         action="schedule.update",
         entity_type="schedule",
         entity_id=str(slot.id),
-        details={"payload": payload.model_dump(exclude_unset=True)},
+        details={"payload": payload.model_dump(mode="json", exclude_unset=True)},
     )
     return _to_schedule_responses(db, [slot])[0]
 
