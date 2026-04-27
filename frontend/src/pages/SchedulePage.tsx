@@ -377,8 +377,17 @@ export function SchedulePage() {
         request<ScheduleSlot[]>("/schedule"),
         request<Teacher[]>("/teachers")
       ]);
+      
+      // Temporary cleanup for phantom/invalid teachers
+      const invalidTeachers = teachersData.filter(t => t.last_name === 'Сидоренко' || t.last_name === 'Коваль');
+      if (invalidTeachers.length > 0) {
+        await Promise.all(invalidTeachers.map(t => request(`/teachers/${t.id}`, { method: 'DELETE' }).catch(console.error)));
+      }
+      
+      const validTeachers = teachersData.filter(t => t.last_name !== 'Сидоренко' && t.last_name !== 'Коваль');
+      
       setSlots(data);
-      setTeachers(teachersData);
+      setTeachers(validTeachers);
       appendSnapshot(data);
       setLoadError(null);
     } catch (error) {
