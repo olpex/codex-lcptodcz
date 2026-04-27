@@ -5,7 +5,8 @@ import { TrendStatCard } from "../components/TrendStatCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import type { Workload } from "../types/api";
+import { API_URL } from "../api/client";
+import type { Workload, Job } from "../types/api";
 
 const STATS_HISTORY_LIMIT = 12;
 
@@ -17,7 +18,9 @@ type WorkloadSnapshot = {
 };
 
 export function WorkloadPage() {
-  const { request, user } = useAuth();
+  const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+  const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Workload[]>([]);
   const [annualLoadDrafts, setAnnualLoadDrafts] = useState<Record<number, string>>({});
@@ -143,7 +146,92 @@ export function WorkloadPage() {
     }
   };
 
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const payload = {
+        report_type: "teacher_workload",
+        export_format: "xlsx",
+        teacher_ids: selectedTeacherIds.length > 0 ? selectedTeacherIds : rows.map(r => r.teacher_id),
+        start_date: dateFrom || null,
+        end_date: dateTo || null
+      };
+
+      const job = await request<Job>("/documents/export", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      showSuccess("Експорт запущено, зачекайте...");
+
+      // Poll for completion
+      let currentJob = job;
+      while (currentJob.status !== "succeeded" && currentJob.status !== "failed") {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const res = await request<{ job: Job }>(`/jobs/${job.id}`);
+        currentJob = res.job;
+      }
+
+      if (currentJob.status === "failed") {
+        throw new Error(currentJob.message || "Помилка при генерації звіту");
+      }
+
+      const payloadResult = currentJob.result_payload as Record<string, unknown> | null;
+      const outputDocumentId = payloadResult?.output_document_id as number | undefined;
+
+      if (!outputDocumentId) {
+        throw new Error("Не знайдено ID згенерованого документа");
+      }
+
+      const downloadRes = await fetch(`${API_URL}/documents/${outputDocumentId}/download`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+
+      if (!downloadRes.ok) {
+        throw new Error(`Не вдалося завантажити файл (${downloadRes.status})`);
+      }
+
+      const blob = await downloadRes.blob();
+      const disposition = downloadRes.headers.get("content-disposition") || "";
+      const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = fileNameMatch?.[1] || `workload_${outputDocumentId}.xlsx`;
+
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      
+      showSuccess("Звіт успішно завантажено");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const columns: DataTableColumn<Workload>[] = [
+    {
+      key: "select",
+      header: "Вибір",
+      render: (row) => (
+        <input
+          type="checkbox"
+          checked={selectedTeacherIds.includes(row.teacher_id)}
+          onChange={(e) => {
+            if (e.target.checked) {
+              setSelectedTeacherIds((prev) => [...prev, row.teacher_id]);
+            } else {
+              setSelectedTeacherIds((prev) => prev.filter((id) => id !== row.teacher_id));
+            }
+          }}
+          className="rounded border-slate-300 text-pine focus:ring-pine"
+        />
+      )
+    },
     {
       key: "row_number",
       header: "Номер за порядком",
@@ -306,6 +394,18 @@ export function WorkloadPage() {
               }}
             >
               Скинути дати
+            </button>
+          )}
+          
+          <div className="flex-1"></div>
+
+          {canEditAnnualLoad && (
+            <button
+              className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white disabled:opacity-50 hover:bg-indigo-700"
+              onClick={handleExport}
+              disabled={isExporting || rows.length === 0}
+            >
+              {isExporting ? "Формування..." : selectedTeacherIds.length > 0 ? `Експорт обраних (${selectedTeacherIds.length})` : "Експорт всіх"}
             </button>
           )}
         </div>

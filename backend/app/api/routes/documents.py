@@ -143,6 +143,11 @@ def export_report(
         branch_id=current_user.branch_id,
         status=JobStatus.QUEUED,
         message="Заявку на експорт створено",
+        request_payload={
+            "teacher_ids": payload.teacher_ids,
+            "start_date": payload.start_date.isoformat() if payload.start_date else None,
+            "end_date": payload.end_date.isoformat() if payload.end_date else None,
+        },
     )
     db.add(job)
     db.commit()

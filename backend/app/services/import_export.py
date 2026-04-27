@@ -674,6 +674,54 @@ def try_import_trainees(
     }
 
 
+def collect_teacher_detailed_workload(
+    db: Session,
+    branch_id: str,
+    teacher_ids: list[int],
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> dict[str, list[dict]]:
+    teachers = (
+        db.query(Teacher)
+        .filter(Teacher.branch_id == branch_id, Teacher.id.in_(teacher_ids))
+        .all()
+    )
+    
+    teacher_map = {t.id: f"{t.last_name} {t.first_name}" for t in teachers}
+    result: dict[str, list[dict]] = {name: [] for name in teacher_map.values()}
+    
+    query = (
+        db.query(ScheduleSlot, Group)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .filter(Group.branch_id == branch_id, ScheduleSlot.teacher_id.in_(teacher_ids))
+    )
+    if date_from:
+        query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
+    if date_to:
+        query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, datetime.max.time(), tzinfo=timezone.utc))
+        
+    query = query.order_by(ScheduleSlot.starts_at)
+    slots = query.all()
+
+    for slot, group in slots:
+        teacher_name = teacher_map.get(slot.teacher_id)
+        if not teacher_name:
+            continue
+            
+        academic_hours = slot.academic_hours
+        if academic_hours is None:
+            academic_hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
+            
+        result[teacher_name].append({
+            "Номер групи": group.code,
+            "Назва групи": group.name or "",
+            "Дата (день)": slot.starts_at.astimezone().strftime("%Y-%m-%d"),
+            "Пара": slot.pair_number if slot.pair_number is not None else "",
+            "Кількість годин": round(float(academic_hours), 2)
+        })
+        
+    return result
+
 def collect_teacher_workload_summary(
     db: Session,
     branch_id: str,
@@ -727,7 +775,7 @@ def collect_teacher_workload_summary(
     return rows
 
 
-def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[dict]:
+def collect_report_rows(db: Session, report_type: str, branch_id: str, request_payload: dict | None = None) -> list[dict] | dict[str, list[dict]]:
     if report_type == "trainees":
         trainees = db.query(Trainee).filter(Trainee.branch_id == branch_id).all()
         return [
@@ -742,6 +790,14 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[d
         ]
 
     if report_type == "teacher_workload":
+        if request_payload and request_payload.get("teacher_ids"):
+            teacher_ids = request_payload["teacher_ids"]
+            start_date_str = request_payload.get("start_date")
+            end_date_str = request_payload.get("end_date")
+            start_date = date.fromisoformat(start_date_str) if start_date_str else None
+            end_date = date.fromisoformat(end_date_str) if end_date_str else None
+            return collect_teacher_detailed_workload(db, branch_id, teacher_ids, start_date, end_date)
+            
         summary = collect_teacher_workload_summary(db, branch_id)
         return [
             {
@@ -853,31 +909,62 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str) -> list[d
     return []
 
 
-def save_report_file(report_rows: list[dict], report_type: str, export_format: str) -> tuple[str, DocumentType]:
+def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_type: str, export_format: str, request_payload: dict | None = None) -> tuple[str, DocumentType]:
     out_dir = storage_path()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     base_name = f"{report_type}_{stamp}_{uuid4().hex[:8]}"
 
+    flat_report_rows = []
+    if isinstance(report_rows, dict):
+        for name, rows in report_rows.items():
+            for r in rows:
+                r["Вкладка"] = name
+                flat_report_rows.append(r)
+    else:
+        flat_report_rows = report_rows
+
     if export_format == "csv":
         out_file = out_dir / f"{base_name}.csv"
-        fieldnames = list(report_rows[0].keys()) if report_rows else ["empty"]
+        fieldnames = list(flat_report_rows[0].keys()) if flat_report_rows else ["empty"]
         with out_file.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
-            for row in report_rows:
+            for row in flat_report_rows:
                 writer.writerow(row)
         return str(out_file), DocumentType.CSV
 
     if export_format == "xlsx":
         workbook = Workbook()
-        sheet = workbook.active
-        if report_rows:
-            headers = list(report_rows[0].keys())
-            sheet.append(headers)
-            for row in report_rows:
-                sheet.append([row.get(col) for col in headers])
+        
+        if isinstance(report_rows, dict):
+            # Handle multi-sheet dictionary
+            first_sheet = True
+            for sheet_name, rows in report_rows.items():
+                if first_sheet:
+                    sheet = workbook.active
+                    sheet.title = str(sheet_name)[:31]  # Excel limits sheet names to 31 chars
+                    first_sheet = False
+                else:
+                    sheet = workbook.create_sheet(title=str(sheet_name)[:31])
+                    
+                if rows:
+                    headers = list(rows[0].keys())
+                    sheet.append(headers)
+                    for row in rows:
+                        sheet.append([row.get(col) for col in headers])
+                else:
+                    sheet.append(["empty"])
         else:
-            sheet.append(["empty"])
+            # Handle single list
+            sheet = workbook.active
+            if report_rows:
+                headers = list(report_rows[0].keys())
+                sheet.append(headers)
+                for row in report_rows:
+                    sheet.append([row.get(col) for col in headers])
+            else:
+                sheet.append(["empty"])
+                
         out_file = out_dir / f"{base_name}.xlsx"
         workbook.save(out_file)
         return str(out_file), DocumentType.XLSX
@@ -888,7 +975,7 @@ def save_report_file(report_rows: list[dict], report_type: str, export_format: s
     pdf.set_font("Helvetica", size=11)
     pdf.cell(0, 8, _safe_pdf_text(f"Report: {report_type}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
-    for row in report_rows[:200]:
+    for row in flat_report_rows[:200]:
         line = "; ".join(f"{k}: {v}" for k, v in row.items()).replace("_", " ")
         pdf.cell(0, 7, _safe_pdf_text(line[:120]), new_x="LMARGIN", new_y="NEXT")
     pdf.output(str(out_file))

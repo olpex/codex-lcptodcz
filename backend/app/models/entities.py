@@ -337,6 +337,7 @@ class ImportJob(Base):
         nullable=False,
     )
     message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    request_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -361,6 +362,7 @@ class ExportJob(Base):
         nullable=False,
     )
     message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    request_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     result_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     output_document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
     retries: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

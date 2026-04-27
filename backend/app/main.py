@@ -23,6 +23,8 @@ def ensure_runtime_schema() -> None:
         column_plan = [
             ("import_jobs", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("export_jobs", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
+            ("import_jobs", "request_payload", "JSON NULL"),
+            ("export_jobs", "request_payload", "JSON NULL"),
             ("mail_messages", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("ocr_results", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("performances", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),

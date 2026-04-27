@@ -374,6 +374,9 @@ class PerformanceResponse(ORMModel):
 class ExportRequest(BaseModel):
     report_type: str = Field(pattern="^(trainees|teacher_workload|kpi|form_1pa|employment|financial)$")
     export_format: str = Field(pattern="^(xlsx|pdf|csv)$")
+    teacher_ids: list[int] | None = None
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 class JobResponse(ORMModel):

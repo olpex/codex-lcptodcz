@@ -120,8 +120,8 @@ def process_export_job_task(self, export_job_id: int) -> dict:
         db.add(job)
         db.commit()
 
-        rows = collect_report_rows(db, job.report_type, job.branch_id)
-        file_path, doc_type = save_report_file(rows, job.report_type, job.export_format)
+        rows = collect_report_rows(db, job.report_type, job.branch_id, job.request_payload)
+        file_path, doc_type = save_report_file(rows, job.report_type, job.export_format, job.request_payload)
 
         document = Document(
             file_name=file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
