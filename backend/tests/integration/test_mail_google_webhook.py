@@ -1,3 +1,4 @@
+import base64
 import io
 
 from docx import Document as DocxDocument
@@ -189,4 +190,25 @@ def test_google_webhook_accepts_docx_with_schedule_keyword(client, monkeypatch):
             )
         },
     )
+    assert response.status_code == 202
+
+
+def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda _job_id: "queued")
+
+    file_base64 = base64.urlsafe_b64encode(_schedule_docx_bytes()).decode("ascii")
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "162-25 Штучний інтелект – копія.docx",
+            "messageId": "<gmail-api-docx-test-1@example.com>",
+            "fileBase64": file_base64,
+            "subject": None,
+        },
+    )
+
     assert response.status_code == 202

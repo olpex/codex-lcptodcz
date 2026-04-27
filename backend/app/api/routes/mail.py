@@ -34,6 +34,14 @@ def _is_contracts_filename(filename: str) -> bool:
     return True
 
 
+def _contains_schedule_keyword(value: str | None) -> bool:
+    if not value:
+        return False
+    value_lower = value.lower()
+    clean_value = re.sub(r"^(fwd|fw|re|fw:|re:)\s*", "", value_lower, flags=re.IGNORECASE).strip()
+    return "розклад" in value_lower or "розклад" in clean_value or "rozklad" in value_lower or "rozklad" in clean_value
+
+
 def _dispatch_import_with_fallback(import_job_id: int) -> str:
     try:
         process_import_job_task.delay(import_job_id)
@@ -169,14 +177,9 @@ def gmail_api_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        filename_lower = filename.lower()
-        subject_lower = (body.subject or "").lower()
-        
-        # Видаляємо типові префікси пересилання та відповідей перед перевіркою
-        import re
-        clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
-        
-        if "розклад" not in filename_lower and "розклад" not in clean_subject_lower and "розклад" not in subject_lower:
+        # Для Gmail API тема інколи не приходить (None) через зовнішній flow.
+        # У такому випадку не блокуємо імпорт DOCX з trusted каналу.
+        if body.subject is not None and not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(body.subject):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {body.subject})",
@@ -314,14 +317,7 @@ def google_mail_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        filename_lower = filename.lower()
-        subject_lower = (subject or "").lower()
-        
-        # Видаляємо типові префікси пересилання та відповідей перед перевіркою
-        import re
-        clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
-        
-        if "розклад" not in filename_lower and "розклад" not in clean_subject_lower and "розклад" not in subject_lower:
+        if not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(subject):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject})",
