@@ -1,4 +1,5 @@
 import email
+import hashlib
 import imaplib
 import re
 from datetime import datetime, timezone
@@ -106,6 +107,13 @@ def _decode_header(value: str | None) -> str:
     return "".join(decoded)
 
 
+def _message_id_with_uid(message_id: str, uid_token: str) -> str:
+    digest = hashlib.sha1(f"{message_id}|uid:{uid_token}".encode("utf-8")).hexdigest()[:12]
+    max_base_len = 255 - len(digest) - 1
+    base = message_id[:max_base_len]
+    return f"{base}#{digest}"
+
+
 def _extract_text_from_file(path: str, doc_type: DocumentType) -> str:
     if doc_type == DocumentType.DOCX:
         document = DocxDocument(path)
@@ -133,19 +141,41 @@ def ingest_mailbox(db: Session) -> dict:
 
     ids = data[0].split()
     for msg_id in ids:
-        status, message_data = mailbox.fetch(msg_id, "(RFC822)")
+        status, message_data = mailbox.fetch(msg_id, "(UID RFC822)")
         if status != "OK" or not message_data:
             continue
 
-        raw = message_data[0][1]
+        fetch_meta = b""
+        raw = b""
+        for part in message_data:
+            if isinstance(part, tuple):
+                if isinstance(part[0], bytes):
+                    fetch_meta = part[0]
+                if isinstance(part[1], bytes):
+                    raw = part[1]
+                break
+        if not raw:
+            continue
+
+        uid_match = re.search(rb"UID\s+(\d+)", fetch_meta)
+        uid_token = uid_match.group(1).decode("ascii") if uid_match else ""
+
         parsed = email.message_from_bytes(raw)
-        message_id = parsed.get("Message-ID", f"local-{uuid4().hex}")
+        message_id = (parsed.get("Message-ID") or "").strip() or f"local-{uuid4().hex}"
 
         existing = (
             db.query(MailMessage)
             .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == message_id)
             .first()
         )
+        if existing and uid_token:
+            # Some providers may reuse Message-ID; append stable IMAP UID hash to avoid dropping newer messages.
+            message_id = _message_id_with_uid(message_id, uid_token)
+            existing = (
+                db.query(MailMessage)
+                .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == message_id)
+                .first()
+            )
         if existing:
             continue
 

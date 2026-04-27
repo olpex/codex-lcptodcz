@@ -23,7 +23,33 @@ class FakeIMAP4SSL:
         return "OK", [b"1"]
 
     def fetch(self, msg_id: bytes, payload: str):
-        return "OK", [(b"1 (RFC822 {256})", self.raw_message)]
+        return "OK", [(b"1 (UID 1001 RFC822 {256})", self.raw_message)]
+
+    def logout(self):
+        self.logged_out = True
+        return "BYE", [b"LOGOUT"]
+
+
+class FakeIMAP4SSLMulti:
+    def __init__(self, raw_messages: list[bytes]):
+        self.raw_messages = raw_messages
+        self.logged_out = False
+
+    def login(self, user: str, password: str):
+        return "OK", [b"LOGIN"]
+
+    def select(self, mailbox: str):
+        return "OK", [b"1"]
+
+    def search(self, charset, criteria):
+        ids = b" ".join(str(index + 1).encode("ascii") for index in range(len(self.raw_messages)))
+        return "OK", [ids]
+
+    def fetch(self, msg_id: bytes, payload: str):
+        index = int(msg_id.decode("ascii")) - 1
+        uid = 1001 + index
+        raw_message = self.raw_messages[index]
+        return "OK", [(f"{index + 1} (UID {uid} RFC822 {{256}})".encode("ascii"), raw_message)]
 
     def logout(self):
         self.logged_out = True
@@ -92,6 +118,27 @@ def _build_message_with_attachment(
         payload,
         maintype="application",
         subtype=subtype,
+        filename=filename,
+    )
+    return msg.as_bytes()
+
+
+def _build_message_with_explicit_id_and_docx(sender: str, message_id: str, tmp_path: Path, filename: str) -> bytes:
+    docx_path = tmp_path / filename
+    document = DocxDocument()
+    document.add_paragraph("Тестовий текст для обробки")
+    document.save(docx_path)
+
+    msg = EmailMessage()
+    msg["Subject"] = "Лист з вкладенням"
+    msg["From"] = sender
+    msg["To"] = "inbox@example.com"
+    msg["Message-ID"] = message_id
+    msg.set_content("Перевірка обробки")
+    msg.add_attachment(
+        docx_path.read_bytes(),
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename,
     )
     return msg.as_bytes()
@@ -223,3 +270,33 @@ def test_ingest_mailbox_skips_non_matching_excel_attachment(db_session, monkeypa
     assert message.status == MailStatus.PROCESSED
     assert message.snippet is not None
     assert "пропущено" in message.snippet.lower()
+
+
+def test_ingest_mailbox_processes_two_messages_with_same_message_id(db_session, monkeypatch, tmp_path: Path):
+    duplicated_message_id = "<same-message-id@example.com>"
+    raw_message_one = _build_message_with_explicit_id_and_docx(
+        sender="sender@example.com",
+        message_id=duplicated_message_id,
+        tmp_path=tmp_path,
+        filename="one.docx",
+    )
+    raw_message_two = _build_message_with_explicit_id_and_docx(
+        sender="sender@example.com",
+        message_id=duplicated_message_id,
+        tmp_path=tmp_path,
+        filename="two.docx",
+    )
+    fake_client = FakeIMAP4SSLMulti([raw_message_one, raw_message_two])
+
+    monkeypatch.setattr(mail_ingest.settings, "imap_host", "imap.example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_port", 993)
+    monkeypatch.setattr(mail_ingest.settings, "imap_user", "inbox@example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_password", "secret")
+    monkeypatch.setattr(mail_ingest.settings, "imap_mailbox", "INBOX")
+    monkeypatch.setattr(mail_ingest.imaplib, "IMAP4_SSL", lambda host, port: fake_client)
+
+    result = mail_ingest.ingest_mailbox(db_session)
+    assert result["processed"] == 2
+
+    messages = db_session.query(MailMessage).filter(MailMessage.subject == "Лист з вкладенням").all()
+    assert len(messages) == 2
