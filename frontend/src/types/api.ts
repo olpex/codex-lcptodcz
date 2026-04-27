@@ -58,6 +58,13 @@ export interface Group {
   end_date: string | null;
 }
 
+export interface Teacher {
+  id: number;
+  first_name: string;
+  last_name: string;
+  is_active: boolean;
+}
+
 export interface ScheduleSlot {
   id: number;
   group_id: number;

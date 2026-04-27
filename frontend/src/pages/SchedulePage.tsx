@@ -6,7 +6,7 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import type { ScheduleSlot } from "../types/api";
+import type { ScheduleSlot, Teacher } from "../types/api";
 
 type GroupedSchedule = {
   dateKey: string;
@@ -147,62 +147,17 @@ function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
   };
 }
 
-export function SchedulePage() {
-  const { request, user } = useAuth();
-  const { showError, showSuccess } = useToast();
-  const [slots, setSlots] = useState<ScheduleSlot[]>([]);
-  const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
-  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [days, setDays] = useState(5);
-  const [generateErrors, setGenerateErrors] = useState<{ startDate?: string; days?: string }>({});
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
-  const [showConflictsOnly, setShowConflictsOnly] = useState(false);
-  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
-
-  const appendSnapshot = (data: ScheduleSlot[]) => {
-    const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
-    const uniqueGroups = new Set(data.map((slot) => slot.group_id)).size;
-    const uniqueTeachers = new Set(data.map((slot) => slot.teacher_id)).size;
-    const conflicts = analyzeScheduleConflicts(data).overlapCount;
-    const snapshot: ScheduleSnapshot = {
-      totalLessons: data.length,
-      totalHours,
-      uniqueGroups,
-      uniqueTeachers,
-      conflicts
-    };
-    setStatsHistory((prev) => {
-      const next = [...prev, snapshot];
-      if (next.length <= STATS_HISTORY_LIMIT) return next;
-      return next.slice(next.length - STATS_HISTORY_LIMIT);
-    });
-  };
-
-  const conflictAnalysis = useMemo(() => analyzeScheduleConflicts(slots), [slots]);
-
-  const fetchSchedule = async () => {
-    setIsLoading(true);
-    try {
-      const data = await request<ScheduleSlot[]>("/schedule");
-      setSlots(data);
-      appendSnapshot(data);
-      setLoadError(null);
-    } catch (error) {
-      const message = (error as Error).message;
-      setLoadError(message);
-      showError(message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  
-const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string; slots: ScheduleSlot[]; conflictAnalysis: ConflictAnalysis }) => {
+const MonthCalendar = ({ 
+  monthKey, 
+  slots, 
+  conflictAnalysis,
+  onUpdateSlot 
+}: { 
+  monthKey: string; 
+  slots: ScheduleSlot[]; 
+  conflictAnalysis: ConflictAnalysis;
+  onUpdateSlot: (id: number, payload: Partial<ScheduleSlot>) => void;
+}) => {
   const [yearStr, monthStr] = monthKey.split("-");
   const year = parseInt(yearStr, 10);
   const month = parseInt(monthStr, 10) - 1;
@@ -269,7 +224,42 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
           const hasConflicts = daySlots.some(s => conflictAnalysis.conflictSlotIds.has(s.id));
           
           return (
-            <div key={day} className={`bg-white p-2 min-h-[120px] relative group hover:bg-slate-50 transition-colors ${hasConflicts ? 'bg-red-50/30' : ''}`}>
+            <div 
+              key={day} 
+              className={`bg-white p-2 min-h-[120px] relative group hover:bg-slate-50 transition-colors ${hasConflicts ? 'bg-red-50/30' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.add('bg-blue-50');
+              }}
+              onDragLeave={(e) => {
+                e.currentTarget.classList.remove('bg-blue-50');
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('bg-blue-50');
+                const dataStr = e.dataTransfer.getData('application/json');
+                if (!dataStr) return;
+                try {
+                  const data = JSON.parse(dataStr);
+                  const targetDate = `${monthKey}-${day.toString().padStart(2, '0')}`;
+                  
+                  if (data.type === 'slot') {
+                    // Update slot date and keep its time by merging with new date
+                    const slotIds: number[] = data.slotIds;
+                    slotIds.forEach(id => {
+                      const existingSlot = slots.find(s => s.id === id);
+                      if (existingSlot) {
+                        const newStartsAt = `${targetDate}T${existingSlot.starts_at.split('T')[1]}`;
+                        const newEndsAt = `${targetDate}T${existingSlot.ends_at.split('T')[1]}`;
+                        onUpdateSlot(id, { starts_at: newStartsAt, ends_at: newEndsAt });
+                      }
+                    });
+                  }
+                } catch (err) {
+                  console.error(err);
+                }
+              }}
+            >
               <span className={`text-sm font-semibold ${hasConflicts ? 'text-red-600' : 'text-slate-700'}`}>{day}</span>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {
@@ -292,47 +282,47 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
                     return (
                       <div 
                         key={group.map(s => s.id).join('-')} 
-                        className={`w-3 h-3 rounded-full ${isConflict ? 'bg-red-500 shadow-[0_0_0_2px_rgba(239,68,68,0.2)]' : 'bg-pine'}`}
-                      />
+                        draggable
+                        onDragStart={(e) => {
+                          e.stopPropagation();
+                          e.dataTransfer.setData('application/json', JSON.stringify({ type: 'slot', slotIds: group.map(s => s.id) }));
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          e.currentTarget.classList.add('opacity-50');
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.classList.remove('opacity-50');
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          e.currentTarget.classList.remove('opacity-50');
+                          const dataStr = e.dataTransfer.getData('application/json');
+                          if (!dataStr) return;
+                          try {
+                            const data = JSON.parse(dataStr);
+                            if (data.type === 'teacher') {
+                              const teacherId = data.teacherId;
+                              group.forEach(s => {
+                                onUpdateSlot(s.id, { teacher_id: teacherId });
+                              });
+                            }
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }}
+                        className={`text-[10px] p-1 mb-1 rounded cursor-grab border ${isConflict ? 'bg-red-100 border-red-300 text-red-800' : 'bg-green-50 border-green-200 text-green-800'}`}
+                      >
+                        <div className="font-semibold">Пара {first.pair_number}</div>
+                        <div className="truncate">{shortName(first.teacher_name)}</div>
+                        <div className="truncate text-[9px] opacity-80">{group.map(s => s.group_code || s.group_id).join(', ')}</div>
+                      </div>
                     );
                   })
                 }
               </div>
-              
-              {daySlots.length > 0 && (
-                <div className="hidden group-hover:block absolute z-20 bottom-[calc(100%-10px)] left-1/2 -translate-x-1/2 mb-2 w-max max-w-[280px] p-2.5 bg-slate-800 text-white text-xs rounded shadow-xl">
-                  <div className="font-bold mb-1.5 border-b border-slate-600 pb-1.5">Заняття ({day} число)</div>
-                  {
-                    Object.values(
-                      daySlots.reduce((acc, slot) => {
-                        const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
-                        if (slot.pair_number != null && slot.academic_hours === 1 && !isConflict) {
-                          const key = `pair:${slot.pair_number}:teacher:${slot.teacher_id}`;
-                          if (!acc[key]) acc[key] = [];
-                          acc[key].push(slot);
-                        } else {
-                          acc[`slot:${slot.id}`] = [slot];
-                        }
-                        return acc;
-                      }, {} as Record<string, ScheduleSlot[]>)
-                    ).map(group => {
-                      const first = group[0];
-                      const isConflict = conflictAnalysis.conflictSlotIds.has(first.id);
-                      const isGrouped1Plus1 = group.length > 1;
-                      const groupsText = group.map(s => s.group_code || s.group_id).join(', ');
-                      
-                      return (
-                        <div key={group.map(s => s.id).join('-')} className={`mb-1.5 last:mb-0 ${isConflict ? 'text-red-300 font-medium' : ''}`}>
-                          <span className="opacity-75">Пара {first.pair_number ?? '-'}:</span> {groupsText} — {shortName(first.teacher_name)}
-                          {isGrouped1Plus1 && " (1+1)"}
-                          {isConflict && " ⚠️ Накладка"}
-                        </div>
-                      );
-                    })
-                  }
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
-                </div>
-              )}
             </div>
           );
         })}
@@ -341,7 +331,82 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
   );
 };
 
+export function SchedulePage() {
+  const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
+  const [slots, setSlots] = useState<ScheduleSlot[]>([]);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
+  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [days, setDays] = useState(5);
+  const [generateErrors, setGenerateErrors] = useState<{ startDate?: string; days?: string }>({});
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [showConflictsOnly, setShowConflictsOnly] = useState(false);
+  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
+  const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
+
+  const appendSnapshot = (data: ScheduleSlot[]) => {
+    const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
+    const uniqueGroups = new Set(data.map((slot) => slot.group_id)).size;
+    const uniqueTeachers = new Set(data.map((slot) => slot.teacher_id)).size;
+    const conflicts = analyzeScheduleConflicts(data).overlapCount;
+    const snapshot: ScheduleSnapshot = {
+      totalLessons: data.length,
+      totalHours,
+      uniqueGroups,
+      uniqueTeachers,
+      conflicts
+    };
+    setStatsHistory((prev) => {
+      const next = [...prev, snapshot];
+      if (next.length <= STATS_HISTORY_LIMIT) return next;
+      return next.slice(next.length - STATS_HISTORY_LIMIT);
+    });
+  };
+
+  const conflictAnalysis = useMemo(() => analyzeScheduleConflicts(slots), [slots]);
+
+  const fetchSchedule = async () => {
+    setIsLoading(true);
+    try {
+      const [data, teachersData] = await Promise.all([
+        request<ScheduleSlot[]>("/schedule"),
+        request<Teacher[]>("/teachers")
+      ]);
+      setSlots(data);
+      setTeachers(teachersData);
+      appendSnapshot(data);
+      setLoadError(null);
+    } catch (error) {
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  
+  const handleUpdateSlot = async (slotId: number, payload: Partial<ScheduleSlot>) => {
+    try {
+      const updated = await request<ScheduleSlot>(`/schedule/${slotId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      setSlots(prev => {
+        const next = prev.map(s => s.id === slotId ? updated : s);
+        appendSnapshot(next);
+        return next;
+      });
+      showSuccess("Розклад оновлено");
+    } catch (err) {
+      showError((err as Error).message);
+    }
+  };
 
   useEffect(() => {
     fetchSchedule();
@@ -596,41 +661,66 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
           </p>
         )}
 
-        <div className="space-y-3">
-          {visibleGroupedSchedule.map((group) => {
-            const isExpanded = Boolean(expandedDates[group.dateKey]);
-            const dayConflictCount = conflictAnalysis.conflictSlotCountByDate.get(group.dateKey) || 0;
-            return (
-              <div key={group.dateKey} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <button
-                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
-                  onClick={() => toggleDate(group.dateKey)}
-                  aria-expanded={isExpanded}
-                  aria-controls={`schedule-day-${group.dateKey}`}
-                >
-                  <div>
-                    <p className="font-semibold capitalize text-ink">{group.label}</p>
-                    <p className="text-xs text-slate-600">
-                      Занять: {group.slots.length} | Годин: {group.totalHours}
-                      {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}{" "}
-                      {dayConflictCount > 0 && (
-                        <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">⚠ Увага</span>
-                      )}
-                    </p>
-                  </div>
-                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
-                    {isExpanded ? "−" : "+"}
-                  </span>
-                </button>
+        <div className="flex flex-col xl:flex-row gap-5">
+          <div className="flex-1 space-y-3">
+            {visibleGroupedSchedule.map((group) => {
+              const isExpanded = Boolean(expandedDates[group.dateKey]);
+              const dayConflictCount = conflictAnalysis.conflictSlotCountByDate.get(group.dateKey) || 0;
+              return (
+                <div key={group.dateKey} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <button
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                    onClick={() => toggleDate(group.dateKey)}
+                    aria-expanded={isExpanded}
+                    aria-controls={`schedule-day-${group.dateKey}`}
+                  >
+                    <div>
+                      <p className="font-semibold capitalize text-ink">{group.label}</p>
+                      <p className="text-xs text-slate-600">
+                        Занять: {group.slots.length} | Годин: {group.totalHours}
+                        {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}{" "}
+                        {dayConflictCount > 0 && (
+                          <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">⚠ Увага</span>
+                        )}
+                      </p>
+                    </div>
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
+                      {isExpanded ? "−" : "+"}
+                    </span>
+                  </button>
 
-                {isExpanded && (
-                  <div id={`schedule-day-${group.dateKey}`} className="border-t border-slate-200 px-3 py-2">
-                    <MonthCalendar monthKey={group.dateKey} slots={group.slots} conflictAnalysis={conflictAnalysis} />
-                  </div>
-                )}
+                  {isExpanded && (
+                    <div id={`schedule-day-${group.dateKey}`} className="border-t border-slate-200 px-3 py-2">
+                      <MonthCalendar monthKey={group.dateKey} slots={group.slots} conflictAnalysis={conflictAnalysis} onUpdateSlot={handleUpdateSlot} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          
+          {canGenerate && teachers.length > 0 && (
+            <div className="w-full xl:w-64 flex-shrink-0">
+              <div className="sticky top-[140px] rounded-xl border border-slate-200 bg-white p-3 shadow-sm max-h-[calc(100vh-160px)] overflow-y-auto">
+                <h4 className="font-semibold text-slate-800 mb-2">Викладачі</h4>
+                <p className="text-xs text-slate-500 mb-3">Перетягніть викладача на заняття для заміни.</p>
+                <div className="space-y-1.5">
+                  {teachers.map(t => (
+                    <div
+                      key={t.id}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('application/json', JSON.stringify({ type: 'teacher', teacherId: t.id }));
+                      }}
+                      className="text-sm p-2 rounded border border-slate-200 bg-slate-50 cursor-grab hover:bg-slate-100"
+                    >
+                      {t.last_name} {t.first_name}
+                    </div>
+                  ))}
+                </div>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       </Panel>
     </div>

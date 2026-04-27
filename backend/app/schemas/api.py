@@ -315,6 +315,14 @@ class ScheduleSlotResponse(ORMModel):
     generated_by: int | None
 
 
+class ScheduleSlotUpdate(BaseModel):
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    pair_number: int | None = None
+    teacher_id: int | None = None
+    room_id: int | None = None
+
+
 class WorkloadResponse(BaseModel):
     teacher_id: int
     row_number: int

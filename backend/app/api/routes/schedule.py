@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Group, GroupStatus, RoleName, Room, ScheduleSlot, Subject, Teacher
-from app.schemas.api import ScheduleGenerateRequest, ScheduleSlotResponse
+from app.schemas.api import ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
 from app.services.audit import write_audit
 
 router = APIRouter()
@@ -177,3 +177,48 @@ def list_schedule(
 
     slots = query.order_by(ScheduleSlot.starts_at.asc()).all()
     return _to_schedule_responses(db, slots)
+
+@router.patch(
+    "/{slot_id}",
+    response_model=ScheduleSlotResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def update_schedule_slot(
+    slot_id: int,
+    payload: ScheduleSlotUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ScheduleSlotResponse:
+    slot = db.get(ScheduleSlot, slot_id)
+    if not slot:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Заняття не знайдено")
+    
+    group = db.get(Group, slot.group_id)
+    if not group or group.branch_id != current_user.branch_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Немає доступу до цієї групи")
+
+    if payload.starts_at is not None:
+        slot.starts_at = payload.starts_at
+    if payload.ends_at is not None:
+        slot.ends_at = payload.ends_at
+    if payload.pair_number is not None:
+        slot.pair_number = payload.pair_number
+    if payload.teacher_id is not None:
+        slot.teacher_id = payload.teacher_id
+    if payload.room_id is not None:
+        slot.room_id = payload.room_id
+
+    db.add(slot)
+    db.commit()
+    db.refresh(slot)
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="schedule.update",
+        entity_type="schedule",
+        entity_id=str(slot.id),
+        details={"payload": payload.model_dump(exclude_unset=True)},
+    )
+    return _to_schedule_responses(db, [slot])[0]
+
