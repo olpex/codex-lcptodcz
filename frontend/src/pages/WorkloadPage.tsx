@@ -31,6 +31,9 @@ export function WorkloadPage() {
   const canEditAnnualLoad =
     user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+
   const buildSnapshot = (data: Workload[]): WorkloadSnapshot => {
     const totals = data.reduce(
       (acc, row) => {
@@ -58,10 +61,17 @@ export function WorkloadPage() {
     });
   };
 
-  const load = async () => {
+  const load = async (overrideDateFrom?: string, overrideDateTo?: string) => {
     setIsLoading(true);
     try {
-      const data = await request<Workload[]>("/teacher-workload");
+      const params = new URLSearchParams();
+      const dFrom = overrideDateFrom !== undefined ? overrideDateFrom : dateFrom;
+      const dTo = overrideDateTo !== undefined ? overrideDateTo : dateTo;
+      if (dFrom) params.append("date_from", dFrom);
+      if (dTo) params.append("date_to", dTo);
+      const query = params.toString() ? `?${params.toString()}` : "";
+
+      const data = await request<Workload[]>(`/teacher-workload${query}`);
       setRows(data);
       appendSnapshot(data);
       setLoadError(null);
@@ -264,16 +274,48 @@ export function WorkloadPage() {
             );
           })}
         </div>
-        <button className="mb-3 rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={load}>
-          Оновити
-        </button>
+        <div className="mb-3 flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-slate-700">Період з</label>
+            <input 
+              type="date" 
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pine focus:outline-none focus:ring-1 focus:ring-pine" 
+              value={dateFrom} 
+              onChange={e => setDateFrom(e.target.value)} 
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm font-medium text-slate-700">Період до</label>
+            <input 
+              type="date" 
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pine focus:outline-none focus:ring-1 focus:ring-pine" 
+              value={dateTo} 
+              onChange={e => setDateTo(e.target.value)} 
+            />
+          </div>
+          <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={() => load()}>
+            Застосувати
+          </button>
+          {(dateFrom || dateTo) && (
+            <button 
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50" 
+              onClick={() => { 
+                setDateFrom(""); 
+                setDateTo(""); 
+                load("", "");
+              }}
+            >
+              Скинути дати
+            </button>
+          )}
+        </div>
         <DataTable
           data={rows}
           columns={columns}
           rowKey={(row) => row.teacher_id}
           isLoading={isLoading}
           errorText={loadError}
-          onRetry={load}
+          onRetry={() => load()}
           emptyText="Дані педнавантаження відсутні"
           search={{
             placeholder: "Пошук викладача",
