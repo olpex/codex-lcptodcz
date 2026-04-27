@@ -29,6 +29,8 @@ type ConflictInterval = {
   start: number;
   end: number;
   dateKey: string;
+  academicHours?: number | null;
+  pairNumber?: number | null;
 };
 
 type ConflictAnalysis = {
@@ -75,6 +77,17 @@ function detectOverlapsInIntervals(
       if (right.start >= left.end) {
         break;
       }
+      
+      // Дозволити 1+1 годину в одній парі без накладки
+      if (
+        left.pairNumber != null &&
+        left.pairNumber === right.pairNumber &&
+        left.academicHours === 1 &&
+        right.academicHours === 1
+      ) {
+        continue;
+      }
+
       overlaps += 1;
       conflictSlotIds.add(left.slotId);
       conflictSlotIds.add(right.slotId);
@@ -100,7 +113,14 @@ function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
     const dateKey = slot.starts_at.slice(0, 10);
     const teacherKey = `${dateKey}:teacher:${slot.teacher_id}`;
     const roomKey = `${dateKey}:room:${slot.room_id}`;
-    const interval: ConflictInterval = { slotId: slot.id, start, end, dateKey };
+    const interval: ConflictInterval = { 
+      slotId: slot.id, 
+      start, 
+      end, 
+      dateKey, 
+      academicHours: slot.academic_hours, 
+      pairNumber: slot.pair_number 
+    };
     teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), interval]);
     roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), interval]);
   }
@@ -252,29 +272,64 @@ const MonthCalendar = ({ monthKey, slots, conflictAnalysis }: { monthKey: string
             <div key={day} className={`bg-white p-2 min-h-[120px] relative group hover:bg-slate-50 transition-colors ${hasConflicts ? 'bg-red-50/30' : ''}`}>
               <span className={`text-sm font-semibold ${hasConflicts ? 'text-red-600' : 'text-slate-700'}`}>{day}</span>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {daySlots.map(slot => {
-                  const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
-                  return (
-                    <div 
-                      key={slot.id} 
-                      className={`w-3 h-3 rounded-full ${isConflict ? 'bg-red-500 shadow-[0_0_0_2px_rgba(239,68,68,0.2)]' : 'bg-pine'}`}
-                    />
-                  );
-                })}
+                {
+                  // Групуємо слоти, якщо вони мають однакову пару, викладача і по 1 годині
+                  Object.values(
+                    daySlots.reduce((acc, slot) => {
+                      const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
+                      if (slot.pair_number != null && slot.academic_hours === 1 && !isConflict) {
+                        const key = `pair:${slot.pair_number}:teacher:${slot.teacher_id}`;
+                        if (!acc[key]) acc[key] = [];
+                        acc[key].push(slot);
+                      } else {
+                        acc[`slot:${slot.id}`] = [slot];
+                      }
+                      return acc;
+                    }, {} as Record<string, ScheduleSlot[]>)
+                  ).map(group => {
+                    const first = group[0];
+                    const isConflict = conflictAnalysis.conflictSlotIds.has(first.id);
+                    return (
+                      <div 
+                        key={group.map(s => s.id).join('-')} 
+                        className={`w-3 h-3 rounded-full ${isConflict ? 'bg-red-500 shadow-[0_0_0_2px_rgba(239,68,68,0.2)]' : 'bg-pine'}`}
+                      />
+                    );
+                  })
+                }
               </div>
               
               {daySlots.length > 0 && (
                 <div className="hidden group-hover:block absolute z-20 bottom-[calc(100%-10px)] left-1/2 -translate-x-1/2 mb-2 w-max max-w-[280px] p-2.5 bg-slate-800 text-white text-xs rounded shadow-xl">
                   <div className="font-bold mb-1.5 border-b border-slate-600 pb-1.5">Заняття ({day} число)</div>
-                  {daySlots.map(slot => {
-                    const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
-                    return (
-                      <div key={slot.id} className={`mb-1.5 last:mb-0 ${isConflict ? 'text-red-300 font-medium' : ''}`}>
-                        <span className="opacity-75">Пара {slot.pair_number ?? '-'}:</span> {slot.group_code || slot.group_id} — {shortName(slot.teacher_name)}
-                        {isConflict && " ⚠️ Накладка"}
-                      </div>
-                    );
-                  })}
+                  {
+                    Object.values(
+                      daySlots.reduce((acc, slot) => {
+                        const isConflict = conflictAnalysis.conflictSlotIds.has(slot.id);
+                        if (slot.pair_number != null && slot.academic_hours === 1 && !isConflict) {
+                          const key = `pair:${slot.pair_number}:teacher:${slot.teacher_id}`;
+                          if (!acc[key]) acc[key] = [];
+                          acc[key].push(slot);
+                        } else {
+                          acc[`slot:${slot.id}`] = [slot];
+                        }
+                        return acc;
+                      }, {} as Record<string, ScheduleSlot[]>)
+                    ).map(group => {
+                      const first = group[0];
+                      const isConflict = conflictAnalysis.conflictSlotIds.has(first.id);
+                      const isGrouped1Plus1 = group.length > 1;
+                      const groupsText = group.map(s => s.group_code || s.group_id).join(', ');
+                      
+                      return (
+                        <div key={group.map(s => s.id).join('-')} className={`mb-1.5 last:mb-0 ${isConflict ? 'text-red-300 font-medium' : ''}`}>
+                          <span className="opacity-75">Пара {first.pair_number ?? '-'}:</span> {groupsText} — {shortName(first.teacher_name)}
+                          {isGrouped1Plus1 && " (1+1)"}
+                          {isConflict && " ⚠️ Накладка"}
+                        </div>
+                      );
+                    })
+                  }
                   <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
                 </div>
               )}
