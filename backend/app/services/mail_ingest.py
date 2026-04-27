@@ -134,13 +134,32 @@ def ingest_mailbox(db: Session) -> dict:
     mailbox = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port)
     mailbox.login(settings.imap_user, settings.imap_password)
     mailbox.select(settings.imap_mailbox)
-    status, data = mailbox.search(None, "UNSEEN")
-    if status != "OK":
-        mailbox.logout()
-        return {"processed": 0, "message": "Не вдалося отримати список листів"}
+    
+    # Search for UNSEEN messages and messages from the last 3 days
+    # to avoid skipping messages that were manually read by a user
+    import datetime as dt
+    months = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun", 
+              7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+    past_date = dt.datetime.now() - dt.timedelta(days=3)
+    since_date = f"{past_date.day:02d}-{months[past_date.month]}-{past_date.year}"
+    
+    status_unseen, data_unseen = mailbox.search(None, "UNSEEN")
+    status_since, data_since = mailbox.search(None, f'(SINCE "{since_date}")')
+    
+    ids_to_process = set()
+    if status_unseen == "OK" and data_unseen[0]:
+        ids_to_process.update(data_unseen[0].split())
+    if status_since == "OK" and data_since[0]:
+        ids_to_process.update(data_since[0].split())
 
-    ids = data[0].split()
-    for msg_id in ids:
+    if not ids_to_process:
+        mailbox.logout()
+        return {"processed": 0, "message": "Немає нових листів для обробки"}
+
+    # Sort IDs numerically to process older messages first
+    sorted_ids = sorted(ids_to_process, key=lambda x: int(x))
+
+    for msg_id in sorted_ids:
         status, message_data = mailbox.fetch(msg_id, "(UID RFC822)")
         if status != "OK" or not message_data:
             continue
@@ -168,14 +187,16 @@ def ingest_mailbox(db: Session) -> dict:
             .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == message_id)
             .first()
         )
-        if existing and uid_token:
-            # Some providers may reuse Message-ID; append stable IMAP UID hash to avoid dropping newer messages.
-            message_id = _message_id_with_uid(message_id, uid_token)
+        if existing:
+            # Fallback for identical Message-IDs or missing UID: use content hash
+            content_hash = hashlib.sha1(raw).hexdigest()[:12]
+            message_id = f"{message_id}#{content_hash}"
             existing = (
                 db.query(MailMessage)
                 .filter(MailMessage.branch_id == branch_id, MailMessage.message_id == message_id)
                 .first()
             )
+        
         if existing:
             continue
 
@@ -219,10 +240,13 @@ def ingest_mailbox(db: Session) -> dict:
         attachment_notes: list[str] = []
         for part in parsed.walk():
             content_disposition = str(part.get("Content-Disposition", ""))
-            if "attachment" not in content_disposition:
+            filename = _decode_header(part.get_filename())
+            
+            # Treat as attachment if it has 'attachment' in disposition OR has a filename
+            if "attachment" not in content_disposition and not filename:
                 continue
 
-            filename = _decode_header(part.get_filename()) or f"attachment_{uuid4().hex}.bin"
+            filename = filename or f"attachment_{uuid4().hex}.bin"
             payload = part.get_payload(decode=True)
             if not payload:
                 continue

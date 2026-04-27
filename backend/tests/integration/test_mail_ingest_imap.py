@@ -20,6 +20,7 @@ class FakeIMAP4SSL:
         return "OK", [b"1"]
 
     def search(self, charset, criteria):
+        # We handle UNSEEN or SINCE searches for the test by always returning the same mocked IDs
         return "OK", [b"1"]
 
     def fetch(self, msg_id: bytes, payload: str):
@@ -42,6 +43,7 @@ class FakeIMAP4SSLMulti:
         return "OK", [b"1"]
 
     def search(self, charset, criteria):
+        # Return all mock message IDs
         ids = b" ".join(str(index + 1).encode("ascii") for index in range(len(self.raw_messages)))
         return "OK", [ids]
 
