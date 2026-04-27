@@ -30,11 +30,14 @@ def _extract_group_code_from_filename(filename: str) -> str | None:
 
 
 def _is_schedule_filename(filename: str) -> bool:
-    return "розклад" in filename.lower()
+    # Тимчасово вимкнено жорстку перевірку за проханням користувача
+    # щоб приймати всі листи (наприклад, файли просто з назвою "167-25.docx")
+    return True
 
 
 def _is_contracts_filename(filename: str) -> bool:
-    return "договор" in filename.lower()
+    # Тимчасово вимкнено жорстку перевірку за проханням користувача
+    return True
 
 
 def _dispatch_import_with_fallback(import_job_id: int) -> str:
