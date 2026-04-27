@@ -29,12 +29,6 @@ def _extract_group_code_from_filename(filename: str) -> str | None:
     return "".join(match.group(1).split()).replace("–", "-").replace("—", "-")
 
 
-def _is_schedule_filename(filename: str) -> bool:
-    # Тимчасово вимкнено жорстку перевірку за проханням користувача
-    # щоб приймати всі листи (наприклад, файли просто з назвою "167-25.docx")
-    return True
-
-
 def _is_contracts_filename(filename: str) -> bool:
     # Тимчасово вимкнено жорстку перевірку за проханням користувача
     return True
@@ -126,6 +120,7 @@ class GmailApiContractWebhookRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=512)
     messageId: str = Field(min_length=1, max_length=255)
     fileBase64: str = Field(min_length=1, description="URL-safe Base64 даних файлу (формат Gmail API)")
+    subject: str | None = Field(default=None, description="Тема листа")
 
 
 @router.post("/mail/gmail-api-webhook/contracts", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -174,10 +169,12 @@ def gmail_api_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        if not _is_schedule_filename(filename):
+        filename_lower = filename.lower()
+        subject_lower = (body.subject or "").lower()
+        if "розклад" not in filename_lower and "розклад" not in subject_lower:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва DOCX файлу має містити ключове слово 'розклад'",
+                detail="Назва DOCX файлу або тема листа має містити ключове слово 'розклад'",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -312,10 +309,12 @@ def google_mail_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        if not _is_schedule_filename(filename):
+        filename_lower = filename.lower()
+        subject_lower = (subject or "").lower()
+        if "розклад" not in filename_lower and "розклад" not in subject_lower:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва DOCX файлу має містити ключове слово 'розклад'",
+                detail="Назва DOCX файлу або тема листа має містити ключове слово 'розклад'",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

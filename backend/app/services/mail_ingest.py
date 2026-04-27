@@ -26,7 +26,7 @@ from app.models import (
 from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content, try_import_trainees
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
-from app.services.schedule_import import parse_schedule_docx
+from app.services.schedule_import import parse_schedule_docx, import_schedule_docx
 from app.models import ScheduleSlot, Group, Trainee
 
 GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
@@ -126,7 +126,7 @@ def _extract_text_from_file(path: str, doc_type: DocumentType) -> str:
     return ocr_image_file(path)
 
 
-def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_path: str, doc_type: DocumentType) -> bool:
+def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_path: str, doc_type: DocumentType, sender_email: str = "", subject: str = "") -> bool:
     if doc_type == DocumentType.XLSX and is_contract_attachment_filename(filename):
         group_code = extract_contract_group_code(filename)
         if group_code:
@@ -137,27 +137,31 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             ).first()
             if exists:
                 return True
-    elif doc_type == DocumentType.DOCX:
-        try:
-            parsed = parse_schedule_docx(file_path)
-            group_code = parsed.get("group_code")
-            entries = parsed.get("entries", [])
-            
-            if group_code and entries:
-                group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-                if group:
-                    min_start = min(item["starts_at"] for item in entries)
-                    max_end = max(item["ends_at"] for item in entries)
+    elif doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
+        filename_lower = filename.lower()
+        subject_lower = (subject or "").lower()
+        if "розклад" in filename_lower or "розклад" in subject_lower:
+            try:
+                parsed_list = parse_schedule_docx(file_path)
+                for parsed in parsed_list:
+                    group_code = parsed.get("group_code")
+                    entries = parsed.get("entries", [])
                     
-                    exists = db.query(ScheduleSlot).filter(
-                        ScheduleSlot.group_id == group.id,
-                        ScheduleSlot.starts_at >= min_start,
-                        ScheduleSlot.ends_at <= max_end
-                    ).first()
-                    if exists:
-                        return True
-        except Exception:
-            pass
+                    if group_code and entries:
+                        group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+                        if group:
+                            min_start = min(item["starts_at"] for item in entries)
+                            max_end = max(item["ends_at"] for item in entries)
+                            
+                            exists = db.query(ScheduleSlot).filter(
+                                ScheduleSlot.group_id == group.id,
+                                ScheduleSlot.starts_at >= min_start,
+                                ScheduleSlot.ends_at <= max_end
+                            ).first()
+                            if exists:
+                                return True
+            except Exception:
+                pass
     return False
 
 
@@ -269,7 +273,7 @@ def ingest_mailbox(db: Session) -> dict:
             with Path(out_path).open("wb") as handle:
                 handle.write(payload)
 
-            if is_duplicate_attachment(db, branch_id, filename, str(out_path), doc_type):
+            if is_duplicate_attachment(db, branch_id, filename, str(out_path), doc_type, sender_email, subject):
                 out_path.unlink(missing_ok=True)
                 attachment_notes.append(f"Пропущено дублікат ({filename})")
                 continue
@@ -341,6 +345,48 @@ def ingest_mailbox(db: Session) -> dict:
                 attachment_notes.append(
                     f"Excel-вкладення пропущено ({filename}): не відповідає правилу 'Договори' або відправнику"
                 )
+                continue
+
+            # Check if this DOCX is a schedule attachment
+            is_schedule_attachment = False
+            if doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
+                filename_lower = filename.lower()
+                subject_lower = (subject or "").lower()
+                if "розклад" in filename_lower or "розклад" in subject_lower:
+                    is_schedule_attachment = True
+
+            if is_schedule_attachment:
+                job = ImportJob(
+                    branch_id=branch_id,
+                    idempotency_key=f"{branch_id}:mail-schedules:{uuid4().hex}",
+                    document_id=document.id,
+                    status=JobStatus.RUNNING,
+                    message="Автоімпорт розкладу із пошти виконується",
+                    started_at=datetime.now(timezone.utc),
+                    result_payload={
+                        "source": "mail_auto_schedules",
+                        "message_id": message_id,
+                        "sender_name": sender_name,
+                        "sender_email": sender_email,
+                        "filename": filename,
+                    },
+                )
+                db.add(job)
+                db.flush()
+                try:
+                    import_result = import_schedule_docx(db, str(out_path), branch_id)
+                    job.status = JobStatus.SUCCEEDED
+                    job.result_payload["import_result"] = import_result
+                    job.message = "Автоімпорт розкладу із пошти виконано"
+                    job.finished_at = datetime.now(timezone.utc)
+                    attachment_notes.append(f"Імпорт розкладу виконано ({filename})")
+                except Exception as exc:
+                    job.status = JobStatus.FAILED
+                    job.message = f"Помилка автоімпорту розкладу: {exc}"
+                    job.finished_at = datetime.now(timezone.utc)
+                    attachment_notes.append(f"Помилка імпорту розкладу ({filename})")
+                db.add(job)
+                db.flush()
                 continue
 
             text = _extract_text_from_file(str(out_path), doc_type)

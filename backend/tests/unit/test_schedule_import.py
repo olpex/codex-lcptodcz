@@ -87,7 +87,9 @@ def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
 
-    payload = parse_schedule_docx(str(file_path))
+    payload_list = parse_schedule_docx(str(file_path))
+    assert len(payload_list) == 1
+    payload = payload_list[0]
     assert payload["group_code"] == "167-25"
     assert payload["group_total_hours"] == 5
     assert payload["entries"]
@@ -98,7 +100,9 @@ def test_parse_schedule_docx_supports_short_year_and_teacher_carryover(tmp_path:
     file_path = tmp_path / "schedule-short-year.docx"
     _build_schedule_docx_with_short_year_and_merged_teacher(file_path)
 
-    payload = parse_schedule_docx(str(file_path))
+    payload_list = parse_schedule_docx(str(file_path))
+    assert len(payload_list) == 1
+    payload = payload_list[0]
     assert payload["group_code"] == "167-26"
     assert payload["start_date"] == "2025-10-21"
     assert payload["end_date"] == "2025-10-24"
