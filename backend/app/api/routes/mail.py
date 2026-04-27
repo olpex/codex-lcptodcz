@@ -171,10 +171,15 @@ def gmail_api_contracts_webhook(
     elif doc_type.value == "docx":
         filename_lower = filename.lower()
         subject_lower = (body.subject or "").lower()
-        if "розклад" not in filename_lower and "розклад" not in subject_lower:
+        
+        # Видаляємо типові префікси пересилання та відповідей перед перевіркою
+        import re
+        clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
+        
+        if "розклад" not in filename_lower and "розклад" not in clean_subject_lower and "розклад" not in subject_lower:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва DOCX файлу або тема листа має містити ключове слово 'розклад'",
+                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {body.subject})",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -311,10 +316,15 @@ def google_mail_contracts_webhook(
     elif doc_type.value == "docx":
         filename_lower = filename.lower()
         subject_lower = (subject or "").lower()
-        if "розклад" not in filename_lower and "розклад" not in subject_lower:
+        
+        # Видаляємо типові префікси пересилання та відповідей перед перевіркою
+        import re
+        clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
+        
+        if "розклад" not in filename_lower and "розклад" not in clean_subject_lower and "розклад" not in subject_lower:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва DOCX файлу або тема листа має містити ключове слово 'розклад'",
+                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject})",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

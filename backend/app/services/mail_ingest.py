@@ -138,9 +138,13 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             if exists:
                 return True
     elif doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
-        filename_lower = filename.lower()
-        subject_lower = (subject or "").lower()
-        if "розклад" in filename_lower or "розклад" in subject_lower:
+                filename_lower = filename.lower()
+                subject_lower = (subject or "").lower()
+                
+                import re
+                clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
+                
+                if "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower:
             try:
                 parsed_list = parse_schedule_docx(file_path)
                 for parsed in parsed_list:
@@ -352,7 +356,11 @@ def ingest_mailbox(db: Session) -> dict:
             if doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
                 filename_lower = filename.lower()
                 subject_lower = (subject or "").lower()
-                if "розклад" in filename_lower or "розклад" in subject_lower:
+                
+                import re
+                clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
+                
+                if "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower:
                     is_schedule_attachment = True
 
             if is_schedule_attachment:
