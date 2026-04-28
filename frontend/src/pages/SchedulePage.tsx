@@ -31,6 +31,7 @@ type ConflictInterval = {
   dateKey: string;
   academicHours?: number | null;
   pairNumber?: number | null;
+  groupId?: number;
 };
 
 type ConflictAnalysis = {
@@ -77,18 +78,12 @@ function detectOverlapsInIntervals(
       if (right.start >= left.end) {
         break;
       }
-      
-      const leftHours = typeof left.academicHours === "number" ? left.academicHours : null;
-      const rightHours = typeof right.academicHours === "number" ? right.academicHours : null;
 
-      // Дозволити 1+1 годину в одній парі без накладки (із толерансом float)
+      // Якщо записи свідомо розміщені в одній парі (наприклад, 1+1 година або об'єднана лекція),
+      // ми не вважаємо це накладкою.
       if (
         left.pairNumber != null &&
-        left.pairNumber === right.pairNumber &&
-        leftHours != null &&
-        rightHours != null &&
-        leftHours <= 1.01 &&
-        rightHours <= 1.01
+        left.pairNumber === right.pairNumber
       ) {
         continue;
       }
@@ -124,7 +119,8 @@ function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
       end, 
       dateKey, 
       academicHours: slot.academic_hours, 
-      pairNumber: slot.pair_number 
+      pairNumber: slot.pair_number,
+      groupId: slot.group_id
     };
     teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), interval]);
     roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), interval]);
