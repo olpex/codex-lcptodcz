@@ -54,49 +54,65 @@ function processIncomingEmails() {
 }
 
 function processIncomingEmailsLocked_() {
-  const query = 'in:inbox is:unread has:attachment from:' + SENDER_EMAIL;
-  const threads = GmailApp.search(query, 0, 10);
   const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
   const failLabel = getOrCreateLabel_(LABEL_FAILED);
+  const target = findNextUnreadMessage_();
 
-  for (const thread of threads) {
-    const messages = thread.getMessages();
-    const message = messages.find(function(item) {
-      return item.isUnread();
-    });
-
-    if (!message) {
-      continue;
-    }
-
-    const result = processOneMessage_(message);
-
-    if (!result.hasMatchedAttachment) {
-      Logger.log("Лист пропущено (немає відповідних вкладень): " + message.getSubject());
-      return; // один запуск = максимум один лист
-    }
-
-    if (result.ok) {
-      markMessageReadOnly_(message);
-      thread.refresh();
-      if (!threadHasUnreadMessages_(thread)) {
-        thread.addLabel(okLabel);
-      }
-      Logger.log("✅ Лист оброблено: " + message.getSubject());
-    } else {
-      if (thread.getMessageCount() === 1) {
-        thread.addLabel(failLabel);
-      }
-      Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
-    }
-
-    return; // один запуск = рівно один непрочитаний лист
+  if (!target) {
+    Logger.log("Немає нових листів для обробки.");
+    return;
   }
 
-  Logger.log("Немає нових листів для обробки.");
+  const thread = target.thread;
+  const message = target.message;
+  const result = processOneMessage_(message);
+
+  if (!result.hasMatchedAttachment) {
+    Logger.log("Лист пропущено (немає відповідних вкладень): " + message.getSubject());
+    return; // один запуск = максимум один лист
+  }
+
+  if (result.ok) {
+    markMessageReadOnly_(message);
+    thread.refresh();
+    if (!threadHasUnreadMessages_(thread)) {
+      thread.addLabel(okLabel);
+    }
+    Logger.log("✅ Лист оброблено: " + message.getSubject());
+  } else {
+    if (thread.getMessageCount() === 1) {
+      thread.addLabel(failLabel);
+    }
+    Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
+  }
 }
 
 // ─── Допоміжні функції ───────────────────────────────────────────────────────
+
+function findNextUnreadMessage_() {
+  const threads = GmailApp.getInboxThreads(0, 50);
+
+  for (const thread of threads) {
+    const messages = thread.getMessages();
+    for (const message of messages) {
+      if (!message.isUnread()) {
+        continue;
+      }
+      if (!isExpectedSender_(message)) {
+        continue;
+      }
+      if (!messageHasAttachments_(message)) {
+        continue;
+      }
+      return {
+        thread: thread,
+        message: message,
+      };
+    }
+  }
+
+  return null;
+}
 
 function processOneMessage_(message) {
   let ok = true;
@@ -172,6 +188,19 @@ function processOneMessage_(message) {
 function getExtension_(name) {
   const parts = (name || "").toLowerCase().split(".");
   return parts.length < 2 ? "" : parts[parts.length - 1];
+}
+
+function isExpectedSender_(message) {
+  const from = (message.getFrom() || "").toLowerCase();
+  return from.indexOf(SENDER_EMAIL.toLowerCase()) !== -1;
+}
+
+function messageHasAttachments_(message) {
+  const attachments = message.getAttachments({
+    includeInlineImages: false,
+    includeAttachments: true,
+  });
+  return attachments.length > 0;
 }
 
 function threadHasUnreadMessages_(thread) {
