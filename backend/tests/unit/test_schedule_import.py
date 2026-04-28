@@ -150,6 +150,43 @@ def _build_schedule_docx_with_two_groups_in_table_headers(path: Path) -> None:
     doc.save(path)
 
 
+def _build_schedule_docx_with_dot_separator_group_code(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("2 пара – 11.10 – 12.45")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Штучний інтелект: розвиток кар'єри")
+    doc.add_paragraph("Група № 162.25")
+    doc.add_paragraph("з 23 червня 2025 року до 26 червня 2025 року")
+
+    table1 = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(
+        ["№п/п", "Назва предмета", "К-сть год.", "23.06", "24.06", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table1.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема групи 162", "2", "1п/1год", "2п/1год", "Паращук Світлана Зеновіївна"]):
+        table1.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table1.cell(2, idx).text = value
+
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Токар")
+    doc.add_paragraph("Група № 47п-25")
+    doc.add_paragraph("з 23 червня 2025 року до 26 червня 2025 року")
+
+    table2 = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(
+        ["№п/п", "Назва предмета", "К-сть год.", "23.06", "24.06", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table2.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема групи 47п", "2", "1п/1год", "2п/1год", "Паращук Світлана Зеновіївна"]):
+        table2.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table2.cell(2, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -225,6 +262,15 @@ def test_import_schedule_docx_with_two_groups_keeps_group_binding(db_session, tm
 def test_parse_schedule_docx_with_two_groups_in_table_headers(tmp_path: Path):
     file_path = tmp_path / "schedule-two-groups-table-headers.docx"
     _build_schedule_docx_with_two_groups_in_table_headers(file_path)
+
+    payload_list = parse_schedule_docx(str(file_path))
+    codes = {payload["group_code"] for payload in payload_list}
+    assert codes == {"162-25", "47п-25"}
+
+
+def test_parse_schedule_docx_with_dot_separator_group_code(tmp_path: Path):
+    file_path = tmp_path / "schedule-two-groups-dot-separator.docx"
+    _build_schedule_docx_with_dot_separator_group_code(file_path)
 
     payload_list = parse_schedule_docx(str(file_path))
     codes = {payload["group_code"] for payload in payload_list}

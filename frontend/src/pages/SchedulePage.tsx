@@ -78,12 +78,17 @@ function detectOverlapsInIntervals(
         break;
       }
       
-      // Дозволити 1+1 годину в одній парі без накладки
+      const leftHours = typeof left.academicHours === "number" ? left.academicHours : null;
+      const rightHours = typeof right.academicHours === "number" ? right.academicHours : null;
+
+      // Дозволити 1+1 годину в одній парі без накладки (із толерансом float)
       if (
         left.pairNumber != null &&
         left.pairNumber === right.pairNumber &&
-        left.academicHours === 1 &&
-        right.academicHours === 1
+        leftHours != null &&
+        rightHours != null &&
+        leftHours <= 1.01 &&
+        rightHours <= 1.01
       ) {
         continue;
       }

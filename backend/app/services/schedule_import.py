@@ -28,20 +28,28 @@ def _norm(text: str) -> str:
 
 
 def _parse_group_code(lines: list[str]) -> str:
+    def _normalize_group_code(raw: str) -> str:
+        value = (raw or "").strip()
+        for sep in ("–", "—", "−", "/", "."):
+            value = value.replace(sep, "-")
+        value = re.sub(r"\s+", "", value)
+        value = re.sub(r"-{2,}", "-", value)
+        return value
+
     # Read from bottom to top so the nearest heading to a table wins.
     for line in reversed(lines):
         match = re.search(
-            r"група\s*№?\s*([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/]\s*\d{1,4})",
+            r"група\s*№?\s*([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/.]\s*\d{1,4})",
             line,
             re.IGNORECASE,
         )
         if match:
-            return "".join(match.group(1).split())
-        fallback = re.search(r"група\s*№?\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]+)", line, re.IGNORECASE)
+            return _normalize_group_code(match.group(1))
+        fallback = re.search(r"група\s*№?\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/\.]+)", line, re.IGNORECASE)
         if fallback:
-            cleaned = re.sub(r"[^0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]", "", fallback.group(1))
+            cleaned = re.sub(r"[^0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/\.]", "", fallback.group(1))
             if cleaned:
-                return cleaned
+                return _normalize_group_code(cleaned)
     raise ValueError("Не вдалося визначити номер групи з документа")
 
 
@@ -178,9 +186,9 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
 
     # Preserve table order from document body and capture nearby paragraph context
     # so each table can resolve its own group/date metadata.
-    table_by_element_id = {id(table._tbl): table for table in document.tables}
     table_contexts: list[tuple[object, list[str]]] = []
     context_lines: list[str] = []
+    table_index = 0
     for body_child in document.element.body.iterchildren():
         tag = body_child.tag.lower()
         if tag.endswith("}p"):
@@ -189,9 +197,10 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                 context_lines.append(text)
             continue
         if tag.endswith("}tbl"):
-            table = table_by_element_id.get(id(body_child))
-            if table is None:
+            if table_index >= len(document.tables):
                 continue
+            table = document.tables[table_index]
+            table_index += 1
             table_contexts.append((table, context_lines[-40:]))
 
     # Fallback when body traversal did not map tables (rare malformed DOCX).
@@ -212,14 +221,14 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         except ValueError:
             local_group_code = global_group_code
 
-        local_group_name = _parse_course_title(metadata_lines or lines, local_group_code)
-        local_start_date, local_end_date = _parse_date_range(metadata_lines or lines)
+        local_group_name = _parse_course_title(table_lines or lines, local_group_code)
+        local_start_date, local_end_date = _parse_date_range(table_lines or lines)
         if not local_start_date and global_start_date:
             local_start_date = global_start_date
         if not local_end_date and global_end_date:
             local_end_date = global_end_date
 
-        local_pair_windows = _parse_pair_windows(metadata_lines or lines) or global_pair_windows
+        local_pair_windows = _parse_pair_windows(table_lines or lines) or global_pair_windows
 
         header_row_index = -1
         date_columns: dict[int, date] = {}
