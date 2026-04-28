@@ -52,9 +52,10 @@ def _parse_group_code(lines: list[str]) -> str:
                 return _normalize_group_code(cleaned)
 
     # Fallback 3: look for common group code patterns even without the word "група"
+    # We do not use '.' here to avoid matching dates like '23.06'
     for line in reversed(lines):
         match = re.search(
-            r"\b([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/.]\s*\d{2})\b",
+            r"\b([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/]\s*\d{2})\b",
             line,
             re.IGNORECASE,
         )
@@ -212,11 +213,14 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                 continue
             table = document.tables[table_index]
             table_index += 1
-            table_contexts.append((table, context_lines[-40:]))
+            # Pass all preceding paragraphs instead of just the last 40.
+            # Since we search bottom-up, this guarantees we find the nearest group code
+            # even if there is a massive header with >40 paragraphs.
+            table_contexts.append((table, list(context_lines)))
 
     # Fallback when body traversal did not map tables (rare malformed DOCX).
     if not table_contexts:
-        table_contexts = [(table, lines[-40:]) for table in document.tables]
+        table_contexts = [(table, list(lines)) for table in document.tables]
 
     grouped_results: dict[str, dict] = {}
 
@@ -225,11 +229,11 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
             continue
 
         table_cell_lines = [_norm(cell.text) for row in table.rows for cell in row.cells if _norm(cell.text)]
-        # Put table cells first, then lines above it. We want to search from bottom of metadata up.
-        # This means the closest text above the table is searched first, then inside the table.
-        # But wait, `_parse_group_code` searches `reversed(lines)`.
-        # So we should put `table_lines` at the end, so it's searched first.
-        metadata_lines = table_cell_lines + table_lines
+        # We want to check the table cells first (they are the most specific to the table),
+        # and then fallback to the paragraphs above the table.
+        # Since `_parse_group_code` searches `reversed(lines)`, we put `table_cell_lines`
+        # at the end of the list, so they are searched FIRST.
+        metadata_lines = table_lines + table_cell_lines
 
         try:
             local_group_code = _parse_group_code(metadata_lines)

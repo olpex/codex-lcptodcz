@@ -141,31 +141,32 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
         filename_lower = filename.lower()
         subject_lower = (subject or "").lower()
 
-        import re
         clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
 
         if "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower:
             try:
                 parsed_list = parse_schedule_docx(file_path)
-                for parsed in parsed_list:
-                    group_code = parsed.get("group_code")
-                    entries = parsed.get("entries", [])
-                    
-                    if group_code and entries:
-                        group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-                        if group:
-                            min_start = min(item["starts_at"] for item in entries)
-                            max_end = max(item["ends_at"] for item in entries)
-                            
-                            exists = db.query(ScheduleSlot).filter(
-                                ScheduleSlot.group_id == group.id,
-                                ScheduleSlot.starts_at >= min_start,
-                                ScheduleSlot.ends_at <= max_end
-                            ).first()
-                            if exists:
-                                return True
             except Exception:
-                pass
+                # If we can't parse it, we don't know what groups it contains, so we process it to let the job fail or process properly.
+                return False
+
+            for parsed in parsed_list:
+                group_code = parsed.get("group_code")
+                if not group_code:
+                    continue
+                
+                group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+                # If any group from the file doesn't exist in DB, it's NOT a duplicate (we must process it)
+                if not group:
+                    return False
+                
+                has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
+                # If any group exists but has no schedule slots, it's NOT a duplicate (we must process it)
+                if not has_slots:
+                    return False
+
+            # Only skip as duplicate if ALL groups from the file exist AND have schedule slots.
+            return True
     return False
 
 
@@ -357,7 +358,6 @@ def ingest_mailbox(db: Session) -> dict:
                 filename_lower = filename.lower()
                 subject_lower = (subject or "").lower()
                 
-                import re
                 clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
                 
                 if "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower:
