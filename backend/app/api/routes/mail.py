@@ -70,24 +70,29 @@ def _dispatch_import_with_fallback(import_job_id: int) -> str:
 
 
 def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> bool:
-    """Allow re-import of the same message if schedule data was removed from DB."""
+    """Allow re-import of the same message if schedule data was removed from DB or doesn't exist."""
     try:
         parsed_list = parse_schedule_docx(file_path)
     except Exception:
-        return False
+        # If we can't parse it, we don't know what groups it contains, so we re-import to let the job fail or process properly.
+        return True
 
-    found_any_group = False
     for payload in parsed_list:
         group_code = (payload.get("group_code") or "").strip()
         if not group_code:
             continue
-        found_any_group = True
+        
         group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+        # If any group from the file doesn't exist in DB, we MUST reimport.
         if not group:
             return True
+            
         has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
+        # If any group exists but has no schedule slots, we MUST reimport.
         if not has_slots:
             return True
+            
+    # Only skip reimport if ALL groups from the file exist AND have schedule slots.
     return False
 
 
