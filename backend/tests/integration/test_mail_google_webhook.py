@@ -288,6 +288,54 @@ def test_google_webhook_reimports_docx_when_data_missing_even_with_same_message_
     assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 2
 
 
+def test_google_webhook_recreates_deleted_group_from_same_unread_docx(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+
+    payload = {
+        "sender_email": "lcptodcz@gmail.com",
+        "sender_name": "Львівський центр ПТО ДСЗ",
+        "subject": "Розклад групи",
+        "message_id": "<google-webhook-docx-deleted-group-test@example.com>",
+        "update_existing_mode": "overwrite",
+    }
+    files = {
+        "file": (
+            "167-25 Розклад.docx",
+            _schedule_docx_bytes(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    }
+
+    first = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data=payload,
+        files=files,
+    )
+    assert first.status_code == 202
+
+    group = db_session.query(Group).filter(Group.code == "167-25").one()
+    db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).delete(synchronize_session=False)
+    db_session.delete(group)
+    db_session.commit()
+    assert db_session.query(Group).filter(Group.code == "167-25").first() is None
+
+    second = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data=payload,
+        files=files,
+    )
+    assert second.status_code == 202
+    assert second.json()["id"] != first.json()["id"]
+
+    recreated = db_session.query(Group).filter(Group.code == "167-25").one()
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == recreated.id).count() == 2
+
+
 def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

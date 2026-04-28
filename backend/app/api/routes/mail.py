@@ -13,7 +13,6 @@ from app.core.config import settings
 from app.models import (
     Document,
     DraftStatus,
-    Group,
     ImportJob,
     JobStatus,
     MailMessage,
@@ -22,15 +21,12 @@ from app.models import (
     Order,
     OrderType,
     RoleName,
-    ScheduleSlot,
-    Subject,
     Trainee,
 )
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.mail_ingest import is_contract_sender
-from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
@@ -71,67 +67,6 @@ def _run_import_inline_or_raise(import_job_id: int, db: DbSession) -> str:
         detail = job.message if job and job.message else str(exc)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Імпорт не виконано: {detail}") from exc
     return "inline"
-
-
-def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> bool:
-    """Allow re-import of the same message if schedule data was removed from DB or doesn't exist."""
-    import logging
-    logger = logging.getLogger("api.mail")
-    try:
-        parsed_list = parse_schedule_docx(file_path)
-    except Exception as e:
-        logger.info(f"_schedule_reimport_needed: Помилка парсингу {file_path}: {e}. Потрібен реімпорт.")
-        # If we can't parse it, we don't know what groups it contains, so we re-import to let the job fail or process properly.
-        return True
-
-    if not parsed_list:
-        logger.info(f"_schedule_reimport_needed: У файлі {file_path} не знайдено груп. Потрібен реімпорт.")
-        return True
-
-    for payload in parsed_list:
-        group_code = (payload.get("group_code") or "").strip()
-        if not group_code:
-            continue
-
-        group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-        if not group:
-            logger.info(f"_schedule_reimport_needed: Група {group_code} відсутня в БД. Потрібен реімпорт.")
-            return True
-
-        entries = payload.get("entries") or []
-        if not entries:
-            logger.info(f"_schedule_reimport_needed: Для групи {group_code} у файлі немає занять. Потрібен реімпорт.")
-            return True
-
-        for entry in entries:
-            starts_at = entry.get("starts_at")
-            ends_at = entry.get("ends_at")
-            pair_number = int(entry.get("pair_number") or 0)
-            subject_name = (entry.get("subject_name") or "").strip()
-            existing_slot = (
-                db.query(ScheduleSlot.id)
-                .join(Subject, Subject.id == ScheduleSlot.subject_id)
-                .filter(
-                    ScheduleSlot.group_id == group.id,
-                    ScheduleSlot.starts_at == starts_at,
-                    ScheduleSlot.ends_at == ends_at,
-                    ScheduleSlot.pair_number == pair_number,
-                    Subject.name == subject_name,
-                )
-                .first()
-            )
-            if existing_slot is None:
-                logger.info(
-                    "_schedule_reimport_needed: Відсутнє заняття для групи %s: %s пара %s, %s. Потрібен реімпорт.",
-                    group_code,
-                    starts_at,
-                    pair_number,
-                    subject_name,
-                )
-                return True
-
-    logger.info(f"_schedule_reimport_needed: Всі заняття з файлу {file_path} вже присутні. Реімпорт не потрібен.")
-    return False
 
 
 @router.post(
@@ -276,10 +211,7 @@ def gmail_api_contracts_webhook(
 
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        if doc_type.value != "docx" or out_path is None:
-            return JobResponse.model_validate(existing)
-        if not _schedule_reimport_needed(db, branch_id, str(out_path)):
-            out_path.unlink(missing_ok=True)
+        if doc_type.value != "docx":
             return JobResponse.model_validate(existing)
         idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
     elif out_path is None:
@@ -417,10 +349,7 @@ def google_mail_contracts_webhook(
 
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        if doc_type.value != "docx" or not path:
-            return JobResponse.model_validate(existing)
-        if not _schedule_reimport_needed(db, branch_id, path):
-            Path(path).unlink(missing_ok=True)
+        if doc_type.value != "docx":
             return JobResponse.model_validate(existing)
         idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
 
