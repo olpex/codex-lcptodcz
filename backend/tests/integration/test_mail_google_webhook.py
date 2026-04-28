@@ -193,6 +193,51 @@ def test_google_webhook_accepts_docx_with_schedule_keyword(client, monkeypatch):
     assert response.status_code == 202
 
 
+def test_google_webhook_reimports_docx_when_data_missing_even_with_same_message_id(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda _job_id: "queued")
+
+    payload = {
+        "sender_email": "lcptodcz@gmail.com",
+        "sender_name": "Львівський центр ПТО ДСЗ",
+        "subject": "Розклад групи",
+        "message_id": "<google-webhook-docx-reimport-test@example.com>",
+        "update_existing_mode": "overwrite",
+    }
+    files = {
+        "file": (
+            "167-26 Розклад осінній модуль.docx",
+            _schedule_docx_bytes(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    }
+
+    first = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data=payload,
+        files=files,
+    )
+    assert first.status_code == 202
+    first_job_id = first.json()["id"]
+
+    monkeypatch.setattr(mail_routes, "_schedule_reimport_needed", lambda *_args, **_kwargs: True)
+    second = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data=payload,
+        files=files,
+    )
+    assert second.status_code == 202
+    second_job_id = second.json()["id"]
+
+    assert second_job_id != first_job_id
+    assert db_session.query(ImportJob).count() == 2
+
+
 def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

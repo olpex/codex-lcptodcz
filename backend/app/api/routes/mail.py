@@ -10,11 +10,26 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
-from app.models import Document, DraftStatus, ImportJob, JobStatus, MailMessage, MailStatus, OCRResult, Order, OrderType, RoleName, Trainee
+from app.models import (
+    Document,
+    DraftStatus,
+    Group,
+    ImportJob,
+    JobStatus,
+    MailMessage,
+    MailStatus,
+    OCRResult,
+    Order,
+    OrderType,
+    RoleName,
+    ScheduleSlot,
+    Trainee,
+)
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.mail_ingest import is_contract_sender
+from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
@@ -52,6 +67,28 @@ def _dispatch_import_with_fallback(import_job_id: int) -> str:
             return "inline"
         except Exception:
             return "inline_failed"
+
+
+def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> bool:
+    """Allow re-import of the same message if schedule data was removed from DB."""
+    try:
+        parsed_list = parse_schedule_docx(file_path)
+    except Exception:
+        return False
+
+    found_any_group = False
+    for payload in parsed_list:
+        group_code = (payload.get("group_code") or "").strip()
+        if not group_code:
+            continue
+        found_any_group = True
+        group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+        if not group:
+            return True
+        has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
+        if not has_slots:
+            return True
+    return False
 
 
 @router.post(
@@ -194,15 +231,25 @@ def gmail_api_contracts_webhook(
     idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
     idempotency_key = f"{branch_id}:mail-gmail-api:{idem_digest}"
 
+    out_path: Path | None = None
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    if doc_type.value == "docx":
+        out_path = storage_path() / f"{uuid4().hex}_{filename}"
+        with Path(out_path).open("wb") as fh:
+            fh.write(file_bytes)
+
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        return JobResponse.model_validate(existing)
-
-    # Зберігаємо файл на диск
-    out_path = storage_path() / f"{uuid4().hex}_{filename}"
-    with Path(out_path).open("wb") as fh:
-        fh.write(file_bytes)
-    sha256 = hashlib.sha256(file_bytes).hexdigest()
+        if doc_type.value != "docx" or out_path is None:
+            return JobResponse.model_validate(existing)
+        if not _schedule_reimport_needed(db, branch_id, str(out_path)):
+            out_path.unlink(missing_ok=True)
+            return JobResponse.model_validate(existing)
+        idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
+    elif out_path is None:
+        out_path = storage_path() / f"{uuid4().hex}_{filename}"
+        with Path(out_path).open("wb") as fh:
+            fh.write(file_bytes)
 
     document = Document(
         branch_id=branch_id,
@@ -329,11 +376,22 @@ def google_mail_contracts_webhook(
     idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
     idempotency_key = f"{branch_id}:mail-webhook:{idem_digest}"
 
+    path: str | None = None
+    sha256: str | None = None
+    if doc_type.value == "docx":
+        path, sha256 = persist_upload(file)
+
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        return JobResponse.model_validate(existing)
+        if doc_type.value != "docx" or not path:
+            return JobResponse.model_validate(existing)
+        if not _schedule_reimport_needed(db, branch_id, path):
+            Path(path).unlink(missing_ok=True)
+            return JobResponse.model_validate(existing)
+        idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
 
-    path, sha256 = persist_upload(file)
+    if not path or not sha256:
+        path, sha256 = persist_upload(file)
     document = Document(
         branch_id=branch_id,
         file_name=filename,
