@@ -49,14 +49,6 @@ def _is_contracts_filename(filename: str) -> bool:
     return True
 
 
-def _contains_schedule_keyword(value: str | None) -> bool:
-    if not value:
-        return False
-    value_lower = value.lower()
-    clean_value = re.sub(r"^(fwd|fw|re|fw:|re:)\s*", "", value_lower, flags=re.IGNORECASE).strip()
-    return "розклад" in value_lower or "розклад" in clean_value or "rozklad" in value_lower or "rozklad" in clean_value
-
-
 def _dispatch_import_with_fallback(import_job_id: int) -> str:
     try:
         process_import_job_task.delay(import_job_id)
@@ -229,19 +221,6 @@ def gmail_api_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        # Для Gmail API тема інколи не приходить (None) через зовнішній flow.
-        # У такому випадку перевіряємо хоча б назву файлу.
-        subject_value = (body.subject or "").strip()
-        has_keyword = _contains_schedule_keyword(filename) or _contains_schedule_keyword(subject_value)
-        import logging
-        logger = logging.getLogger("api.mail")
-        logger.info(f"Webhook /contracts: Перевірка ключового слова 'розклад' для DOCX: filename='{filename}', subject='{subject_value}', has_keyword={has_keyword}")
-        
-        if not has_keyword:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject_value})",
-            )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     sender_email = settings.imap_contract_sender_email
@@ -385,18 +364,6 @@ def google_mail_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        # Перевіряємо, чи є ключове слово "розклад" в назві файлу або темі листа.
-        subject_value = (subject or "").strip()
-        has_keyword = _contains_schedule_keyword(filename) or _contains_schedule_keyword(subject_value)
-        import logging
-        logger = logging.getLogger("api.mail")
-        logger.info(f"Google Webhook /contracts: Перевірка ключового слова 'розклад' для DOCX: filename='{filename}', subject='{subject_value}', has_keyword={has_keyword}")
-        
-        if not has_keyword:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject_value})",
-            )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     branch_id = settings.imap_branch_id or "main"

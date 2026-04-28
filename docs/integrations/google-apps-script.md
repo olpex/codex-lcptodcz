@@ -5,7 +5,7 @@
 | Тип файлу | Ключове слово в назві | Endpoint |
 |---|---|---|
 | Договори (`.xlsx`) | `договори` | `/mail/gmail-api-webhook/contracts` |
-| Розклади (`.docx`) | `розклад` | `/mail/gmail-api-webhook/contracts` |
+| Розклади (`.docx`) | *Будь-який .docx файл* | `/mail/gmail-api-webhook/contracts` |
 
 > Один запит = один файл. Якщо в листі 3 вкладення — скрипт надсилає 3 окремих HTTP-запити.
 
@@ -66,8 +66,8 @@ function processIncomingEmails() {
         const isContract = (ext === "xlsx" || ext === "xls") &&
                            (nameLow.includes("договор") || subjectLow.includes("договор"));
 
-        // Розклади: .docx з "розклад" в назві або в темі
-        const isSchedule = ext === "docx" && (nameLow.includes("розклад") || subjectLow.includes("розклад"));
+        // Розклади: будь-який .docx
+        const isSchedule = ext === "docx";
 
         if (!isContract && !isSchedule) {
           Logger.log("Пропущено (не підходить): " + fileName);
@@ -155,6 +155,6 @@ function getOrCreateLabel_(labelName) {
 | HTTP-код | Причина | Рішення |
 |---|---|---|
 | `401` | Невірний `WEBHOOK_SECRET` | Порівняйте з `MAIL_WEBHOOK_SECRET` у Vercel |
-| `400` | Назва файлу без "розклад"/"договор" | Перейменуйте файл |
+| `400` | Назва Excel файлу без "договор" | Перейменуйте файл |
 | `400` | Неправильний Base64 | Перевірте, що скрипт використовує `base64EncodeWebSafe` |
 | `503` | `MAIL_WEBHOOK_SECRET` не задано у Vercel | Додайте змінну у Vercel Dashboard |

@@ -138,44 +138,35 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             if exists:
                 return True
     elif doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
-        filename_lower = filename.lower()
-        subject_lower = (subject or "").lower()
+        import logging
+        logger = logging.getLogger("mail.ingest")
+        try:
+            parsed_list = parse_schedule_docx(file_path)
+        except Exception as e:
+            logger.info(f"is_duplicate_attachment: Помилка парсингу {filename}: {e}. Вважаємо не дублікатом.")
+            # If we can't parse it, we don't know what groups it contains, so we process it to let the job fail or process properly.
+            return False
 
-        clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
-
-        if (
-            "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower or
-            "rozklad" in filename_lower or "rozklad" in subject_lower or "rozklad" in clean_subject_lower
-        ):
-            import logging
-            logger = logging.getLogger("mail.ingest")
-            try:
-                parsed_list = parse_schedule_docx(file_path)
-            except Exception as e:
-                logger.info(f"is_duplicate_attachment: Помилка парсингу {filename}: {e}. Вважаємо не дублікатом.")
-                # If we can't parse it, we don't know what groups it contains, so we process it to let the job fail or process properly.
+        for parsed in parsed_list:
+            group_code = parsed.get("group_code")
+            if not group_code:
+                continue
+            
+            group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+            # If any group from the file doesn't exist in DB, it's NOT a duplicate (we must process it)
+            if not group:
+                logger.info(f"is_duplicate_attachment: Група {group_code} відсутня в БД. Файл {filename} не дублікат.")
+                return False
+            
+            has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
+            # If any group exists but has no schedule slots, it's NOT a duplicate (we must process it)
+            if not has_slots:
+                logger.info(f"is_duplicate_attachment: Для групи {group_code} відсутні слоти. Файл {filename} не дублікат.")
                 return False
 
-            for parsed in parsed_list:
-                group_code = parsed.get("group_code")
-                if not group_code:
-                    continue
-                
-                group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-                # If any group from the file doesn't exist in DB, it's NOT a duplicate (we must process it)
-                if not group:
-                    logger.info(f"is_duplicate_attachment: Група {group_code} відсутня в БД. Файл {filename} не дублікат.")
-                    return False
-                
-                has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
-                # If any group exists but has no schedule slots, it's NOT a duplicate (we must process it)
-                if not has_slots:
-                    logger.info(f"is_duplicate_attachment: Для групи {group_code} відсутні слоти. Файл {filename} не дублікат.")
-                    return False
-
-            # Only skip as duplicate if ALL groups from the file exist AND have schedule slots.
-            logger.info(f"is_duplicate_attachment: Всі групи з файлу {filename} присутні та мають слоти. Вважаємо дублікатом.")
-            return True
+        # Only skip as duplicate if ALL groups from the file exist AND have schedule slots.
+        logger.info(f"is_duplicate_attachment: Всі групи з файлу {filename} присутні та мають слоти. Вважаємо дублікатом.")
+        return True
     return False
 
 
@@ -364,16 +355,7 @@ def ingest_mailbox(db: Session) -> dict:
             # Check if this DOCX is a schedule attachment
             is_schedule_attachment = False
             if doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
-                filename_lower = filename.lower()
-                subject_lower = (subject or "").lower()
-                
-                clean_subject_lower = re.sub(r'^(fwd|fw|re|fw:|re:)\s*', '', subject_lower, flags=re.IGNORECASE).strip()
-                
-                if (
-                    "розклад" in filename_lower or "розклад" in subject_lower or "розклад" in clean_subject_lower or
-                    "rozklad" in filename_lower or "rozklad" in subject_lower or "rozklad" in clean_subject_lower
-                ):
-                    is_schedule_attachment = True
+                is_schedule_attachment = True
 
             if is_schedule_attachment:
                 job = ImportJob(

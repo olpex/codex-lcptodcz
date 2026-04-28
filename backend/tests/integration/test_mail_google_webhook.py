@@ -107,7 +107,7 @@ def test_google_webhook_rejects_sender_mismatch(client, monkeypatch):
     assert "Відправник" in response.json()["detail"]
 
 
-def test_google_webhook_rejects_docx_without_schedule_keyword(client, monkeypatch):
+def test_google_webhook_accepts_docx_without_schedule_keyword(client, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
@@ -133,8 +133,8 @@ def test_google_webhook_rejects_docx_without_schedule_keyword(client, monkeypatc
         },
     )
 
-    assert response.status_code == 400
-    assert "розклад" in response.json()["detail"].lower()
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
 
 
 def test_google_webhook_accepts_docx_with_schedule_keyword_and_fwd_prefix(client, monkeypatch):
