@@ -23,6 +23,7 @@ from app.models import (
     OrderType,
     RoleName,
     ScheduleSlot,
+    Subject,
     Trainee,
 )
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
@@ -61,6 +62,17 @@ def _dispatch_import_with_fallback(import_job_id: int) -> str:
             return "inline_failed"
 
 
+def _run_import_inline_or_raise(import_job_id: int, db: DbSession) -> str:
+    try:
+        process_import_job_task.run(import_job_id)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(ImportJob, import_job_id)
+        detail = job.message if job and job.message else str(exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Імпорт не виконано: {detail}") from exc
+    return "inline"
+
+
 def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> bool:
     """Allow re-import of the same message if schedule data was removed from DB or doesn't exist."""
     import logging
@@ -80,21 +92,45 @@ def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> 
         group_code = (payload.get("group_code") or "").strip()
         if not group_code:
             continue
-        
+
         group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-        # If any group from the file doesn't exist in DB, we MUST reimport.
         if not group:
             logger.info(f"_schedule_reimport_needed: Група {group_code} відсутня в БД. Потрібен реімпорт.")
             return True
-            
-        has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
-        # If any group exists but has no schedule slots, we MUST reimport.
-        if not has_slots:
-            logger.info(f"_schedule_reimport_needed: Для групи {group_code} відсутні слоти. Потрібен реімпорт.")
+
+        entries = payload.get("entries") or []
+        if not entries:
+            logger.info(f"_schedule_reimport_needed: Для групи {group_code} у файлі немає занять. Потрібен реімпорт.")
             return True
-            
-    # Only skip reimport if ALL groups from the file exist AND have schedule slots.
-    logger.info(f"_schedule_reimport_needed: Всі групи з файлу {file_path} присутні та мають слоти. Реімпорт не потрібен.")
+
+        for entry in entries:
+            starts_at = entry.get("starts_at")
+            ends_at = entry.get("ends_at")
+            pair_number = int(entry.get("pair_number") or 0)
+            subject_name = (entry.get("subject_name") or "").strip()
+            existing_slot = (
+                db.query(ScheduleSlot.id)
+                .join(Subject, Subject.id == ScheduleSlot.subject_id)
+                .filter(
+                    ScheduleSlot.group_id == group.id,
+                    ScheduleSlot.starts_at == starts_at,
+                    ScheduleSlot.ends_at == ends_at,
+                    ScheduleSlot.pair_number == pair_number,
+                    Subject.name == subject_name,
+                )
+                .first()
+            )
+            if existing_slot is None:
+                logger.info(
+                    "_schedule_reimport_needed: Відсутнє заняття для групи %s: %s пара %s, %s. Потрібен реімпорт.",
+                    group_code,
+                    starts_at,
+                    pair_number,
+                    subject_name,
+                )
+                return True
+
+    logger.info(f"_schedule_reimport_needed: Всі заняття з файлу {file_path} вже присутні. Реімпорт не потрібен.")
     return False
 
 
@@ -305,11 +341,14 @@ def gmail_api_contracts_webhook(
     db.commit()
     db.refresh(job)
 
-    dispatch_mode = _dispatch_import_with_fallback(job.id)
+    if doc_type.value == "docx":
+        dispatch_mode = _run_import_inline_or_raise(job.id, db)
+    else:
+        dispatch_mode = _dispatch_import_with_fallback(job.id)
     db.refresh(job)
     if dispatch_mode == "inline":
         suffix = f" {job.message}" if job.message else ""
-        job.message = f"Черга тимчасово недоступна. Імпорт виконано одразу.{suffix}"
+        job.message = f"Імпорт виконано одразу.{suffix}"
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -440,11 +479,14 @@ def google_mail_contracts_webhook(
     db.commit()
     db.refresh(job)
 
-    dispatch_mode = _dispatch_import_with_fallback(job.id)
+    if doc_type.value == "docx":
+        dispatch_mode = _run_import_inline_or_raise(job.id, db)
+    else:
+        dispatch_mode = _dispatch_import_with_fallback(job.id)
     db.refresh(job)
     if dispatch_mode == "inline":
         suffix = f" {job.message}" if job.message else ""
-        job.message = f"Черга тимчасово недоступна. Імпорт виконано одразу.{suffix}"
+        job.message = f"Імпорт виконано одразу.{suffix}"
         db.add(job)
         db.commit()
         db.refresh(job)
