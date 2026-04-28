@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
-from app.models import Group, GroupMembership, Performance, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.models import Group, GroupMembership, GroupStatus, Performance, Room, ScheduleSlot, Subject, Teacher, Trainee
 
 
 def test_auth_login_and_me(client):
@@ -77,6 +77,81 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     assert kpi_response.status_code == 200
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
+
+
+def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_session):
+    group = Group(
+        branch_id="main",
+        code="167-25",
+        name="Організація трудових відносин",
+        capacity=25,
+        status=GroupStatus.ACTIVE,
+        start_date=date(2025, 10, 21),
+        end_date=date(2025, 10, 24),
+    )
+    other_group = Group(branch_id="main", code="999-25", name="Поза періодом", capacity=25, status=GroupStatus.ACTIVE)
+    teacher_one = Teacher(branch_id="main", first_name="Лілія", last_name="Штогрин", hourly_rate=0, is_active=True)
+    teacher_two = Teacher(branch_id="main", first_name="Артур", last_name="Костів", hourly_rate=0, is_active=True)
+    subject = Subject(branch_id="main", name="Трудовий договір", hours_total=10)
+    room = Room(branch_id="main", name="Імпорт: 167-25", capacity=25)
+    db_session.add_all([group, other_group, teacher_one, teacher_two, subject, room])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher_one.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2025, 10, 21, 9, 30, tzinfo=timezone.utc),
+                ends_at=datetime(2025, 10, 21, 11, 5, tzinfo=timezone.utc),
+                pair_number=1,
+                academic_hours=2,
+            ),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher_two.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2025, 10, 22, 11, 10, tzinfo=timezone.utc),
+                ends_at=datetime(2025, 10, 22, 12, 45, tzinfo=timezone.utc),
+                pair_number=2,
+                academic_hours=1.5,
+            ),
+            ScheduleSlot(
+                group_id=other_group.id,
+                teacher_id=teacher_one.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2025, 11, 1, 9, 30, tzinfo=timezone.utc),
+                ends_at=datetime(2025, 11, 1, 11, 5, tzinfo=timezone.utc),
+                pair_number=1,
+                academic_hours=2,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/groups/active-between?date_from=2025-10-20&date_to=2025-10-25",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["code"] == "167-25"
+    assert payload[0]["total_hours"] == 3.5
+    assert {item["teacher_name"] for item in payload[0]["teachers"]} == {"Штогрин Лілія", "Костів Артур"}
+
+    export_response = client.get(
+        "/api/v1/groups/active-between/export?date_from=2025-10-20&date_to=2025-10-25",
+        headers=auth_headers,
+    )
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert export_response.content
 
 
 def test_bulk_group_code_update_flow(client, auth_headers):

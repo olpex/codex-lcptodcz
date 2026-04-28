@@ -58,6 +58,24 @@ export interface Group {
   end_date: string | null;
 }
 
+export interface GroupTeacherHours {
+  teacher_id: number;
+  teacher_name: string;
+  hours: number;
+}
+
+export interface ActiveGroupBetweenDates {
+  group_id: number;
+  code: string;
+  name: string;
+  training_start_date: string | null;
+  training_end_date: string | null;
+  period_start_date: string;
+  period_end_date: string;
+  total_hours: number;
+  teachers: GroupTeacherHours[];
+}
+
 export interface Teacher {
   id: number;
   first_name: string;

@@ -1,14 +1,21 @@
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import date, datetime, time, timezone
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Trainee
+from app.models import Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee
 from app.schemas.api import (
+    ActiveGroupBetweenDatesResponse,
     EnrollRequest,
     ExpelRequest,
     GroupCreate,
     GroupResponse,
+    GroupTeacherHoursResponse,
     GroupUpdate,
     MembershipResponse,
 )
@@ -21,6 +28,169 @@ router = APIRouter()
 def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]:
     groups = apply_branch_scope(db.query(Group), Group, current_user.branch_id).order_by(Group.created_at.desc()).all()
     return [GroupResponse.model_validate(group) for group in groups]
+
+
+def _validate_period(date_from: date, date_to: date) -> None:
+    if date_to < date_from:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Дата завершення має бути не раніше дати початку")
+
+
+def _active_groups_between_dates(
+    db: DbSession,
+    branch_id: str,
+    date_from: date,
+    date_to: date,
+) -> list[ActiveGroupBetweenDatesResponse]:
+    _validate_period(date_from, date_to)
+    window_start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+    window_end = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+
+    rows = (
+        db.query(ScheduleSlot, Group, Teacher)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .join(Teacher, Teacher.id == ScheduleSlot.teacher_id)
+        .filter(
+            Group.branch_id == branch_id,
+            ScheduleSlot.starts_at >= window_start,
+            ScheduleSlot.starts_at <= window_end,
+        )
+        .order_by(Group.code.asc(), ScheduleSlot.starts_at.asc())
+        .all()
+    )
+
+    grouped: dict[int, dict] = {}
+    for slot, group, teacher in rows:
+        bucket = grouped.setdefault(
+            group.id,
+            {
+                "group": group,
+                "period_start_date": slot.starts_at.date(),
+                "period_end_date": slot.starts_at.date(),
+                "total_hours": 0.0,
+                "teacher_hours": defaultdict(float),
+                "teacher_names": {},
+            },
+        )
+        slot_date = slot.starts_at.date()
+        bucket["period_start_date"] = min(bucket["period_start_date"], slot_date)
+        bucket["period_end_date"] = max(bucket["period_end_date"], slot_date)
+        hours = float(slot.academic_hours or 0)
+        bucket["total_hours"] += hours
+        bucket["teacher_hours"][teacher.id] += hours
+        display_name = " ".join(part for part in [teacher.last_name, teacher.first_name] if part).strip()
+        bucket["teacher_names"][teacher.id] = display_name or f"Викладач #{teacher.id}"
+
+    result: list[ActiveGroupBetweenDatesResponse] = []
+    for bucket in grouped.values():
+        group = bucket["group"]
+        teachers = [
+            GroupTeacherHoursResponse(
+                teacher_id=teacher_id,
+                teacher_name=bucket["teacher_names"][teacher_id],
+                hours=round(hours, 2),
+            )
+            for teacher_id, hours in sorted(
+                bucket["teacher_hours"].items(),
+                key=lambda item: bucket["teacher_names"][item[0]].lower(),
+            )
+        ]
+        result.append(
+            ActiveGroupBetweenDatesResponse(
+                group_id=group.id,
+                code=group.code,
+                name=group.name,
+                training_start_date=group.start_date or bucket["period_start_date"],
+                training_end_date=group.end_date or bucket["period_end_date"],
+                period_start_date=bucket["period_start_date"],
+                period_end_date=bucket["period_end_date"],
+                total_hours=round(bucket["total_hours"], 2),
+                teachers=teachers,
+            )
+        )
+
+    return sorted(result, key=lambda item: item.code.lower())
+
+
+@router.get("/active-between", response_model=list[ActiveGroupBetweenDatesResponse])
+def list_active_groups_between_dates(
+    date_from: date,
+    date_to: date,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> list[ActiveGroupBetweenDatesResponse]:
+    return _active_groups_between_dates(db, current_user.branch_id, date_from, date_to)
+
+
+@router.get("/active-between/export")
+def export_active_groups_between_dates(
+    date_from: date,
+    date_to: date,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> StreamingResponse:
+    report = _active_groups_between_dates(db, current_user.branch_id, date_from, date_to)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Групи за період"
+    headers = [
+        "Код групи",
+        "Назва групи",
+        "Початок навчання",
+        "Завершення навчання",
+        "Початок у вибраному періоді",
+        "Кінець у вибраному періоді",
+        "Викладач",
+        "Години викладача",
+        "Усього годин групи",
+    ]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+
+    for item in report:
+        if item.teachers:
+            for teacher in item.teachers:
+                sheet.append(
+                    [
+                        item.code,
+                        item.name,
+                        item.training_start_date.isoformat() if item.training_start_date else "",
+                        item.training_end_date.isoformat() if item.training_end_date else "",
+                        item.period_start_date.isoformat(),
+                        item.period_end_date.isoformat(),
+                        teacher.teacher_name,
+                        teacher.hours,
+                        item.total_hours,
+                    ]
+                )
+        else:
+            sheet.append(
+                [
+                    item.code,
+                    item.name,
+                    item.training_start_date.isoformat() if item.training_start_date else "",
+                    item.training_end_date.isoformat() if item.training_end_date else "",
+                    item.period_start_date.isoformat(),
+                    item.period_end_date.isoformat(),
+                    "",
+                    0,
+                    item.total_hours,
+                ]
+            )
+
+    for column_cells in sheet.columns:
+        max_length = max(len(str(cell.value or "")) for cell in column_cells)
+        sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), 55)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    filename = f"active_groups_{date_from.isoformat()}_{date_to.isoformat()}.xlsx"
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

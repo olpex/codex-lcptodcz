@@ -3,21 +3,28 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
+import { API_URL } from "../api/client";
 import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import type { Group } from "../types/api";
+import type { ActiveGroupBetweenDates, Group } from "../types/api";
 
 export function GroupsPage() {
-  const { request, user } = useAuth();
+  const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
+  const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isFiltering, setIsFiltering] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // --- Стан видалення групи ---
@@ -82,6 +89,51 @@ export function GroupsPage() {
     [canEdit]
   );
 
+  const activeGroupColumns = useMemo<DataTableColumn<ActiveGroupBetweenDates>[]>(
+    () => [
+      {
+        key: "code",
+        header: "Код",
+        render: (group) => <span className="font-semibold">{group.code}</span>,
+        sortAccessor: (group) => group.code
+      },
+      {
+        key: "name",
+        header: "Назва",
+        render: (group) => group.name,
+        sortAccessor: (group) => group.name
+      },
+      {
+        key: "period",
+        header: "Дати навчання",
+        render: (group) =>
+          `${group.training_start_date || group.period_start_date} — ${group.training_end_date || group.period_end_date}`,
+        sortAccessor: (group) => group.training_start_date || group.period_start_date
+      },
+      {
+        key: "teachers",
+        header: "Викладачі та години",
+        render: (group) => (
+          <div className="space-y-1">
+            {group.teachers.map((teacher) => (
+              <div key={teacher.teacher_id}>
+                {teacher.teacher_name}: <span className="font-semibold">{teacher.hours}</span>
+              </div>
+            ))}
+          </div>
+        ),
+        sortAccessor: (group) => group.teachers.map((teacher) => teacher.teacher_name).join(" ")
+      },
+      {
+        key: "total_hours",
+        header: "Усього год.",
+        render: (group) => group.total_hours,
+        sortAccessor: (group) => group.total_hours
+      }
+    ],
+    []
+  );
+
   const loadGroups = async () => {
     setIsLoading(true);
     try {
@@ -100,6 +152,79 @@ export function GroupsPage() {
   useEffect(() => {
     loadGroups();
   }, []);
+
+  const validatePeriod = () => {
+    if (!dateFrom || !dateTo) {
+      return "Вкажіть дату початку і дату завершення";
+    }
+    if (dateTo < dateFrom) {
+      return "Дата завершення має бути не раніше дати початку";
+    }
+    return null;
+  };
+
+  const loadActiveGroups = async () => {
+    const validationMessage = validatePeriod();
+    if (validationMessage) {
+      setFilterError(validationMessage);
+      showError(validationMessage);
+      return;
+    }
+    setIsFiltering(true);
+    try {
+      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+      const data = await request<ActiveGroupBetweenDates[]>(`/groups/active-between?${params.toString()}`);
+      setActiveGroups(data);
+      setFilterError(null);
+      showSuccess(data.length ? `Знайдено груп: ${data.length}` : "За цей період груп не знайдено");
+    } catch (error) {
+      const message = (error as Error).message;
+      setFilterError(message);
+      showError(message);
+    } finally {
+      setIsFiltering(false);
+    }
+  };
+
+  const exportActiveGroups = async () => {
+    const validationMessage = validatePeriod();
+    if (validationMessage) {
+      setFilterError(validationMessage);
+      showError(validationMessage);
+      return;
+    }
+    if (!accessToken) {
+      showError("Потрібна авторизація");
+      return;
+    }
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+      const response = await fetch(`${API_URL}/groups/active-between/export?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error(`Не вдалося сформувати Excel (${response.status})`);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = fileNameMatch?.[1] || `groups_${dateFrom}_${dateTo}.xlsx`;
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      showSuccess("Excel-файл завантажено");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const createGroup = async (event: FormEvent) => {
     event.preventDefault();
@@ -236,6 +361,62 @@ export function GroupsPage() {
           </form>
         </Panel>
       )}
+      <Panel title="Групи, що навчалися у періоді">
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
+          <FormField label="Дата з" helperText="Початок періоду">
+            <input
+              type="date"
+              className={formControlClass}
+              value={dateFrom}
+              onChange={(event) => setDateFrom(event.target.value)}
+            />
+          </FormField>
+          <FormField label="Дата по" helperText="Кінець періоду">
+            <input
+              type="date"
+              className={formControlClass}
+              value={dateTo}
+              onChange={(event) => setDateTo(event.target.value)}
+            />
+          </FormField>
+          <div className="flex items-end">
+            <button
+              type="button"
+              className="w-full rounded-lg bg-pine px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={isFiltering}
+              onClick={loadActiveGroups}
+            >
+              {isFiltering ? "Шукаємо..." : "Показати"}
+            </button>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              className="w-full rounded-lg border border-pine px-4 py-2 text-sm font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+              disabled={isExporting}
+              onClick={exportActiveGroups}
+            >
+              {isExporting ? "Готуємо..." : "Excel"}
+            </button>
+          </div>
+        </div>
+        <div className="mt-4">
+          <DataTable
+            data={activeGroups}
+            columns={activeGroupColumns}
+            rowKey={(group) => group.group_id}
+            isLoading={isFiltering}
+            errorText={filterError}
+            onRetry={dateFrom && dateTo ? loadActiveGroups : null}
+            emptyText="Оберіть дати та натисніть «Показати»"
+            search={{
+              placeholder: "Пошук за кодом, назвою або викладачем",
+              getSearchText: (group) =>
+                `${group.code} ${group.name} ${group.teachers.map((teacher) => teacher.teacher_name).join(" ")}`
+            }}
+          />
+        </div>
+      </Panel>
       <Panel title="Реєстр груп">
         <DataTable
           data={groups}

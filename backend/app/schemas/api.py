@@ -211,6 +211,24 @@ class GroupResponse(ORMModel):
     created_at: datetime
 
 
+class GroupTeacherHoursResponse(BaseModel):
+    teacher_id: int
+    teacher_name: str
+    hours: float
+
+
+class ActiveGroupBetweenDatesResponse(BaseModel):
+    group_id: int
+    code: str
+    name: str
+    training_start_date: date | None = None
+    training_end_date: date | None = None
+    period_start_date: date
+    period_end_date: date
+    total_hours: float
+    teachers: list[GroupTeacherHoursResponse]
+
+
 class EnrollRequest(BaseModel):
     trainee_id: int
 
