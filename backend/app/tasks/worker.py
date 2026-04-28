@@ -74,6 +74,9 @@ def process_import_job_task(self, import_job_id: int) -> dict:
                 branch_id=job.branch_id,
                 actor_user_id=job.document.created_by,
             )
+            created_slots = int(import_result.get("created_slots") or 0)
+            if created_slots <= 0:
+                raise ValueError("DOCX розклад оброблено, але жодного заняття не створено")
 
         initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
         payload = {

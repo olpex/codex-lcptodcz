@@ -31,14 +31,14 @@ def _contracts_xlsx_bytes() -> bytes:
     return stream.read()
 
 
-def _schedule_docx_bytes() -> bytes:
+def _schedule_docx_bytes(group_code: str = "167-25") -> bytes:
     stream = io.BytesIO()
     document = DocxDocument()
     document.add_paragraph("1 пара - 9.30 – 11.05")
     document.add_paragraph("2 пара – 11.10 – 12.45")
     document.add_paragraph("за напрямом")
     document.add_paragraph("Організація трудових відносин")
-    document.add_paragraph("Група № 167-25")
+    document.add_paragraph(f"Група № {group_code}")
     document.add_paragraph("з 21 жовтня 2025 року до 22 жовтня 2025 року")
 
     table = document.add_table(rows=3, cols=6)
@@ -387,3 +387,49 @@ def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypa
     )
 
     assert response.status_code == 202
+
+
+def test_gmail_api_webhook_imports_docx_with_group_code_only_filename(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+
+    file_base64 = base64.urlsafe_b64encode(_schedule_docx_bytes("162-25")).decode("ascii")
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "162-25.docx",
+            "messageId": "<gmail-api-docx-code-only-filename-test@example.com>",
+            "fileBase64": file_base64,
+            "subject": "",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == JobStatus.SUCCEEDED.value
+    group = db_session.query(Group).filter(Group.code == "162-25").one()
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 2
+
+
+def test_gmail_api_webhook_imports_docx_with_letter_in_group_code_filename(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+
+    file_base64 = base64.urlsafe_b64encode(_schedule_docx_bytes("47п-25")).decode("ascii")
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "47п-25.docx",
+            "messageId": "<gmail-api-docx-letter-code-filename-test@example.com>",
+            "fileBase64": file_base64,
+            "subject": "",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == JobStatus.SUCCEEDED.value
+    group = db_session.query(Group).filter(Group.code == "47п-25").one()
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 2

@@ -38,6 +38,20 @@ const LABEL_FAILED      = "suptc/failed";
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
+    return;
+  }
+
+  try {
+    processIncomingEmailsLocked_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function processIncomingEmailsLocked_() {
   const query = 'in:inbox is:unread has:attachment from:' + SENDER_EMAIL;
   const threads = GmailApp.search(query, 0, 10);
   const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
@@ -61,7 +75,8 @@ function processIncomingEmails() {
     }
 
     if (result.ok) {
-      message.markRead();
+      markMessageReadOnly_(message.getId());
+      thread.refresh();
       if (!threadHasUnreadMessages_(thread)) {
         thread.addLabel(okLabel);
       }
@@ -117,6 +132,7 @@ function processOneMessage_(message) {
     const payload = JSON.stringify({
       filename:   fileName,
       messageId:  message.getId(),
+      subject:    message.getSubject() || "",
       fileBase64: b64,
     });
 
@@ -160,6 +176,29 @@ function threadHasUnreadMessages_(thread) {
   return thread.getMessages().some(function(message) {
     return message.isUnread();
   });
+}
+
+function markMessageReadOnly_(messageId) {
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" +
+              encodeURIComponent(messageId) +
+              "/modify";
+
+  const resp = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: "Bearer " + ScriptApp.getOAuthToken(),
+    },
+    payload: JSON.stringify({
+      removeLabelIds: ["UNREAD"],
+    }),
+    muteHttpExceptions: true,
+  });
+
+  const code = resp.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error("Не вдалося позначити прочитаним саме цей лист: " + resp.getContentText());
+  }
 }
 
 function getOrCreateLabel_(labelName) {
