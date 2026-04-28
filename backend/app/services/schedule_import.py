@@ -204,30 +204,39 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         if len(table.rows) < 2 or len(table.columns) < 6:
             continue
 
+        table_cell_lines = [_norm(cell.text) for row in table.rows for cell in row.cells if _norm(cell.text)]
+        metadata_lines = table_cell_lines + table_lines
+
         try:
-            local_group_code = _parse_group_code(table_lines)
+            local_group_code = _parse_group_code(metadata_lines)
         except ValueError:
             local_group_code = global_group_code
 
-        local_group_name = _parse_course_title(table_lines or lines, local_group_code)
-        local_start_date, local_end_date = _parse_date_range(table_lines or lines)
+        local_group_name = _parse_course_title(metadata_lines or lines, local_group_code)
+        local_start_date, local_end_date = _parse_date_range(metadata_lines or lines)
         if not local_start_date and global_start_date:
             local_start_date = global_start_date
         if not local_end_date and global_end_date:
             local_end_date = global_end_date
 
-        local_pair_windows = _parse_pair_windows(table_lines or lines) or global_pair_windows
+        local_pair_windows = _parse_pair_windows(metadata_lines or lines) or global_pair_windows
 
-        header_row = table.rows[0]
+        header_row_index = -1
         date_columns: dict[int, date] = {}
         year = (local_end_date or local_start_date or global_end_date or global_start_date or date.today()).year
-        for column_index in range(3, len(header_row.cells) - 1):
-            header_text = _norm(header_row.cells[column_index].text)
-            match = re.search(r"(\d{1,2})\.(\d{1,2})", header_text)
-            if not match:
-                continue
-            day, month = int(match.group(1)), int(match.group(2))
-            date_columns[column_index] = date(year, month, day)
+        for row_index, row in enumerate(table.rows):
+            current_date_columns: dict[int, date] = {}
+            for column_index in range(0, len(row.cells)):
+                header_text = _norm(row.cells[column_index].text)
+                match = re.search(r"(\d{1,2})\.(\d{1,2})", header_text)
+                if not match:
+                    continue
+                day, month = int(match.group(1)), int(match.group(2))
+                current_date_columns[column_index] = date(year, month, day)
+            if current_date_columns:
+                header_row_index = row_index
+                date_columns = current_date_columns
+                break
 
         if not date_columns:
             continue
@@ -235,7 +244,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         table_entries: list[dict] = []
         table_total_group_hours = 0.0
         previous_teacher_name = ""
-        for row in table.rows[1:]:
+        for row in table.rows[header_row_index + 1 :]:
             cells = row.cells
             if len(cells) < 6:
                 continue
