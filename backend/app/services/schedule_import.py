@@ -50,6 +50,17 @@ def _parse_group_code(lines: list[str]) -> str:
             cleaned = re.sub(r"[^0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/\.]", "", fallback.group(1))
             if cleaned:
                 return _normalize_group_code(cleaned)
+
+    # Fallback 3: look for common group code patterns even without the word "група"
+    for line in reversed(lines):
+        match = re.search(
+            r"\b([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/.]\s*\d{2})\b",
+            line,
+            re.IGNORECASE,
+        )
+        if match:
+            return _normalize_group_code(match.group(1))
+
     raise ValueError("Не вдалося визначити номер групи з документа")
 
 
@@ -214,12 +225,24 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
             continue
 
         table_cell_lines = [_norm(cell.text) for row in table.rows for cell in row.cells if _norm(cell.text)]
+        # Put table cells first, then lines above it. We want to search from bottom of metadata up.
+        # This means the closest text above the table is searched first, then inside the table.
+        # But wait, `_parse_group_code` searches `reversed(lines)`.
+        # So we should put `table_lines` at the end, so it's searched first.
         metadata_lines = table_cell_lines + table_lines
 
         try:
             local_group_code = _parse_group_code(metadata_lines)
         except ValueError:
-            local_group_code = global_group_code
+            # Fallback 1: try to find any group code in JUST the table lines (if table_cell_lines confused it)
+            try:
+                local_group_code = _parse_group_code(table_lines)
+            except ValueError:
+                # Fallback 2: try to find any group code in JUST the table cell lines
+                try:
+                    local_group_code = _parse_group_code(table_cell_lines)
+                except ValueError:
+                    local_group_code = global_group_code
 
         local_group_name = _parse_course_title(table_lines or lines, local_group_code)
         local_start_date, local_end_date = _parse_date_range(table_lines or lines)
