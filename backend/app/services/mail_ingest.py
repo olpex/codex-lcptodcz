@@ -26,8 +26,8 @@ from app.models import (
 from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content, try_import_trainees
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
-from app.services.schedule_import import parse_schedule_docx, import_schedule_docx
-from app.models import ScheduleSlot, Group, Trainee
+from app.services.schedule_import import import_schedule_docx
+from app.models import Trainee
 
 GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
 CONTRACT_KEYWORD_FALLBACK = "договор"
@@ -138,39 +138,10 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             if exists:
                 return True
     elif doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
-        import logging
-        logger = logging.getLogger("mail.ingest")
-        try:
-            parsed_list = parse_schedule_docx(file_path)
-        except Exception as e:
-            logger.info(f"is_duplicate_attachment: Помилка парсингу {filename}: {e}. Вважаємо не дублікатом.")
-            # If we can't parse it, we don't know what groups it contains, so we process it to let the job fail or process properly.
-            return False
-
-        if not parsed_list:
-            logger.info(f"is_duplicate_attachment: У файлі {filename} не знайдено груп. Вважаємо не дублікатом.")
-            return False
-
-        for parsed in parsed_list:
-            group_code = parsed.get("group_code")
-            if not group_code:
-                continue
-            
-            group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
-            # If any group from the file doesn't exist in DB, it's NOT a duplicate (we must process it)
-            if not group:
-                logger.info(f"is_duplicate_attachment: Група {group_code} відсутня в БД. Файл {filename} не дублікат.")
-                return False
-            
-            has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
-            # If any group exists but has no schedule slots, it's NOT a duplicate (we must process it)
-            if not has_slots:
-                logger.info(f"is_duplicate_attachment: Для групи {group_code} відсутні слоти. Файл {filename} не дублікат.")
-                return False
-
-        # Only skip as duplicate if ALL groups from the file exist AND have schedule slots.
-        logger.info(f"is_duplicate_attachment: Всі групи з файлу {filename} присутні та мають слоти. Вважаємо дублікатом.")
-        return True
+        # A manually-unread email is an explicit retry signal. Schedule imports are
+        # idempotent at the slot level, so never drop schedule DOCX attachments here
+        # based on stale mail/document history or unrelated slots for the same group.
+        return False
     return False
 
 
@@ -384,7 +355,10 @@ def ingest_mailbox(db: Session) -> dict:
                 try:
                     import_result = import_schedule_docx(db, str(out_path), branch_id)
                     job.status = JobStatus.SUCCEEDED
-                    job.result_payload["import_result"] = import_result
+                    job.result_payload = {
+                        **(job.result_payload or {}),
+                        "import_result": import_result,
+                    }
                     job.message = "Автоімпорт розкладу із пошти виконано"
                     job.finished_at = datetime.now(timezone.utc)
                     attachment_notes.append(f"Імпорт розкладу виконано ({filename})")
