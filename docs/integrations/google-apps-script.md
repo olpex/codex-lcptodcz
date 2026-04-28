@@ -37,6 +37,8 @@ const WEBHOOK_SECRET    = "olppara13091972olppara13091972"; // ← ваш сек
 const SENDER_EMAIL      = "lcptodcz@gmail.com";
 const LABEL_PROCESSED   = "suptc/processed";
 const LABEL_FAILED      = "suptc/failed";
+const SCAN_THREAD_LIMIT = 300;
+const SCAN_PAGE_SIZE    = 50;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
@@ -73,7 +75,9 @@ function processIncomingEmailsLocked_() {
   }
 
   if (result.ok) {
-    markMessageReadOnly_(message);
+    target.markReadMessages.forEach(function(item) {
+      markMessageReadOnly_(item);
+    });
     thread.refresh();
     if (!threadHasUnreadMessages_(thread)) {
       thread.addLabel(okLabel);
@@ -90,27 +94,66 @@ function processIncomingEmailsLocked_() {
 // ─── Допоміжні функції ───────────────────────────────────────────────────────
 
 function findNextUnreadMessage_() {
-  const threads = GmailApp.getInboxThreads(0, 50);
+  const stats = {
+    threads: 0,
+    unread: 0,
+    expectedSenderUnread: 0,
+    expectedSenderUnreadWithAttachments: 0,
+    fallbackThreadAttachments: 0,
+  };
 
-  for (const thread of threads) {
-    const messages = thread.getMessages();
-    for (const message of messages) {
-      if (!message.isUnread()) {
-        continue;
+  for (let start = 0; start < SCAN_THREAD_LIMIT; start += SCAN_PAGE_SIZE) {
+    const threads = GmailApp.getInboxThreads(start, SCAN_PAGE_SIZE);
+    if (!threads.length) {
+      break;
+    }
+
+    for (const thread of threads) {
+      stats.threads += 1;
+      const messages = thread.getMessages();
+      const relatedAttachmentMessage = findExpectedSenderMessageWithAttachments_(messages);
+
+      for (const message of messages) {
+        if (!message.isUnread()) {
+          continue;
+        }
+
+        stats.unread += 1;
+        if (!isExpectedSender_(message)) {
+          continue;
+        }
+
+        stats.expectedSenderUnread += 1;
+        if (messageHasAttachments_(message)) {
+          stats.expectedSenderUnreadWithAttachments += 1;
+          Logger.log("Знайдено непрочитаний лист із вкладенням: " + describeMessage_(message));
+          return {
+            thread: thread,
+            message: message,
+            markReadMessages: [message],
+          };
+        }
+
+        if (relatedAttachmentMessage) {
+          stats.fallbackThreadAttachments += 1;
+          Logger.log("Непрочитаний лист без вкладень; беру вкладення з цього ж треду: " + describeMessage_(relatedAttachmentMessage));
+          return {
+            thread: thread,
+            message: relatedAttachmentMessage,
+            markReadMessages: [message, relatedAttachmentMessage],
+          };
+        }
       }
-      if (!isExpectedSender_(message)) {
-        continue;
-      }
-      if (!messageHasAttachments_(message)) {
-        continue;
-      }
-      return {
-        thread: thread,
-        message: message,
-      };
     }
   }
 
+  Logger.log(
+    "Діагностика пошуку: тредів=" + stats.threads +
+    ", непрочитаних=" + stats.unread +
+    ", від потрібного відправника=" + stats.expectedSenderUnread +
+    ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
+    ", fallback-вкладень у треді=" + stats.fallbackThreadAttachments
+  );
   return null;
 }
 
@@ -201,6 +244,27 @@ function messageHasAttachments_(message) {
     includeAttachments: true,
   });
   return attachments.length > 0;
+}
+
+function findExpectedSenderMessageWithAttachments_(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isExpectedSender_(message) && messageHasAttachments_(message)) {
+      return message;
+    }
+  }
+  return null;
+}
+
+function describeMessage_(message) {
+  const attachments = message.getAttachments({
+    includeInlineImages: false,
+    includeAttachments: true,
+  });
+  const names = attachments.map(function(att) {
+    return att.getName();
+  }).join(", ");
+  return "from='" + message.getFrom() + "', subject='" + message.getSubject() + "', files=[" + names + "]";
 }
 
 function threadHasUnreadMessages_(thread) {
