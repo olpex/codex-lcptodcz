@@ -32,6 +32,35 @@ def _db_text(text: str | None, max_length: int) -> str:
     return value[:max_length]
 
 
+def _clean_course_title(text: str | None, group_code: str) -> str:
+    value = _norm(text or "")
+    if not value:
+        return ""
+
+    value = re.sub(r"^\s*за\s+напрямом\s*", "", value, flags=re.IGNORECASE)
+    value = value.strip(" «»„“”\"'")
+    value = value.replace("\u00a0", " ")
+    for quote in ("«", "»", "„", "“", "”", '"'):
+        value = value.replace(quote, " ")
+    value = re.sub(r"\s*,+\s*", " ", value)
+    value = re.sub(r"\s+", " ", value).strip(" ,.;:-")
+
+    # Some DOCX files expose the same title multiple times, sometimes with no
+    # separator between copies after quote cleanup. Keep the first full copy.
+    for index in range(20, len(value) // 2 + 1):
+        if value[index] != value[0]:
+            continue
+        candidate = value[:index].strip(" ,.;:-")
+        if len(candidate) < 20:
+            continue
+        if value[index:].lstrip(" ,.;:-").startswith(candidate):
+            return candidate
+
+    if group_code and group_code in value:
+        return ""
+    return value
+
+
 def _parse_group_code(lines: list[str]) -> str:
     def _normalize_group_code(raw: str) -> str:
         value = (raw or "").strip()
@@ -75,14 +104,20 @@ def _parse_course_title(lines: list[str], group_code: str) -> str:
         if "за напрямом" in line.lower():
             match = re.search(r"за напрямом\s*[«\"'„](.*?)[»\"'”]", line, re.IGNORECASE)
             if match:
-                return match.group(1).strip()
+                cleaned = _clean_course_title(match.group(1), group_code)
+                if cleaned:
+                    return cleaned
             if index + 1 < len(lines):
-                return _norm(lines[index + 1]).strip("„”\"")
+                cleaned = _clean_course_title(lines[index + 1], group_code)
+                if cleaned:
+                    return cleaned
     for line in lines:
         if group_code in line:
             continue
         if len(line) > 25:
-            return _norm(line).strip("„”\"")
+            cleaned = _clean_course_title(line, group_code)
+            if cleaned:
+                return cleaned
     return f"Група {group_code}"
 
 
