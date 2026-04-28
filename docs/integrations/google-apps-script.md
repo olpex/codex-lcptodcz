@@ -77,10 +77,16 @@ function processIncomingEmailsLocked_() {
   }
 
   if (result.ok) {
-    removePendingMessage_(message.getId());
+    const pendingState = removePendingMessage_(message.getId(), thread.getId());
+    Logger.log("Черга після обробки: залишилось=" + pendingState.remaining + ", у цьому треді ще=" + pendingState.hasMoreInThread);
     target.markReadMessages.forEach(function(item) {
       markMessageReadOnly_(item);
     });
+    if (!pendingState.hasMoreInThread) {
+      (target.finalMarkerMessages || []).forEach(function(item) {
+        markMessageReadOnly_(item);
+      });
+    }
     thread.refresh();
     if (!threadHasUnreadMessages_(thread)) {
       thread.addLabel(okLabel);
@@ -262,7 +268,10 @@ function getNextQueuedTarget_() {
         return {
           thread: thread,
           message: message,
-          markReadMessages: uniqueMessages_(markReadMessages),
+          markReadMessages: [message],
+          finalMarkerMessages: uniqueMessages_(markReadMessages).filter(function(item) {
+            return item.getId() !== message.getId();
+          }),
         };
       }
       Logger.log("Видаляю з черги лист без придатних вкладень: " + item.messageId);
@@ -312,7 +321,7 @@ function enqueueMessages_(thread, messages, unreadMarkerMessages) {
   savePendingQueue_(queue);
 }
 
-function removePendingMessage_(messageId) {
+function removePendingMessage_(messageId, threadId) {
   const queue = loadPendingQueue_();
   const next = queue.filter(function(item) {
     return item.messageId !== messageId;
@@ -320,6 +329,12 @@ function removePendingMessage_(messageId) {
   if (next.length !== queue.length) {
     savePendingQueue_(next);
   }
+  return {
+    hasMoreInThread: next.some(function(item) {
+      return item.threadId === threadId;
+    }),
+    remaining: next.length,
+  };
 }
 
 function loadPendingQueue_() {
