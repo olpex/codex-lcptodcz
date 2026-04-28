@@ -83,6 +83,43 @@ def _build_schedule_docx_with_short_year_and_merged_teacher(path: Path) -> None:
     doc.save(path)
 
 
+def _build_schedule_docx_with_two_groups(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("2 пара – 11.10 – 12.45")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Штучний інтелект")
+    doc.add_paragraph("Група № 162-25")
+    doc.add_paragraph("з 23 червня 2025 року до 26 червня 2025 року")
+
+    table1 = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(
+        ["№п/п", "Назва предмета", "К-сть год.", "23.06", "24.06", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table1.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема групи 162", "2", "1п/1год", "2п/1год", "Паращук Світлана Зеновіївна"]):
+        table1.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table1.cell(2, idx).text = value
+
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Токар")
+    doc.add_paragraph("Група № 47п-25")
+    doc.add_paragraph("з 23 червня 2025 року до 26 червня 2025 року")
+
+    table2 = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(
+        ["№п/п", "Назва предмета", "К-сть год.", "23.06", "24.06", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table2.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема групи 47п", "2", "1п/1год", "2п/1год", "Паращук Світлана Зеновіївна"]):
+        table2.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table2.cell(2, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -129,3 +166,27 @@ def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path
     assert summary2["created_slots"] == 3
     slots_after = db_session.query(ScheduleSlot).all()
     assert len(slots_after) == 3  # Old slots were deleted and new ones were inserted
+
+
+def test_parse_schedule_docx_with_two_groups(tmp_path: Path):
+    file_path = tmp_path / "schedule-two-groups.docx"
+    _build_schedule_docx_with_two_groups(file_path)
+
+    payload_list = parse_schedule_docx(str(file_path))
+    codes = {payload["group_code"] for payload in payload_list}
+    assert codes == {"162-25", "47п-25"}
+    assert all(payload["entries"] for payload in payload_list)
+
+
+def test_import_schedule_docx_with_two_groups_keeps_group_binding(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-two-groups.docx"
+    _build_schedule_docx_with_two_groups(file_path)
+
+    summary = import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
+    db_session.commit()
+
+    assert summary["created_slots"] == 4
+    slots = db_session.query(ScheduleSlot).all()
+    assert len(slots) == 4
+    group_ids = {slot.group_id for slot in slots}
+    assert len(group_ids) == 2

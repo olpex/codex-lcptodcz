@@ -28,10 +28,20 @@ def _norm(text: str) -> str:
 
 
 def _parse_group_code(lines: list[str]) -> str:
-    for line in lines:
-        match = re.search(r"група\s*№?\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]+)", line, re.IGNORECASE)
+    # Read from bottom to top so the nearest heading to a table wins.
+    for line in reversed(lines):
+        match = re.search(
+            r"група\s*№?\s*([0-9]{1,4}[A-Za-zА-Яа-яЇїІіЄєҐґ]?\s*[-/]\s*\d{1,4})",
+            line,
+            re.IGNORECASE,
+        )
         if match:
-            return match.group(1).strip()
+            return "".join(match.group(1).split())
+        fallback = re.search(r"група\s*№?\s*([0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]+)", line, re.IGNORECASE)
+        if fallback:
+            cleaned = re.sub(r"[^0-9A-Za-zА-Яа-яЇїІіЄєҐґ\-/]", "", fallback.group(1))
+            if cleaned:
+                return cleaned
     raise ValueError("Не вдалося визначити номер групи з документа")
 
 
@@ -166,22 +176,51 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
     global_start_date, global_end_date = _parse_date_range(lines)
     global_pair_windows = _parse_pair_windows(lines)
 
-    results = []
-    
-    # We will just parse all tables and group them by the document's global group code.
-    # If the user has multiple tables for the same group (e.g. split by weeks/months),
-    # this will correctly extract all entries.
-    
-    all_entries = []
-    total_group_hours = 0.0
+    # Preserve table order from document body and capture nearby paragraph context
+    # so each table can resolve its own group/date metadata.
+    table_by_element_id = {id(table._tbl): table for table in document.tables}
+    table_contexts: list[tuple[object, list[str]]] = []
+    context_lines: list[str] = []
+    for body_child in document.element.body.iterchildren():
+        tag = body_child.tag.lower()
+        if tag.endswith("}p"):
+            text = _norm("".join(body_child.itertext()))
+            if text:
+                context_lines.append(text)
+            continue
+        if tag.endswith("}tbl"):
+            table = table_by_element_id.get(id(body_child))
+            if table is None:
+                continue
+            table_contexts.append((table, context_lines[-40:]))
 
-    for table in document.tables:
+    # Fallback when body traversal did not map tables (rare malformed DOCX).
+    if not table_contexts:
+        table_contexts = [(table, lines[-40:]) for table in document.tables]
+
+    grouped_results: dict[str, dict] = {}
+
+    for table, table_lines in table_contexts:
         if len(table.rows) < 2 or len(table.columns) < 6:
             continue
 
+        try:
+            local_group_code = _parse_group_code(table_lines)
+        except ValueError:
+            local_group_code = global_group_code
+
+        local_group_name = _parse_course_title(table_lines or lines, local_group_code)
+        local_start_date, local_end_date = _parse_date_range(table_lines or lines)
+        if not local_start_date and global_start_date:
+            local_start_date = global_start_date
+        if not local_end_date and global_end_date:
+            local_end_date = global_end_date
+
+        local_pair_windows = _parse_pair_windows(table_lines or lines) or global_pair_windows
+
         header_row = table.rows[0]
         date_columns: dict[int, date] = {}
-        year = (global_end_date or global_start_date or date.today()).year
+        year = (local_end_date or local_start_date or global_end_date or global_start_date or date.today()).year
         for column_index in range(3, len(header_row.cells) - 1):
             header_text = _norm(header_row.cells[column_index].text)
             match = re.search(r"(\d{1,2})\.(\d{1,2})", header_text)
@@ -193,6 +232,8 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         if not date_columns:
             continue
 
+        table_entries: list[dict] = []
+        table_total_group_hours = 0.0
         previous_teacher_name = ""
         for row in table.rows[1:]:
             cells = row.cells
@@ -209,8 +250,8 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                 continue
             if "загальний обсяг" in subject_name.lower():
                 current_total = _parse_hours(cells[2].text)
-                if current_total > total_group_hours:
-                    total_group_hours = current_total
+                if current_total > table_total_group_hours:
+                    table_total_group_hours = current_total
                 continue
             if not index_cell.isdigit():
                 continue
@@ -220,14 +261,14 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                     continue
                 cell_value = _norm(cells[column_index].text)
                 for pair_number, academic_hours in _parse_pairs_cell(cell_value):
-                    pair_window = global_pair_windows.get(pair_number)
+                    pair_window = local_pair_windows.get(pair_number)
                     if pair_window:
                         starts_at = datetime.combine(lesson_date, pair_window[0], tzinfo=timezone.utc)
                         ends_at = datetime.combine(lesson_date, pair_window[1], tzinfo=timezone.utc)
                     else:
                         starts_at = datetime.combine(lesson_date, time(hour=9 + (pair_number - 1) * 2), tzinfo=timezone.utc)
                         ends_at = starts_at + timedelta(minutes=95)
-                    all_entries.append(
+                    table_entries.append(
                         {
                             "subject_name": subject_name,
                             "declared_subject_hours": declared_subject_hours,
@@ -240,22 +281,38 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                         }
                     )
 
-    if not all_entries:
+        if not table_entries:
+            continue
+
+        if table_total_group_hours <= 0:
+            table_total_group_hours = round(sum(item["academic_hours"] for item in table_entries), 2)
+
+        bucket = grouped_results.get(local_group_code)
+        if not bucket:
+            grouped_results[local_group_code] = {
+                "group_code": local_group_code,
+                "group_name": local_group_name,
+                "start_date": local_start_date.isoformat() if local_start_date else None,
+                "end_date": local_end_date.isoformat() if local_end_date else None,
+                "group_total_hours": table_total_group_hours,
+                "entries": table_entries,
+            }
+        else:
+            bucket["entries"].extend(table_entries)
+            bucket["group_total_hours"] = round(float(bucket["group_total_hours"]) + table_total_group_hours, 2)
+            if not bucket.get("start_date") and local_start_date:
+                bucket["start_date"] = local_start_date.isoformat()
+            if not bucket.get("end_date") and local_end_date:
+                bucket["end_date"] = local_end_date.isoformat()
+            if local_group_name and (
+                not bucket.get("group_name") or bucket.get("group_name") == f"Група {local_group_code}"
+            ):
+                bucket["group_name"] = local_group_name
+
+    if not grouped_results:
         raise ValueError("У таблицях не знайдено занять для імпорту")
 
-    if total_group_hours <= 0:
-        total_group_hours = round(sum(item["academic_hours"] for item in all_entries), 2)
-
-    results.append({
-        "group_code": global_group_code,
-        "group_name": global_group_name,
-        "start_date": global_start_date.isoformat() if global_start_date else None,
-        "end_date": global_end_date.isoformat() if global_end_date else None,
-        "group_total_hours": total_group_hours,
-        "entries": all_entries,
-    })
-
-    return results
+    return list(grouped_results.values())
 
 
 def _merge_duplicate_teachers(db: Session, branch_id: str, teacher_ids: list[int]) -> int:
