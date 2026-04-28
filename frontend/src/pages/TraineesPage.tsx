@@ -6,6 +6,7 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Trainee, Group } from "../types/api";
 
 type TraineeEditForm = {
@@ -250,6 +251,10 @@ export function TraineesPage() {
   useEffect(() => {
     fetchTrainees(search);
   }, [showArchived]);
+
+  usePageRefresh(() => fetchTrainees(search), {
+    enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating
+  });
 
   
   const [groupToDelete, setGroupToDelete] = useState<Group | null>(null);
@@ -602,6 +607,14 @@ export function TraineesPage() {
             </FormField>
             <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={() => fetchTrainees(search)}>
               Знайти
+            </button>
+            <button
+              type="button"
+              className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
+              onClick={() => fetchTrainees(search)}
+              disabled={isLoading}
+            >
+              {isLoading ? "Оновлюємо..." : "Оновити"}
             </button>
           </div>
         </StickyActionBar>

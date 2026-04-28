@@ -5,6 +5,7 @@ import { Panel } from "../components/Panel";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Draft, MailMessage } from "../types/api";
 
 type EditablePayload = {
@@ -194,6 +195,8 @@ export function DraftsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  usePageRefresh(load, { intervalMs: 30_000 });
 
   const pollNow = async () => {
     try {

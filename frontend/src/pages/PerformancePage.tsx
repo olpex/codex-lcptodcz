@@ -5,6 +5,7 @@ import { FormField, FormSubmitButton, formControlClass } from "../components/For
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Group, Performance, Trainee } from "../types/api";
 
 type PerformancePayload = {
@@ -81,6 +82,10 @@ export function PerformancePage() {
   useEffect(() => {
     load();
   }, []);
+
+  usePageRefresh(load, {
+    enabled: !editingId && !isSubmitting && !isDeleting
+  });
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -357,6 +362,16 @@ export function PerformancePage() {
       </Panel>
 
       <Panel title="Моніторинг успішності">
+        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50"
+            onClick={load}
+            disabled={isLoading}
+          >
+            {isLoading ? "Оновлюємо..." : "Оновити"}
+          </button>
+        </div>
         <DataTable
           data={rows}
           columns={columns}

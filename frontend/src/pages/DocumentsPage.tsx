@@ -9,6 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
 import { formatJobStatus, formatJobType } from "../i18n/statuses";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Job } from "../types/api";
 
 type JobStatusPayload = {
@@ -179,7 +180,7 @@ export function DocumentsPage() {
     }
   };
 
-  const checkJob = async () => {
+  const checkJob = async (showToastMessage = true) => {
     if (!activeJobId) return;
     setIsCheckingStatus(true);
     try {
@@ -188,7 +189,9 @@ export function DocumentsPage() {
       setActiveJobType(response.job_type);
       setActiveJobStatus(response.job.status);
       setOutputDocumentId(extractOutputDocumentId(response.job));
-      showSuccess(response.job.message || "Статус оновлено");
+      if (showToastMessage) {
+        showSuccess(response.job.message || "Статус оновлено");
+      }
       setNotice({ tone: "info", text: response.job.message || "Статус задачі оновлено" });
     } catch (error) {
       const message = (error as Error).message;
@@ -198,6 +201,12 @@ export function DocumentsPage() {
       setIsCheckingStatus(false);
     }
   };
+
+  usePageRefresh(() => checkJob(false), {
+    enabled: Boolean(activeJobId),
+    intervalMs: activeJobStatus === "queued" || activeJobStatus === "running" ? 10_000 : 0,
+    refreshOnFocus: false
+  });
 
   const downloadOutput = async () => {
     if (!outputDocumentId) {
@@ -384,7 +393,7 @@ export function DocumentsPage() {
             <button
               type="button"
               className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
-              onClick={checkJob}
+              onClick={() => checkJob(true)}
               disabled={!activeJobId || isCheckingStatus}
             >
               {isCheckingStatus ? "Оновлюємо..." : "Оновити статус"}

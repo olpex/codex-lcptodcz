@@ -7,6 +7,7 @@ import { API_URL } from "../api/client";
 import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { ActiveGroupBetweenDates, Group } from "../types/api";
 
 export function GroupsPage() {
@@ -152,6 +153,8 @@ export function GroupsPage() {
   useEffect(() => {
     loadGroups();
   }, []);
+
+  usePageRefresh(loadGroups);
 
   const validatePeriod = () => {
     if (!dateFrom || !dateTo) {
@@ -418,6 +421,16 @@ export function GroupsPage() {
         </div>
       </Panel>
       <Panel title="Реєстр груп">
+        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50"
+            onClick={loadGroups}
+            disabled={isLoading}
+          >
+            {isLoading ? "Оновлюємо..." : "Оновити"}
+          </button>
+        </div>
         <DataTable
           data={groups}
           columns={columns}

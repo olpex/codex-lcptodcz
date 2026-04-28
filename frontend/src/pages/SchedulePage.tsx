@@ -6,6 +6,7 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { ScheduleSlot, Teacher } from "../types/api";
 
 type GroupedSchedule = {
@@ -491,14 +492,10 @@ export function SchedulePage() {
 
   useEffect(() => {
     fetchSchedule();
-    // Auto-refresh every 30 s so background mail imports appear without a
-    // manual click (e.g. after re-importing a schedule that had a deleted teacher).
-    const intervalId = setInterval(() => {
-      fetchSchedule();
-    }, 30_000);
-    return () => clearInterval(intervalId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  usePageRefresh(fetchSchedule, { intervalMs: 30_000 });
 
 
   const groupedSchedule = useMemo(() => {

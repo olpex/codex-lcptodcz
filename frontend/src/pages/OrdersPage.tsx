@@ -6,6 +6,7 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Order } from "../types/api";
 
 const ORDER_TYPES = [
@@ -79,6 +80,10 @@ export function OrdersPage() {
   useEffect(() => {
     load();
   }, []);
+
+  usePageRefresh(load, {
+    enabled: !editId && !isCreating && !isSavingEdit && !isDeleting
+  });
 
   const createOrder = async (event: FormEvent) => {
     event.preventDefault();

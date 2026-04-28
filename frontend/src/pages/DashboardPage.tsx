@@ -6,6 +6,7 @@ import { KpiSparkline } from "../components/KpiSparkline";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { KPI } from "../types/api";
 
 const EMPTY_KPI: KPI = {
@@ -94,9 +95,9 @@ export function DashboardPage() {
 
   useEffect(() => {
     fetchKpi();
-    const timer = window.setInterval(() => fetchKpi(true), 15000);
-    return () => window.clearInterval(timer);
   }, []);
+
+  usePageRefresh(() => fetchKpi(true), { intervalMs: 15_000 });
 
   const chartData = [
     { name: "Групи", value: kpi.active_groups },

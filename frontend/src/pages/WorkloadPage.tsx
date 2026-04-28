@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
 import type { Workload, Job } from "../types/api";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 
 const STATS_HISTORY_LIMIT = 12;
 
@@ -94,6 +95,10 @@ export function WorkloadPage() {
   useEffect(() => {
     load();
   }, []);
+
+  usePageRefresh(() => load(), {
+    enabled: savingTeacherId === null && !isDeleting && !isExporting
+  });
 
   const seriesByKey = useMemo(
     () => ({
@@ -383,6 +388,14 @@ export function WorkloadPage() {
           </div>
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={() => load()}>
             Застосувати
+          </button>
+          <button
+            type="button"
+            className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
+            onClick={() => load()}
+            disabled={isLoading}
+          >
+            {isLoading ? "Оновлюємо..." : "Оновити"}
           </button>
           {(dateFrom || dateTo) && (
             <button 

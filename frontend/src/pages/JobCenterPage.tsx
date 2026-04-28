@@ -7,6 +7,7 @@ import { API_URL } from "../api/client";
 import { formatImportSource, formatJobStatus, formatJobType } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Job, JobListItem } from "../types/api";
 
 type JobStatusPayload = {
@@ -122,6 +123,8 @@ export function JobCenterPage() {
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [autoRefresh, jobType, jobStatus, dateFrom, dateTo]);
+
+  usePageRefresh(() => loadJobs(), { intervalMs: 0, refreshOnFocus: false });
 
   const refreshOne = async (item: JobListItem) => {
     try {

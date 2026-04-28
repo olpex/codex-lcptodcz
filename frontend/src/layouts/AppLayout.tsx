@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { PAGE_REFRESH_EVENT } from "../hooks/usePageRefresh";
 import { uiText } from "../i18n/uk";
 
 const NAV_ITEMS = [
@@ -32,6 +33,12 @@ export function AppLayout() {
     showInfo("Ви вийшли з системи");
   };
 
+  const refreshCurrentPage = () => {
+    window.dispatchEvent(new Event(PAGE_REFRESH_EVENT));
+    setMobileMenuOpen(false);
+    showInfo("Оновлюю поточну сторінку");
+  };
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
       <a href="#main-content" className="skip-link">
@@ -55,9 +62,18 @@ export function AppLayout() {
             <div className="text-right">
               <p className="font-semibold">{user?.full_name}</p>
               <p className="text-sm text-slate-500">Ролі: {roles}</p>
-              <button className="mt-2 rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={handleLogout}>
-                {uiText.actions.logout}
-              </button>
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-pine px-3 py-1.5 text-sm font-semibold text-pine"
+                  onClick={refreshCurrentPage}
+                >
+                  Оновити
+                </button>
+                <button className="rounded-lg bg-pine px-3 py-1.5 text-sm text-white" onClick={handleLogout}>
+                  {uiText.actions.logout}
+                </button>
+              </div>
             </div>
           </div>
         </div>
