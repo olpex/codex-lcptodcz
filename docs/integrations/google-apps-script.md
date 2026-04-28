@@ -45,7 +45,7 @@ const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-28 queue-v4");
+  Logger.log("Версія скрипта: 2026-04-28 queue-v5");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -143,6 +143,7 @@ function findNextUnreadMessage_() {
     expectedSenderUnread: 0,
     expectedSenderUnreadWithAttachments: 0,
     fallbackThreadAttachments: 0,
+    queuedMessages: 0,
   };
 
   for (let start = 0; start < SCAN_THREAD_LIMIT; start += SCAN_PAGE_SIZE) {
@@ -180,12 +181,17 @@ function findNextUnreadMessage_() {
       if (threadHasUnread && processableMessages.length > 0) {
         stats.fallbackThreadAttachments += processableMessages.length;
         enqueueMessages_(thread, processableMessages, unreadMarkerMessages);
+        stats.queuedMessages += processableMessages.length;
         Logger.log("Тред має непрочитану позначку; поставлено в чергу листів із вкладеннями: " + processableMessages.length);
-        const target = getNextQueuedTarget_();
-        if (target) {
-          return target;
-        }
       }
+    }
+  }
+
+  if (stats.queuedMessages > 0) {
+    Logger.log("Поставлено в чергу всі знайдені листи перед обробкою: " + stats.queuedMessages);
+    const target = getNextQueuedTarget_();
+    if (target) {
+      return target;
     }
   }
 
@@ -194,7 +200,8 @@ function findNextUnreadMessage_() {
     ", непрочитаних=" + stats.unread +
     ", від потрібного відправника=" + stats.expectedSenderUnread +
     ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
-    ", fallback-вкладень у треді=" + stats.fallbackThreadAttachments
+    ", fallback-вкладень у треді=" + stats.fallbackThreadAttachments +
+    ", поставлено в чергу=" + stats.queuedMessages
   );
   return null;
 }
