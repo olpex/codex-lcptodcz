@@ -26,7 +26,7 @@
 3. Вкажіть свої значення у `PROJECT_BASE_URL` та `WEBHOOK_SECRET`.
 4. Збережіть проект.
 5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
-6. Створіть тригер: `processIncomingEmails`, time-driven, кожні 5 хвилин.
+6. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
 
 > Скрипт використовує тільки вбудований `GmailApp`; окремо вмикати Gmail REST API у Google Cloud не потрібно.
 
@@ -44,6 +44,7 @@ const MAX_QUEUE_ITEMS   = 100;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
+  Logger.log("Версія скрипта: 2026-04-28 queue-v4");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -55,6 +56,30 @@ function processIncomingEmails() {
   } finally {
     lock.releaseLock();
   }
+}
+
+function installSingleTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  let removed = 0;
+
+  triggers.forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === "processIncomingEmails") {
+      ScriptApp.deleteTrigger(trigger);
+      removed += 1;
+    }
+  });
+
+  ScriptApp.newTrigger("processIncomingEmails")
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+
+  Logger.log("Готово: видалено старих тригерів processIncomingEmails=" + removed + ", створено 1 новий тригер.");
+}
+
+function clearPendingQueue() {
+  PropertiesService.getScriptProperties().deleteProperty(PENDING_QUEUE_KEY);
+  Logger.log("Внутрішню чергу очищено.");
 }
 
 function processIncomingEmailsLocked_() {
