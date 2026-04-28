@@ -225,7 +225,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
     grouped_results: dict[str, dict] = {}
 
     for table, table_lines in table_contexts:
-        if len(table.rows) < 2 or len(table.columns) < 6:
+        if len(table.rows) < 2 or len(table.columns) < 4:
             continue
 
         table_cell_lines = [_norm(cell.text) for row in table.rows for cell in row.cells if _norm(cell.text)]
@@ -298,7 +298,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                 if current_total > table_total_group_hours:
                     table_total_group_hours = current_total
                 continue
-            if not index_cell.isdigit():
+            if not re.search(r"^\d+", index_cell):
                 continue
 
             for column_index, lesson_date in date_columns.items():

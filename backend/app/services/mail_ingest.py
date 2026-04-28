@@ -147,6 +147,10 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             # If we can't parse it, we don't know what groups it contains, so we process it to let the job fail or process properly.
             return False
 
+        if not parsed_list:
+            logger.info(f"is_duplicate_attachment: У файлі {filename} не знайдено груп. Вважаємо не дублікатом.")
+            return False
+
         for parsed in parsed_list:
             group_code = parsed.get("group_code")
             if not group_code:
@@ -223,7 +227,9 @@ def ingest_mailbox(db: Session) -> dict:
                 .first()
             )
         if existing:
-            continue
+            # If the email is UNSEEN but already exists in DB, it means the user manually marked it as unread
+            # to force reprocessing. We append a random suffix to bypass the unique constraint and process it as new.
+            message_id = f"{message_id}:re:{uuid4().hex[:8]}"
 
         subject = _decode_header(parsed.get("Subject"))
         sender = _decode_header(parsed.get("From"))
