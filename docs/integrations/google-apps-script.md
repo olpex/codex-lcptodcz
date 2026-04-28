@@ -39,6 +39,8 @@ const LABEL_PROCESSED   = "suptc/processed";
 const LABEL_FAILED      = "suptc/failed";
 const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
+const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
+const MAX_QUEUE_ITEMS   = 100;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
@@ -75,6 +77,7 @@ function processIncomingEmailsLocked_() {
   }
 
   if (result.ok) {
+    removePendingMessage_(message.getId());
     target.markReadMessages.forEach(function(item) {
       markMessageReadOnly_(item);
     });
@@ -94,6 +97,12 @@ function processIncomingEmailsLocked_() {
 // ─── Допоміжні функції ───────────────────────────────────────────────────────
 
 function findNextUnreadMessage_() {
+  const queuedTarget = getNextQueuedTarget_();
+  if (queuedTarget) {
+    Logger.log("Беремо наступний лист із внутрішньої черги: " + describeMessage_(queuedTarget.message));
+    return queuedTarget;
+  }
+
   const stats = {
     threads: 0,
     unread: 0,
@@ -111,37 +120,35 @@ function findNextUnreadMessage_() {
     for (const thread of threads) {
       stats.threads += 1;
       const messages = thread.getMessages();
-      const relatedAttachmentMessage = findExpectedSenderMessageWithAttachments_(messages);
+      const processableMessages = findExpectedSenderMessagesWithMatchedAttachments_(messages);
+      const unreadMarkerMessages = [];
+      let threadHasUnread = false;
 
       for (const message of messages) {
         if (!message.isUnread()) {
           continue;
         }
 
+        threadHasUnread = true;
+        unreadMarkerMessages.push(message);
         stats.unread += 1;
         if (!isExpectedSender_(message)) {
           continue;
         }
 
         stats.expectedSenderUnread += 1;
-        if (messageHasAttachments_(message)) {
+        if (messageHasMatchedAttachments_(message)) {
           stats.expectedSenderUnreadWithAttachments += 1;
-          Logger.log("Знайдено непрочитаний лист із вкладенням: " + describeMessage_(message));
-          return {
-            thread: thread,
-            message: message,
-            markReadMessages: [message],
-          };
         }
+      }
 
-        if (relatedAttachmentMessage) {
-          stats.fallbackThreadAttachments += 1;
-          Logger.log("Непрочитаний лист без вкладень; беру вкладення з цього ж треду: " + describeMessage_(relatedAttachmentMessage));
-          return {
-            thread: thread,
-            message: relatedAttachmentMessage,
-            markReadMessages: [message, relatedAttachmentMessage],
-          };
+      if (threadHasUnread && processableMessages.length > 0) {
+        stats.fallbackThreadAttachments += processableMessages.length;
+        enqueueMessages_(thread, processableMessages, unreadMarkerMessages);
+        Logger.log("Тред має непрочитану позначку; поставлено в чергу листів із вкладеннями: " + processableMessages.length);
+        const target = getNextQueuedTarget_();
+        if (target) {
+          return target;
         }
       }
     }
@@ -228,6 +235,125 @@ function processOneMessage_(message) {
   };
 }
 
+function getNextQueuedTarget_() {
+  let queue = loadPendingQueue_();
+  let changed = false;
+
+  while (queue.length > 0) {
+    const item = queue[0];
+    try {
+      const thread = GmailApp.getThreadById(item.threadId);
+      const message = GmailApp.getMessageById(item.messageId);
+      if (message && messageHasMatchedAttachments_(message)) {
+        const markReadMessages = [message];
+        (item.markReadMessageIds || []).forEach(function(markerId) {
+          try {
+            const markerMessage = GmailApp.getMessageById(markerId);
+            if (markerMessage) {
+              markReadMessages.push(markerMessage);
+            }
+          } catch (e) {
+            Logger.log("Не вдалося знайти unread-marker " + markerId + ": " + e);
+          }
+        });
+        if (changed) {
+          savePendingQueue_(queue);
+        }
+        return {
+          thread: thread,
+          message: message,
+          markReadMessages: uniqueMessages_(markReadMessages),
+        };
+      }
+      Logger.log("Видаляю з черги лист без придатних вкладень: " + item.messageId);
+      queue.shift();
+      changed = true;
+    } catch (e) {
+      Logger.log("Видаляю з черги недоступний лист " + item.messageId + ": " + e);
+      queue.shift();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    savePendingQueue_(queue);
+  }
+  return null;
+}
+
+function enqueueMessages_(thread, messages, unreadMarkerMessages) {
+  let queue = loadPendingQueue_();
+  const seen = {};
+  const markReadMessageIds = unreadMarkerMessages.map(function(message) {
+    return message.getId();
+  });
+
+  queue.forEach(function(item) {
+    seen[item.messageId] = true;
+  });
+
+  messages.forEach(function(message) {
+    const messageId = message.getId();
+    if (seen[messageId]) {
+      return;
+    }
+    queue.push({
+      threadId: thread.getId(),
+      messageId: messageId,
+      markReadMessageIds: markReadMessageIds,
+      queuedAt: new Date().toISOString(),
+    });
+    seen[messageId] = true;
+  });
+
+  if (queue.length > MAX_QUEUE_ITEMS) {
+    queue = queue.slice(queue.length - MAX_QUEUE_ITEMS);
+  }
+  savePendingQueue_(queue);
+}
+
+function removePendingMessage_(messageId) {
+  const queue = loadPendingQueue_();
+  const next = queue.filter(function(item) {
+    return item.messageId !== messageId;
+  });
+  if (next.length !== queue.length) {
+    savePendingQueue_(next);
+  }
+}
+
+function loadPendingQueue_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(PENDING_QUEUE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    Logger.log("Чергу листів пошкоджено, очищаю: " + e);
+    return [];
+  }
+}
+
+function savePendingQueue_(queue) {
+  PropertiesService.getScriptProperties().setProperty(PENDING_QUEUE_KEY, JSON.stringify(queue));
+}
+
+function uniqueMessages_(messages) {
+  const seen = {};
+  const result = [];
+  messages.forEach(function(message) {
+    const id = message.getId();
+    if (seen[id]) {
+      return;
+    }
+    seen[id] = true;
+    result.push(message);
+  });
+  return result;
+}
+
 function getExtension_(name) {
   const parts = (name || "").toLowerCase().split(".");
   return parts.length < 2 ? "" : parts[parts.length - 1];
@@ -246,14 +372,33 @@ function messageHasAttachments_(message) {
   return attachments.length > 0;
 }
 
-function findExpectedSenderMessageWithAttachments_(messages) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+function messageHasMatchedAttachments_(message) {
+  const subjectLow = (message.getSubject() || "").toLowerCase();
+  const attachments = message.getAttachments({
+    includeInlineImages: false,
+    includeAttachments: true,
+  });
+
+  return attachments.some(function(att) {
+    const fileName = (att.getName() || "").trim();
+    const ext = getExtension_(fileName);
+    const nameLow = fileName.toLowerCase();
+    const isContract = (ext === "xlsx" || ext === "xls") &&
+                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+    const isSchedule = ext === "docx";
+    return isContract || isSchedule;
+  });
+}
+
+function findExpectedSenderMessagesWithMatchedAttachments_(messages) {
+  const result = [];
+  for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    if (isExpectedSender_(message) && messageHasAttachments_(message)) {
-      return message;
+    if (isExpectedSender_(message) && messageHasMatchedAttachments_(message)) {
+      result.push(message);
     }
   }
-  return null;
+  return result;
 }
 
 function describeMessage_(message) {
