@@ -13,6 +13,7 @@ type GroupedSchedule = {
   label: string;
   slots: ScheduleSlot[];
   totalHours: number;
+  groups: MonthGroupSummary[];
 };
 
 type ScheduleSnapshot = {
@@ -40,6 +41,11 @@ type ConflictAnalysis = {
   conflictSlotCountByDate: Map<string, number>;
 };
 
+type MonthGroupSummary = {
+  groupId: number;
+  code: string;
+  name: string;
+};
 
 function shortName(name: string | undefined | null) {
   if (!name) return "—";
@@ -61,6 +67,71 @@ function toSlotHours(slot: ScheduleSlot): number {
     return 0;
   }
   return (ends - starts) / 3_600_000;
+}
+
+function monthKeyFromDate(value: string | undefined | null): string | null {
+  if (!value || value.length < 7) return null;
+  return value.slice(0, 7);
+}
+
+function monthKeysBetween(startKey: string, endKey: string): string[] {
+  if (startKey > endKey) return [startKey];
+  const [startYear, startMonth] = startKey.split("-").map(Number);
+  const [endYear, endMonth] = endKey.split("-").map(Number);
+  if (!Number.isInteger(startYear) || !Number.isInteger(startMonth) || !Number.isInteger(endYear) || !Number.isInteger(endMonth)) {
+    return [startKey];
+  }
+
+  const keys: string[] = [];
+  let year = startYear;
+  let month = startMonth;
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    keys.push(`${year}-${String(month).padStart(2, "0")}`);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+    if (keys.length >= 36) break;
+  }
+  return keys;
+}
+
+function monthKeysForSlot(slot: ScheduleSlot): string[] {
+  const slotMonth = monthKeyFromDate(slot.starts_at);
+  const startMonth = monthKeyFromDate(slot.group_start_date);
+  const endMonth = monthKeyFromDate(slot.group_end_date);
+
+  if (startMonth && endMonth) {
+    return Array.from(new Set([...monthKeysBetween(startMonth, endMonth), slotMonth].filter(Boolean) as string[])).sort();
+  }
+
+  return Array.from(new Set([slotMonth, startMonth, endMonth].filter(Boolean) as string[]));
+}
+
+function addSlotGroupToMonth(monthGroups: Map<string, Map<number, MonthGroupSummary>>, monthKey: string, slot: ScheduleSlot) {
+  const groups = monthGroups.get(monthKey) || new Map<number, MonthGroupSummary>();
+  groups.set(slot.group_id, {
+    groupId: slot.group_id,
+    code: slot.group_code || String(slot.group_id),
+    name: slot.group_name || "Без назви"
+  });
+  monthGroups.set(monthKey, groups);
+}
+
+function summarizeMonthGroups(slots: ScheduleSlot[], targetMonthKey?: string): MonthGroupSummary[] {
+  const monthGroups = new Map<string, Map<number, MonthGroupSummary>>();
+  for (const slot of slots) {
+    for (const monthKey of monthKeysForSlot(slot)) {
+      if (!targetMonthKey || monthKey === targetMonthKey) {
+        addSlotGroupToMonth(monthGroups, monthKey, slot);
+      }
+    }
+  }
+  const summaries = targetMonthKey
+    ? Array.from(monthGroups.get(targetMonthKey)?.values() || [])
+    : Array.from(monthGroups.values()).flatMap((items) => Array.from(items.values()));
+  return summaries.sort((a, b) => a.code.localeCompare(b.code, "uk-UA", { numeric: true }));
 }
 
 function detectOverlapsInIntervals(
@@ -432,13 +503,19 @@ export function SchedulePage() {
 
   const groupedSchedule = useMemo(() => {
     const grouped = new Map<string, ScheduleSlot[]>();
+    const groupsByMonth = new Map<string, Map<number, MonthGroupSummary>>();
     for (const slot of slots) {
       const monthKey = slot.starts_at.slice(0, 7);
       grouped.set(monthKey, [...(grouped.get(monthKey) || []), slot]);
+      for (const activeMonthKey of monthKeysForSlot(slot)) {
+        addSlotGroupToMonth(groupsByMonth, activeMonthKey, slot);
+      }
     }
 
     const result: GroupedSchedule[] = [];
-    for (const [monthKey, daySlots] of grouped.entries()) {
+    const monthKeys = new Set([...grouped.keys(), ...groupsByMonth.keys()]);
+    for (const monthKey of monthKeys) {
+      const daySlots = grouped.get(monthKey) || [];
       const sortedSlots = [...daySlots].sort((a, b) => {
         const pairA = a.pair_number ?? 999;
         const pairB = b.pair_number ?? 999;
@@ -450,7 +527,10 @@ export function SchedulePage() {
         year: "numeric"
       });
       const totalHours = sortedSlots.reduce((acc, slot) => acc + (slot.academic_hours ?? 0), 0);
-      result.push({ dateKey: monthKey, label, slots: sortedSlots, totalHours: Number(totalHours.toFixed(2)) });
+      const groups = Array.from(groupsByMonth.get(monthKey)?.values() || []).sort((a, b) =>
+        a.code.localeCompare(b.code, "uk-UA", { numeric: true })
+      );
+      result.push({ dateKey: monthKey, label, slots: sortedSlots, totalHours: Number(totalHours.toFixed(2)), groups });
     }
 
     return result.sort((a, b) =>
@@ -466,7 +546,12 @@ export function SchedulePage() {
       .map((group) => {
         const conflictSlots = group.slots.filter((slot) => conflictAnalysis.conflictSlotIds.has(slot.id));
         const totalHours = conflictSlots.reduce((acc, slot) => acc + (slot.academic_hours ?? 0), 0);
-        return { ...group, slots: conflictSlots, totalHours: Number(totalHours.toFixed(2)) };
+        return {
+          ...group,
+          slots: conflictSlots,
+          totalHours: Number(totalHours.toFixed(2)),
+          groups: summarizeMonthGroups(conflictSlots, group.dateKey)
+        };
       })
       .filter((group) => group.slots.length > 0);
   }, [groupedSchedule, showConflictsOnly, conflictAnalysis.conflictSlotIds]);
@@ -675,26 +760,40 @@ export function SchedulePage() {
           <div className="flex-1 space-y-3">
             {visibleGroupedSchedule.map((group) => {
               const isExpanded = Boolean(expandedDates[group.dateKey]);
-              const dayConflictCount = conflictAnalysis.conflictSlotCountByDate.get(group.dateKey) || 0;
+              const monthConflictCount = group.slots.filter((slot) => conflictAnalysis.conflictSlotIds.has(slot.id)).length;
               return (
                 <div key={group.dateKey} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <button
-                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                    className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
                     onClick={() => toggleDate(group.dateKey)}
                     aria-expanded={isExpanded}
                     aria-controls={`schedule-day-${group.dateKey}`}
                   >
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="font-semibold capitalize text-ink">{group.label}</p>
                       <p className="text-xs text-slate-600">
-                        Занять: {group.slots.length} | Годин: {group.totalHours}
-                        {dayConflictCount > 0 ? ` | Конфліктних: ${dayConflictCount}` : ""}{" "}
-                        {dayConflictCount > 0 && (
+                        Занять: {group.slots.length} | Годин: {group.totalHours} | Груп: {group.groups.length}
+                        {monthConflictCount > 0 ? ` | Конфліктних: ${monthConflictCount}` : ""}{" "}
+                        {monthConflictCount > 0 && (
                           <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">⚠ Увага</span>
                         )}
                       </p>
+                      {group.groups.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {group.groups.map((item) => (
+                            <span
+                              key={item.groupId}
+                              title={`${item.code} — ${item.name}`}
+                              className="inline-flex max-w-full items-center gap-1 rounded-md border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs text-emerald-900 sm:max-w-[22rem]"
+                            >
+                              <span className="shrink-0 font-semibold">{item.code}</span>
+                              <span className="min-w-0 truncate">{item.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
+                    <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
                       {isExpanded ? "−" : "+"}
                     </span>
                   </button>

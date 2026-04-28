@@ -43,6 +43,8 @@ def _to_schedule_responses(db: DbSession, slots: list[ScheduleSlot]) -> list[Sch
                 academic_hours=float(slot.academic_hours or 0.0),
                 group_code=group.code if group else None,
                 group_name=group.name if group else None,
+                group_start_date=group.start_date if group else None,
+                group_end_date=group.end_date if group else None,
                 teacher_name=f"{teacher.last_name} {teacher.first_name}" if teacher else None,
                 subject_name=subject.name if subject else None,
                 room_name=room.name if room else None,
@@ -221,4 +223,3 @@ def update_schedule_slot(
         details={"payload": payload.model_dump(mode="json", exclude_unset=True)},
     )
     return _to_schedule_responses(db, [slot])[0]
-

@@ -95,6 +95,8 @@ export interface ScheduleSlot {
   academic_hours?: number;
   group_code?: string | null;
   group_name?: string | null;
+  group_start_date?: string | null;
+  group_end_date?: string | null;
   teacher_name?: string | null;
   subject_name?: string | null;
   room_name?: string | null;

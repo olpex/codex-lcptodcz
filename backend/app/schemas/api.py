@@ -327,6 +327,8 @@ class ScheduleSlotResponse(ORMModel):
     academic_hours: float = 0.0
     group_code: str | None = None
     group_name: str | None = None
+    group_start_date: date | None = None
+    group_end_date: date | None = None
     teacher_name: str | None = None
     subject_name: str | None = None
     room_name: str | None = None
