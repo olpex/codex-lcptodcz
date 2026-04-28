@@ -41,6 +41,7 @@ const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 100;
+const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
@@ -166,6 +167,7 @@ function findNextUnreadMessage_() {
         unreadMarkerMessages.push(message);
         stats.unread += 1;
         if (!isExpectedSender_(message)) {
+          Logger.log("Unread-marker не від цільового відправника: " + describeMessage_(message));
           continue;
         }
 
@@ -433,14 +435,34 @@ function messageHasMatchedAttachments_(message) {
 }
 
 function findExpectedSenderMessagesWithMatchedAttachments_(messages) {
-  const result = [];
+  const expectedSenderMessages = [];
+  const fallbackMessages = [];
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    if (isExpectedSender_(message) && messageHasMatchedAttachments_(message)) {
-      result.push(message);
+    if (!messageHasMatchedAttachments_(message)) {
+      continue;
+    }
+    if (isExpectedSender_(message)) {
+      expectedSenderMessages.push(message);
+    } else {
+      fallbackMessages.push(message);
     }
   }
-  return result;
+
+  if (expectedSenderMessages.length > 0) {
+    return expectedSenderMessages;
+  }
+
+  if (ALLOW_THREAD_ATTACHMENT_FALLBACK && fallbackMessages.length > 0) {
+    Logger.log("Не знайдено вкладень від точного SENDER_EMAIL; беру придатні вкладення з unread-треду як fallback: " + fallbackMessages.length);
+    fallbackMessages.forEach(function(message) {
+      Logger.log("Fallback-кандидат: " + describeMessage_(message));
+    });
+    return fallbackMessages;
+  }
+
+  return [];
 }
 
 function describeMessage_(message) {
