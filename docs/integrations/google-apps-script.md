@@ -60,12 +60,14 @@ function processIncomingEmails() {
         const ext      = getExtension_(fileName);
         const nameLow  = fileName.toLowerCase();
 
-        // Договори: .xlsx з "договор" в назві
+        const subjectLow = message.getSubject().toLowerCase();
+        
+        // Договори: .xlsx з "договор" в назві або в темі
         const isContract = (ext === "xlsx" || ext === "xls") &&
-                           nameLow.includes("договор");
+                           (nameLow.includes("договор") || subjectLow.includes("договор"));
 
-        // Розклади: .docx з "розклад" в назві
-        const isSchedule = ext === "docx" && nameLow.includes("розклад");
+        // Розклади: .docx з "розклад" в назві або в темі
+        const isSchedule = ext === "docx" && (nameLow.includes("розклад") || subjectLow.includes("розклад"));
 
         if (!isContract && !isSchedule) {
           Logger.log("Пропущено (не підходить): " + fileName);

@@ -212,7 +212,7 @@ def test_google_webhook_accepts_docx_when_subject_is_empty(client, monkeypatch):
         },
         files={
             "file": (
-                "162-25 Штучний інтелект — копія.docx",
+                "Розклад 162-25 Штучний інтелект.docx",
                 _schedule_docx_bytes(),
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
@@ -277,7 +277,7 @@ def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypa
         "/api/v1/mail/gmail-api-webhook/contracts",
         headers={"Authorization": "Bearer mail-webhook-secret"},
         json={
-            "filename": "162-25 Штучний інтелект – копія.docx",
+            "filename": "розклад 162-25 Штучний інтелект.docx",
             "messageId": "<gmail-api-docx-test-1@example.com>",
             "fileBase64": file_base64,
             "subject": None,

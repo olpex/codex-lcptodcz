@@ -71,10 +71,17 @@ def _dispatch_import_with_fallback(import_job_id: int) -> str:
 
 def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> bool:
     """Allow re-import of the same message if schedule data was removed from DB or doesn't exist."""
+    import logging
+    logger = logging.getLogger("api.mail")
     try:
         parsed_list = parse_schedule_docx(file_path)
-    except Exception:
+    except Exception as e:
+        logger.info(f"_schedule_reimport_needed: Помилка парсингу {file_path}: {e}. Потрібен реімпорт.")
         # If we can't parse it, we don't know what groups it contains, so we re-import to let the job fail or process properly.
+        return True
+
+    if not parsed_list:
+        logger.info(f"_schedule_reimport_needed: У файлі {file_path} не знайдено груп. Потрібен реімпорт.")
         return True
 
     for payload in parsed_list:
@@ -85,14 +92,17 @@ def _schedule_reimport_needed(db: DbSession, branch_id: str, file_path: str) -> 
         group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
         # If any group from the file doesn't exist in DB, we MUST reimport.
         if not group:
+            logger.info(f"_schedule_reimport_needed: Група {group_code} відсутня в БД. Потрібен реімпорт.")
             return True
             
         has_slots = db.query(ScheduleSlot.id).filter(ScheduleSlot.group_id == group.id).first() is not None
         # If any group exists but has no schedule slots, we MUST reimport.
         if not has_slots:
+            logger.info(f"_schedule_reimport_needed: Для групи {group_code} відсутні слоти. Потрібен реімпорт.")
             return True
             
     # Only skip reimport if ALL groups from the file exist AND have schedule slots.
+    logger.info(f"_schedule_reimport_needed: Всі групи з файлу {file_path} присутні та мають слоти. Реімпорт не потрібен.")
     return False
 
 
@@ -220,11 +230,17 @@ def gmail_api_contracts_webhook(
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
         # Для Gmail API тема інколи не приходить (None) через зовнішній flow.
-        # У такому випадку не блокуємо імпорт DOCX з trusted каналу.
-        if body.subject is not None and not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(body.subject):
+        # У такому випадку перевіряємо хоча б назву файлу.
+        subject_value = (body.subject or "").strip()
+        has_keyword = _contains_schedule_keyword(filename) or _contains_schedule_keyword(subject_value)
+        import logging
+        logger = logging.getLogger("api.mail")
+        logger.info(f"Webhook /contracts: Перевірка ключового слова 'розклад' для DOCX: filename='{filename}', subject='{subject_value}', has_keyword={has_keyword}")
+        
+        if not has_keyword:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {body.subject})",
+                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject_value})",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -369,10 +385,14 @@ def google_mail_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        # Для Google Apps Script тема може бути порожньою в окремих сценаріях пересилання.
-        # У такому випадку не блокуємо DOCX із trusted каналу тільки через відсутню тему.
+        # Перевіряємо, чи є ключове слово "розклад" в назві файлу або темі листа.
         subject_value = (subject or "").strip()
-        if subject_value and not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(subject_value):
+        has_keyword = _contains_schedule_keyword(filename) or _contains_schedule_keyword(subject_value)
+        import logging
+        logger = logging.getLogger("api.mail")
+        logger.info(f"Google Webhook /contracts: Перевірка ключового слова 'розклад' для DOCX: filename='{filename}', subject='{subject_value}', has_keyword={has_keyword}")
+        
+        if not has_keyword:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject_value})",
