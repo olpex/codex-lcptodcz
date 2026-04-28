@@ -364,10 +364,13 @@ def google_mail_contracts_webhook(
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
-        if not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(subject):
+        # Для Google Apps Script тема може бути порожньою в окремих сценаріях пересилання.
+        # У такому випадку не блокуємо DOCX із trusted каналу тільки через відсутню тему.
+        subject_value = (subject or "").strip()
+        if subject_value and not _contains_schedule_keyword(filename) and not _contains_schedule_keyword(subject_value):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject})",
+                detail=f"Назва DOCX файлу або тема листа має містити ключове слово 'розклад' (поточна тема: {subject_value})",
             )
         mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 

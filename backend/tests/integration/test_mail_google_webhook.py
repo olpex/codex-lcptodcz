@@ -193,6 +193,34 @@ def test_google_webhook_accepts_docx_with_schedule_keyword(client, monkeypatch):
     assert response.status_code == 202
 
 
+def test_google_webhook_accepts_docx_when_subject_is_empty(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda _job_id: "queued")
+
+    response = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data={
+            "sender_email": "lcptodcz@gmail.com",
+            "sender_name": "Львівський центр ПТО ДСЗ",
+            "subject": "",
+            "message_id": "<google-webhook-docx-empty-subject-test@example.com>",
+            "update_existing_mode": "overwrite",
+        },
+        files={
+            "file": (
+                "162-25 Штучний інтелект — копія.docx",
+                _schedule_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 202
+
+
 def test_google_webhook_reimports_docx_when_data_missing_even_with_same_message_id(client, db_session, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
