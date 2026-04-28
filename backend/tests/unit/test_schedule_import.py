@@ -209,6 +209,46 @@ def _build_schedule_docx_with_duplicated_course_title(path: Path) -> None:
     doc.save(path)
 
 
+def _build_schedule_docx_without_index_column(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Штучний інтелект")
+    doc.add_paragraph("Група № 162-25")
+    doc.add_paragraph("з 21 жовтня 2025 року до 22 жовтня 2025 року")
+
+    table = doc.add_table(rows=3, cols=5)
+    for idx, value in enumerate(["Предмет", "Години", "21.10", "22.10", "Викладач"]):
+        table.cell(0, idx).text = value
+    for idx, value in enumerate(["Кар'єрний розвиток", "2", "1п/1год", "2п/1год", "Паращук Світлана Зеновіївна"]):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(["Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table.cell(2, idx).text = value
+
+    doc.save(path)
+
+
+def _build_schedule_docx_as_list_table(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("2 пара – 11.10 – 12.45")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Штучний інтелект")
+    doc.add_paragraph("з 21 жовтня 2025 року до 22 жовтня 2025 року")
+
+    table = doc.add_table(rows=4, cols=5)
+    for idx, value in enumerate(["Дата", "Пара", "Предмет", "Години", "Викладач"]):
+        table.cell(0, idx).text = value
+    for idx, value in enumerate(["21.10.2025", "1", "Кар'єрний розвиток", "1", "Паращук Світлана Зеновіївна"]):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(["22.10.2025", "2", "Професійне зростання", "1", ""]):
+        table.cell(2, idx).text = value
+    for idx, value in enumerate(["", "", "Загальний обсяг навчального часу:", "2", ""]):
+        table.cell(3, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -340,6 +380,28 @@ def test_parse_schedule_docx_cleans_duplicated_course_title(tmp_path: Path):
 
     assert payload["group_code"] == "47п-25"
     assert payload["group_name"] == "Штучний інтелект: розвиток кар'єри та професійне зростання"
+
+
+def test_parse_schedule_docx_without_index_column(tmp_path: Path):
+    file_path = tmp_path / "schedule-no-index.docx"
+    _build_schedule_docx_without_index_column(file_path)
+
+    payload = parse_schedule_docx(str(file_path))[0]
+
+    assert payload["group_code"] == "162-25"
+    assert len(payload["entries"]) == 2
+    assert {item["pair_number"] for item in payload["entries"]} == {1, 2}
+
+
+def test_parse_schedule_docx_as_list_table_uses_filename_group_code(tmp_path: Path):
+    file_path = tmp_path / "162-25.docx"
+    _build_schedule_docx_as_list_table(file_path)
+
+    payload = parse_schedule_docx(str(file_path))[0]
+
+    assert payload["group_code"] == "162-25"
+    assert len(payload["entries"]) == 2
+    assert {item["subject_name"] for item in payload["entries"]} == {"Кар'єрний розвиток", "Професійне зростання"}
 
 
 def test_import_schedule_docx_updates_existing_duplicated_group_name(db_session, tmp_path: Path):

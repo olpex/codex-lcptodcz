@@ -1,5 +1,6 @@
 import re
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 
 from docx import Document as DocxDocument
 from sqlalchemy import func
@@ -173,6 +174,60 @@ def _parse_pair_windows(lines: list[str]) -> dict[int, tuple[time, time]]:
     return pair_windows
 
 
+def _parse_date_from_cell(value: str, default_year: int) -> date | None:
+    text = _norm(value).lower()
+    match = re.search(r"\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b", text)
+    if match:
+        day, month, year_text = match.groups()
+        year = default_year
+        if year_text:
+            year = 2000 + int(year_text) if len(year_text) == 2 else int(year_text)
+        return date(year, int(month), int(day))
+
+    match = re.search(r"\b(\d{1,2})\s+([А-Яа-яіїєґ]+)(?:\s+(\d{2,4}))?\b", text)
+    if match:
+        day, month_text, year_text = match.groups()
+        month = UA_MONTHS.get(month_text)
+        if not month:
+            return None
+        year = default_year
+        if year_text:
+            year = 2000 + int(year_text) if len(year_text) == 2 else int(year_text)
+        return date(year, month, int(day))
+    return None
+
+
+def _find_header_column(headers: list[str], keywords: tuple[str, ...], excluded: tuple[str, ...] = ()) -> int | None:
+    for index, header in enumerate(headers):
+        low = header.lower()
+        if excluded and any(item in low for item in excluded):
+            continue
+        if any(item in low for item in keywords):
+            return index
+    return None
+
+
+def _infer_matrix_columns(headers: list[str], date_columns: dict[int, date]) -> tuple[int, int | None, int | None]:
+    subject_col = _find_header_column(headers, ("предмет", "тема", "зміст", "назва"), ("виклада", "прізвищ", "піб"))
+    hours_col = _find_header_column(headers, ("год",), ("виклада",))
+    teacher_col = _find_header_column(headers, ("виклада", "прізвищ", "піб"))
+
+    if subject_col is None:
+        first_date_col = min(date_columns)
+        candidates = [
+            index
+            for index, header in enumerate(headers[:first_date_col])
+            if index != hours_col and "№" not in header and not re.search(r"^\s*№", header)
+        ]
+        subject_col = candidates[-1] if candidates else 1
+
+    if teacher_col is None:
+        after_date_columns = [index for index in range(max(date_columns) + 1, len(headers))]
+        teacher_col = after_date_columns[-1] if after_date_columns else len(headers) - 1
+
+    return subject_col, hours_col, teacher_col
+
+
 def _parse_hours(value: str) -> float:
     match = re.search(r"([0-9]+(?:[.,][0-9]+)?)", value)
     if not match:
@@ -223,12 +278,13 @@ def _split_teacher_name(full_name: str) -> tuple[str, str]:
 def parse_schedule_docx(file_path: str) -> list[dict]:
     document = DocxDocument(file_path)
     lines = [_norm(paragraph.text) for paragraph in document.paragraphs if _norm(paragraph.text)]
+    file_name_lines = [_norm(Path(file_path).stem)]
     if not document.tables:
         raise ValueError("У документі не знайдено таблиці розкладу")
 
     # Global fallback parsing
     try:
-        global_group_code = _parse_group_code(lines)
+        global_group_code = _parse_group_code(lines + file_name_lines)
     except ValueError:
         global_group_code = "Невідома група"
         
@@ -273,7 +329,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         # and then fallback to the paragraphs above the table.
         # Since `_parse_group_code` searches `reversed(lines)`, we put `table_cell_lines`
         # at the end of the list, so they are searched FIRST.
-        metadata_lines = table_lines + table_cell_lines
+        metadata_lines = table_lines + table_cell_lines + file_name_lines
 
         try:
             local_group_code = _parse_group_code(metadata_lines)
@@ -286,7 +342,10 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                 try:
                     local_group_code = _parse_group_code(table_cell_lines)
                 except ValueError:
-                    local_group_code = global_group_code
+                    try:
+                        local_group_code = _parse_group_code(file_name_lines)
+                    except ValueError:
+                        local_group_code = global_group_code
 
         local_group_name = _parse_course_title(table_lines or lines, local_group_code)
         local_start_date, local_end_date = _parse_date_range(table_lines or lines)
@@ -297,74 +356,145 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
 
         local_pair_windows = _parse_pair_windows(table_lines or lines) or global_pair_windows
 
+        list_header_candidates = []
+        for row_index, row in enumerate(table.rows):
+            headers_for_row = [_norm(cell.text) for cell in row.cells]
+            low = " ".join(headers_for_row).lower()
+            if "дата" in low and ("пара" in low or "год" in low or "предмет" in low):
+                list_header_candidates.append((row_index, headers_for_row))
+
         header_row_index = -1
         date_columns: dict[int, date] = {}
         year = (local_end_date or local_start_date or global_end_date or global_start_date or date.today()).year
-        for row_index, row in enumerate(table.rows):
-            current_date_columns: dict[int, date] = {}
-            for column_index in range(0, len(row.cells)):
-                header_text = _norm(row.cells[column_index].text)
-                match = re.search(r"(\d{1,2})\.(\d{1,2})", header_text)
-                if not match:
-                    continue
-                day, month = int(match.group(1)), int(match.group(2))
-                current_date_columns[column_index] = date(year, month, day)
-            if current_date_columns:
-                header_row_index = row_index
-                date_columns = current_date_columns
-                break
+        if not list_header_candidates:
+            for row_index, row in enumerate(table.rows):
+                current_date_columns: dict[int, date] = {}
+                for column_index in range(0, len(row.cells)):
+                    header_text = _norm(row.cells[column_index].text)
+                    parsed_date = _parse_date_from_cell(header_text, year)
+                    if parsed_date:
+                        current_date_columns[column_index] = parsed_date
+                if current_date_columns:
+                    header_row_index = row_index
+                    date_columns = current_date_columns
+                    break
 
-        if not date_columns:
-            continue
+        headers = [_norm(cell.text) for cell in table.rows[header_row_index].cells] if header_row_index >= 0 else []
 
         table_entries: list[dict] = []
         table_total_group_hours = 0.0
         previous_teacher_name = ""
-        for row in table.rows[header_row_index + 1 :]:
-            cells = row.cells
-            if len(cells) < 6:
-                continue
-            index_cell = _norm(cells[0].text)
-            subject_name = _norm(cells[1].text)
-            declared_subject_hours = _parse_hours(cells[2].text)
-            teacher_name = _norm(cells[-1].text) or previous_teacher_name
-            if teacher_name:
-                previous_teacher_name = teacher_name
-
-            if not subject_name:
-                continue
-            if "загальний обсяг" in subject_name.lower():
-                current_total = _parse_hours(cells[2].text)
-                if current_total > table_total_group_hours:
-                    table_total_group_hours = current_total
-                continue
-            if not re.search(r"^\d+", index_cell):
-                continue
-
-            for column_index, lesson_date in date_columns.items():
-                if column_index >= len(cells):
+        if date_columns:
+            subject_col, hours_col, teacher_col = _infer_matrix_columns(headers, date_columns)
+            for row in table.rows[header_row_index + 1 :]:
+                cells = row.cells
+                if subject_col >= len(cells):
                     continue
-                cell_value = _norm(cells[column_index].text)
-                for pair_number, academic_hours in _parse_pairs_cell(cell_value):
-                    pair_window = local_pair_windows.get(pair_number)
-                    if pair_window:
-                        starts_at = datetime.combine(lesson_date, pair_window[0], tzinfo=timezone.utc)
-                        ends_at = datetime.combine(lesson_date, pair_window[1], tzinfo=timezone.utc)
-                    else:
-                        starts_at = datetime.combine(lesson_date, time(hour=9 + (pair_number - 1) * 2), tzinfo=timezone.utc)
-                        ends_at = starts_at + timedelta(minutes=95)
-                    table_entries.append(
-                        {
-                            "subject_name": subject_name,
-                            "declared_subject_hours": declared_subject_hours,
-                            "teacher_name": teacher_name,
-                            "lesson_date": lesson_date.isoformat(),
-                            "pair_number": pair_number,
-                            "academic_hours": academic_hours,
-                            "starts_at": starts_at,
-                            "ends_at": ends_at,
-                        }
-                    )
+                subject_name = _norm(cells[subject_col].text)
+                declared_subject_hours = _parse_hours(cells[hours_col].text) if hours_col is not None and hours_col < len(cells) else 0.0
+                teacher_name = _norm(cells[teacher_col].text) if teacher_col is not None and teacher_col < len(cells) else ""
+                teacher_name = teacher_name or previous_teacher_name
+                if teacher_name:
+                    previous_teacher_name = teacher_name
+
+                row_text = " ".join(_norm(cell.text) for cell in cells)
+                if "загальний обсяг" in row_text.lower():
+                    current_total = _parse_hours(row_text)
+                    if current_total > table_total_group_hours:
+                        table_total_group_hours = current_total
+                    continue
+                if not subject_name:
+                    continue
+
+                for column_index, lesson_date in date_columns.items():
+                    if column_index >= len(cells):
+                        continue
+                    cell_value = _norm(cells[column_index].text)
+                    for pair_number, academic_hours in _parse_pairs_cell(cell_value):
+                        if declared_subject_hours and academic_hours <= 0:
+                            academic_hours = declared_subject_hours
+                        pair_window = local_pair_windows.get(pair_number)
+                        if pair_window:
+                            starts_at = datetime.combine(lesson_date, pair_window[0], tzinfo=timezone.utc)
+                            ends_at = datetime.combine(lesson_date, pair_window[1], tzinfo=timezone.utc)
+                        else:
+                            starts_at = datetime.combine(lesson_date, time(hour=9 + (pair_number - 1) * 2), tzinfo=timezone.utc)
+                            ends_at = starts_at + timedelta(minutes=95)
+                        table_entries.append(
+                            {
+                                "subject_name": subject_name,
+                                "declared_subject_hours": declared_subject_hours,
+                                "teacher_name": teacher_name,
+                                "lesson_date": lesson_date.isoformat(),
+                                "pair_number": pair_number,
+                                "academic_hours": academic_hours,
+                                "starts_at": starts_at,
+                                "ends_at": ends_at,
+                            }
+                        )
+        else:
+            if list_header_candidates:
+                header_row_index, headers = list_header_candidates[0]
+                date_col = _find_header_column(headers, ("дата",))
+                pair_col = _find_header_column(headers, ("пара",))
+                subject_col = _find_header_column(headers, ("предмет", "тема", "зміст", "назва"), ("виклада", "піб"))
+                hours_col = _find_header_column(headers, ("год",), ("виклада",))
+                teacher_col = _find_header_column(headers, ("виклада", "прізвищ", "піб"))
+
+                for row in table.rows[header_row_index + 1 :]:
+                    cells = row.cells
+                    row_values = [_norm(cell.text) for cell in cells]
+                    row_text = " ".join(row_values)
+                    if "загальний обсяг" in row_text.lower():
+                        current_total = _parse_hours(row_text)
+                        if current_total > table_total_group_hours:
+                            table_total_group_hours = current_total
+                        continue
+
+                    lesson_date = None
+                    if date_col is not None and date_col < len(cells):
+                        lesson_date = _parse_date_from_cell(cells[date_col].text, year)
+                    if lesson_date is None:
+                        for value in row_values:
+                            lesson_date = _parse_date_from_cell(value, year)
+                            if lesson_date:
+                                break
+                    if lesson_date is None:
+                        continue
+
+                    subject_name = _norm(cells[subject_col].text) if subject_col is not None and subject_col < len(cells) else ""
+                    if not subject_name:
+                        continue
+                    declared_subject_hours = _parse_hours(cells[hours_col].text) if hours_col is not None and hours_col < len(cells) else 0.0
+                    teacher_name = _norm(cells[teacher_col].text) if teacher_col is not None and teacher_col < len(cells) else ""
+                    teacher_name = teacher_name or previous_teacher_name
+                    if teacher_name:
+                        previous_teacher_name = teacher_name
+
+                    pair_source = cells[pair_col].text if pair_col is not None and pair_col < len(cells) else row_text
+                    parsed_pairs = _parse_pairs_cell(pair_source)
+                    if declared_subject_hours and len(parsed_pairs) == 1:
+                        parsed_pairs = [(parsed_pairs[0][0], declared_subject_hours)]
+                    for pair_number, academic_hours in parsed_pairs:
+                        pair_window = local_pair_windows.get(pair_number)
+                        if pair_window:
+                            starts_at = datetime.combine(lesson_date, pair_window[0], tzinfo=timezone.utc)
+                            ends_at = datetime.combine(lesson_date, pair_window[1], tzinfo=timezone.utc)
+                        else:
+                            starts_at = datetime.combine(lesson_date, time(hour=9 + (pair_number - 1) * 2), tzinfo=timezone.utc)
+                            ends_at = starts_at + timedelta(minutes=95)
+                        table_entries.append(
+                            {
+                                "subject_name": subject_name,
+                                "declared_subject_hours": declared_subject_hours,
+                                "teacher_name": teacher_name,
+                                "lesson_date": lesson_date.isoformat(),
+                                "pair_number": pair_number,
+                                "academic_hours": academic_hours,
+                                "starts_at": starts_at,
+                                "ends_at": ends_at,
+                            }
+                        )
 
         if not table_entries:
             continue
