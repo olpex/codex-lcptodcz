@@ -39,101 +39,127 @@ const LABEL_FAILED      = "suptc/failed";
 
 function processIncomingEmails() {
   const query = 'in:inbox is:unread has:attachment from:' + SENDER_EMAIL;
-  const threads = GmailApp.search(query, 0, 30);
+  const threads = GmailApp.search(query, 0, 10);
   const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
   const failLabel = getOrCreateLabel_(LABEL_FAILED);
 
-  threads.forEach(function(thread) {
+  for (const thread of threads) {
     const messages = thread.getMessages();
-    let threadOk = true;
-    let hasMatchedAttachment = false;
-
-    messages.forEach(function(message) {
-      const attachments = message.getAttachments({
-        includeInlineImages: false,
-        includeAttachments: true,
-      });
-
-      // ── Обробляємо КОЖНЕ вкладення окремим HTTP-запитом ──────────────────
-      attachments.forEach(function(att) {
-        const fileName = (att.getName() || "").trim();
-        const ext      = getExtension_(fileName);
-        const nameLow  = fileName.toLowerCase();
-
-        const subjectLow = message.getSubject().toLowerCase();
-        
-        // Договори: .xlsx з "договор" в назві або в темі
-        const isContract = (ext === "xlsx" || ext === "xls") &&
-                           (nameLow.includes("договор") || subjectLow.includes("договор"));
-
-        // Розклади: будь-який .docx
-        const isSchedule = ext === "docx";
-
-        if (!isContract && !isSchedule) {
-          Logger.log("Пропущено (не підходить): " + fileName);
-          return; // наступне вкладення
-        }
-
-        hasMatchedAttachment = true;
-
-        // Кодуємо вміст у Base64 (URL-safe, як вимагає backend)
-        const bytes   = att.getBytes();
-        const b64     = Utilities.base64EncodeWebSafe(bytes);
-
-        const payload = JSON.stringify({
-          filename:    fileName,
-          messageId:   message.getId(),
-          fileBase64:  b64,
-        });
-
-        const options = {
-          method:           "post",
-          contentType:      "application/json",
-          headers:          { Authorization: "Bearer " + WEBHOOK_SECRET },
-          payload:          payload,
-          muteHttpExceptions: true,
-        };
-
-        const url  = PROJECT_BASE_URL + "/api/api/v1/mail/gmail-api-webhook/contracts";
-        const resp = UrlFetchApp.fetch(url, options);
-        const code = resp.getResponseCode();
-
-        let body = {};
-        try { body = JSON.parse(resp.getContentText() || "{}"); }
-        catch(e) { body = { raw: resp.getContentText() }; }
-
-        const jobFailed = body && body.status === "failed";
-        if (code < 200 || code >= 300 || jobFailed) {
-          threadOk = false;
-          Logger.log("❌ Помилка %s для '%s': %s", code, fileName, resp.getContentText());
-        } else {
-          Logger.log("✅ Успіх %s для '%s': job_id=%s", code, fileName, body.id || "?");
-        }
-      });
-      // ─────────────────────────────────────────────────────────────────────
+    const message = messages.find(function(item) {
+      return item.isUnread();
     });
 
-    if (!hasMatchedAttachment) {
-      Logger.log("Лист пропущено (немає відповідних вкладень): " + thread.getFirstMessageSubject());
-      return;
+    if (!message) {
+      continue;
     }
 
-    if (threadOk) {
-      thread.addLabel(okLabel);
-      thread.markRead();
-      Logger.log("✅ Лист оброблено: " + thread.getFirstMessageSubject());
-    } else {
-      thread.addLabel(failLabel);
-      Logger.log("❌ Лист позначено як помилковий: " + thread.getFirstMessageSubject());
+    const result = processOneMessage_(message);
+
+    if (!result.hasMatchedAttachment) {
+      Logger.log("Лист пропущено (немає відповідних вкладень): " + message.getSubject());
+      return; // один запуск = максимум один лист
     }
-  });
+
+    if (result.ok) {
+      message.markRead();
+      if (!threadHasUnreadMessages_(thread)) {
+        thread.addLabel(okLabel);
+      }
+      Logger.log("✅ Лист оброблено: " + message.getSubject());
+    } else {
+      if (thread.getMessageCount() === 1) {
+        thread.addLabel(failLabel);
+      }
+      Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
+    }
+
+    return; // один запуск = рівно один непрочитаний лист
+  }
+
+  Logger.log("Немає нових листів для обробки.");
 }
 
 // ─── Допоміжні функції ───────────────────────────────────────────────────────
 
+function processOneMessage_(message) {
+  let ok = true;
+  let hasMatchedAttachment = false;
+
+  const attachments = message.getAttachments({
+    includeInlineImages: false,
+    includeAttachments: true,
+  });
+
+  attachments.forEach(function(att) {
+    const fileName = (att.getName() || "").trim();
+    const ext      = getExtension_(fileName);
+    const nameLow  = fileName.toLowerCase();
+
+    const subjectLow = message.getSubject().toLowerCase();
+
+    // Договори: .xlsx з "договор" в назві або в темі
+    const isContract = (ext === "xlsx" || ext === "xls") &&
+                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+
+    // Розклади: будь-який .docx
+    const isSchedule = ext === "docx";
+
+    if (!isContract && !isSchedule) {
+      Logger.log("Пропущено (не підходить): " + fileName);
+      return;
+    }
+
+    hasMatchedAttachment = true;
+
+    const bytes = att.getBytes();
+    const b64   = Utilities.base64EncodeWebSafe(bytes);
+
+    const payload = JSON.stringify({
+      filename:   fileName,
+      messageId:  message.getId(),
+      fileBase64: b64,
+    });
+
+    const options = {
+      method:             "post",
+      contentType:        "application/json",
+      headers:            { Authorization: "Bearer " + WEBHOOK_SECRET },
+      payload:            payload,
+      muteHttpExceptions: true,
+    };
+
+    const url  = PROJECT_BASE_URL + "/api/api/v1/mail/gmail-api-webhook/contracts";
+    const resp = UrlFetchApp.fetch(url, options);
+    const code = resp.getResponseCode();
+
+    let body = {};
+    try { body = JSON.parse(resp.getContentText() || "{}"); }
+    catch(e) { body = { raw: resp.getContentText() }; }
+
+    const jobFailed = body && body.status === "failed";
+    if (code < 200 || code >= 300 || jobFailed) {
+      ok = false;
+      Logger.log("❌ Помилка %s для '%s': %s", code, fileName, resp.getContentText());
+    } else {
+      Logger.log("✅ Успіх %s для '%s': job_id=%s", code, fileName, body.id || "?");
+    }
+  });
+
+  return {
+    ok: ok,
+    hasMatchedAttachment: hasMatchedAttachment,
+  };
+}
+
 function getExtension_(name) {
   const parts = (name || "").toLowerCase().split(".");
   return parts.length < 2 ? "" : parts[parts.length - 1];
+}
+
+function threadHasUnreadMessages_(thread) {
+  return thread.getMessages().some(function(message) {
+    return message.isUnread();
+  });
 }
 
 function getOrCreateLabel_(labelName) {
