@@ -79,10 +79,12 @@ function processIncomingEmailsLocked_() {
   if (result.ok) {
     const pendingState = removePendingMessage_(message.getId(), thread.getId());
     Logger.log("Черга після обробки: залишилось=" + pendingState.remaining + ", у цьому треді ще=" + pendingState.hasMoreInThread);
-    target.markReadMessages.forEach(function(item) {
-      markMessageReadOnly_(item);
-    });
-    if (!pendingState.hasMoreInThread) {
+    if (pendingState.hasMoreInThread) {
+      Logger.log("У треді ще є листи в черзі; не позначаю тред прочитаним, щоб Gmail не сховав решту.");
+    } else {
+      target.markReadMessages.forEach(function(item) {
+        markMessageReadOnly_(item);
+      });
       (target.finalMarkerMessages || []).forEach(function(item) {
         markMessageReadOnly_(item);
       });
