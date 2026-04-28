@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from docx import Document as DocxDocument
 
-from app.models import ScheduleSlot
+from app.models import Group, ScheduleSlot, Subject, Teacher
 from app.services.schedule_import import import_schedule_docx, parse_schedule_docx
 
 
@@ -257,6 +257,39 @@ def test_import_schedule_docx_with_two_groups_keeps_group_binding(db_session, tm
     assert len(slots) == 4
     group_ids = {slot.group_id for slot in slots}
     assert len(group_ids) == 2
+
+
+def test_import_schedule_docx_clips_text_fields_to_db_limits(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-long-fields.docx"
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Дуже довга назва " * 40)
+    doc.add_paragraph("Група № 167-25")
+    doc.add_paragraph("з 21 жовтня 2025 року до 21 жовтня 2025 року")
+
+    table = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(["№п/п", "Назва предмета", "К-сть год.", "21.10", "22.10", "Викладач"]):
+        table.cell(0, idx).text = value
+    for idx, value in enumerate(
+        ["1", "Дуже довгий предмет " * 40, "2", "1п/2год", "", "Наддовгепрізвище" * 20]
+    ):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table.cell(2, idx).text = value
+    doc.save(file_path)
+
+    import_schedule_docx(db_session, str(file_path), branch_id="main")
+    db_session.commit()
+
+    group = db_session.query(Group).filter(Group.code == "167-25").one()
+    subject = db_session.query(Subject).filter(Subject.name.like("Дуже довгий предмет%")).one()
+    teacher = db_session.query(Teacher).filter(Teacher.branch_id == "main").one()
+
+    assert len(group.name) <= 255
+    assert len(subject.name) <= 255
+    assert len(teacher.last_name) <= 120
+    assert len(teacher.first_name) <= 120
 
 
 def test_parse_schedule_docx_with_two_groups_in_table_headers(tmp_path: Path):

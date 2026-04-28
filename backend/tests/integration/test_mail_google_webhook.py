@@ -159,6 +159,39 @@ def test_google_webhook_imports_docx_inline_without_queue(client, db_session, mo
     assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 2
 
 
+def test_google_webhook_reports_real_inline_import_error(client, monkeypatch):
+    def _raise_import_error(job_id: int):
+        raise RuntimeError("DOCX parser exploded")
+
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_routes.process_import_job_task, "run", _raise_import_error)
+
+    response = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data={
+            "sender_email": "lcptodcz@gmail.com",
+            "sender_name": "Львівський центр ПТО ДСЗ",
+            "subject": "Розклад групи",
+            "message_id": "<google-webhook-docx-error-detail-test@example.com>",
+            "update_existing_mode": "overwrite",
+        },
+        files={
+            "file": (
+                "167-25 Розклад.docx",
+                _schedule_docx_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 500
+    assert "DOCX parser exploded" in response.json()["detail"]
+
+
 def test_google_webhook_accepts_docx_with_schedule_keyword_and_fwd_prefix(client, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

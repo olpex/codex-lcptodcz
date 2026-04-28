@@ -27,6 +27,11 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def _db_text(text: str | None, max_length: int) -> str:
+    value = _norm(text or "")
+    return value[:max_length]
+
+
 def _parse_group_code(lines: list[str]) -> str:
     def _normalize_group_code(raw: str) -> str:
         value = (raw or "").strip()
@@ -443,8 +448,8 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
     global_subject_cache = {}
 
     for parsed in parsed_list:
-        group_code = parsed["group_code"]
-        group_name = parsed["group_name"]
+        group_code = _db_text(parsed["group_code"], 50)
+        group_name = _db_text(parsed["group_name"], 255) or f"Група {group_code}"
 
         if group_code not in group_codes:
             group_codes.append(group_code)
@@ -491,6 +496,8 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
             teacher_full_name = _norm(entry["teacher_name"])
             if teacher_full_name not in teacher_cache:
                 last_name, first_name = _split_teacher_name(teacher_full_name)
+                last_name = _db_text(last_name, 120) or "Невідомий"
+                first_name = _db_text(first_name, 120) or "Викладач"
                 # Case-insensitive lookup — Ukrainian DOCX files often store surnames
                 # in ALL-CAPS while the DB may have them in proper case (or vice versa).
                 existing_teachers = (
@@ -546,7 +553,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                 teacher_cache[teacher_full_name] = teacher
             teacher = teacher_cache[teacher_full_name]
 
-            subject_name = _norm(entry["subject_name"])
+            subject_name = _db_text(entry["subject_name"], 255) or "Без назви"
             if subject_name not in subject_cache:
                 subject = db.query(Subject).filter(Subject.branch_id == branch_id, Subject.name == subject_name).first()
                 declared_hours = int(entry["declared_subject_hours"] or 0)

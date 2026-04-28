@@ -63,8 +63,11 @@ def _run_import_inline_or_raise(import_job_id: int, db: DbSession) -> str:
         process_import_job_task.run(import_job_id)
     except Exception as exc:
         db.rollback()
+        db.expire_all()
         job = db.get(ImportJob, import_job_id)
-        detail = job.message if job and job.message else str(exc)
+        exc_detail = str(exc).strip()
+        job_detail = (job.message or "").strip() if job else ""
+        detail = exc_detail or job_detail or "невідома помилка"
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Імпорт не виконано: {detail}") from exc
     return "inline"
 
