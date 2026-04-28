@@ -27,20 +27,48 @@ export function GroupsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
 
   // --- Стан видалення групи ---
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [groupToDelete, setGroupToDelete] = useState<Group | null>(null);
   const [deleteTrainees, setDeleteTrainees] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [bulkDeleteTrainees, setBulkDeleteTrainees] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
 
+  const selectedGroups = useMemo(
+    () => groups.filter((group) => selectedGroupIds[group.id]),
+    [groups, selectedGroupIds]
+  );
+
+  const selectedGroupCount = selectedGroups.length;
+  const allGroupsSelected = groups.length > 0 && groups.every((group) => selectedGroupIds[group.id]);
+
   const columns = useMemo<DataTableColumn<Group>[]>(
     () => [
+      ...(canEdit
+        ? [
+            {
+              key: "select" as const,
+              header: "Вибір",
+              render: (group: Group) => (
+                <input
+                  type="checkbox"
+                  checked={Boolean(selectedGroupIds[group.id])}
+                  onChange={() => toggleGroupSelection(group.id)}
+                  aria-label={`Вибрати групу ${group.code}`}
+                />
+              )
+            }
+          ]
+        : []),
       {
         key: "code",
         header: "Код",
@@ -87,7 +115,7 @@ export function GroupsPage() {
           ]
         : [])
     ],
-    [canEdit]
+    [canEdit, selectedGroupIds]
   );
 
   const activeGroupColumns = useMemo<DataTableColumn<ActiveGroupBetweenDates>[]>(
@@ -140,6 +168,14 @@ export function GroupsPage() {
     try {
       const data = await request<Group[]>("/groups");
       setGroups(data);
+      setSelectedGroupIds((prev) => {
+        const availableIds = new Set(data.map((group) => group.id));
+        return Object.fromEntries(
+          Object.entries(prev)
+            .filter(([id, selected]) => selected && availableIds.has(Number(id)))
+            .map(([id]) => [Number(id), true])
+        );
+      });
       setLoadError(null);
     } catch (error) {
       const message = (error as Error).message;
@@ -297,9 +333,81 @@ export function GroupsPage() {
     }
   };
 
+  const toggleGroupSelection = (groupId: number) => {
+    setSelectedGroupIds((prev) => {
+      const next = { ...prev };
+      if (next[groupId]) {
+        delete next[groupId];
+      } else {
+        next[groupId] = true;
+      }
+      return next;
+    });
+  };
+
+  const toggleAllGroups = () => {
+    if (allGroupsSelected) {
+      setSelectedGroupIds({});
+      return;
+    }
+    setSelectedGroupIds(Object.fromEntries(groups.map((group) => [group.id, true])));
+  };
+
+  const openBulkDeleteDialog = () => {
+    if (!selectedGroupCount) {
+      showError("Виберіть хоча б одну групу");
+      return;
+    }
+    setBulkDeleteTrainees(false);
+    setBulkDeleteDialogOpen(true);
+  };
+
+  const closeBulkDeleteDialog = () => {
+    if (isBulkDeleting) return;
+    setBulkDeleteDialogOpen(false);
+    setBulkDeleteTrainees(false);
+  };
+
+  const confirmBulkDeleteGroups = async () => {
+    if (!selectedGroupCount || isBulkDeleting) return;
+    setIsBulkDeleting(true);
+    const failures: string[] = [];
+    const deletedIds: number[] = [];
+    try {
+      const params = bulkDeleteTrainees ? "?delete_trainees=true" : "";
+      for (const group of selectedGroups) {
+        try {
+          await request(`/groups/${group.id}${params}`, { method: "DELETE" });
+          deletedIds.push(group.id);
+        } catch (error) {
+          failures.push(`${group.code}: ${(error as Error).message}`);
+        }
+      }
+      setSelectedGroupIds((prev) => {
+        const next = { ...prev };
+        deletedIds.forEach((id) => delete next[id]);
+        return next;
+      });
+      await loadGroups();
+      if (failures.length) {
+        showError(`Не вдалося видалити груп: ${failures.length}. ${failures[0]}`);
+      } else {
+        const suffix = bulkDeleteTrainees ? " разом зі слухачами" : "";
+        showSuccess(`Видалено груп: ${deletedIds.length}${suffix}`);
+        closeBulkDeleteDialog();
+      }
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   const deleteDialogDescription = groupToDelete
     ? `Видалити групу «${groupToDelete.code} — ${groupToDelete.name}»? Цю дію не можна скасувати.`
     : "";
+
+  const bulkDeleteDescription = selectedGroupCount
+    ? `Видалити вибрані групи (${selectedGroupCount})? Цю дію не можна скасувати.`
+    : "Виберіть групи для видалення.";
 
   return (
     <div className="space-y-5">
@@ -421,7 +529,32 @@ export function GroupsPage() {
         </div>
       </Panel>
       <Panel title="Реєстр груп">
-        <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          {canEdit ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="rounded-lg bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50"
+                onClick={toggleAllGroups}
+                disabled={!groups.length}
+              >
+                {allGroupsSelected ? "Зняти вибір" : "Вибрати всі"}
+              </button>
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                Вибрано: {selectedGroupCount}
+              </span>
+              <button
+                type="button"
+                className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                onClick={openBulkDeleteDialog}
+                disabled={!selectedGroupCount || isBulkDeleting}
+              >
+                Видалити вибрані
+              </button>
+            </div>
+          ) : (
+            <div />
+          )}
           <button
             type="button"
             className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50"
@@ -469,6 +602,35 @@ export function GroupsPage() {
             />
             Також перемістити всіх слухачів групи до архіву
           </label>
+        </ConfirmDialog>
+      )}
+      {canEdit && (
+        <ConfirmDialog
+          open={bulkDeleteDialogOpen}
+          title="Видалити вибрані групи"
+          description={bulkDeleteDescription}
+          confirmLabel={isBulkDeleting ? "Видаляємо..." : "Видалити"}
+          cancelLabel="Скасувати"
+          confirmVariant="danger"
+          confirmDisabled={isBulkDeleting || !selectedGroupCount}
+          onConfirm={confirmBulkDeleteGroups}
+          onCancel={closeBulkDeleteDialog}
+        >
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={bulkDeleteTrainees}
+              onChange={(e) => setBulkDeleteTrainees(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            Також перемістити всіх слухачів вибраних груп до архіву
+          </label>
+          {selectedGroups.length > 0 && (
+            <p className="mt-2 text-xs text-slate-600">
+              Групи: {selectedGroups.slice(0, 5).map((group) => group.code).join(", ")}
+              {selectedGroups.length > 5 ? ` та ще ${selectedGroups.length - 5}` : ""}
+            </p>
+          )}
         </ConfirmDialog>
       )}
     </div>
