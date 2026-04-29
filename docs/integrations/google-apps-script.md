@@ -25,9 +25,8 @@
 2. Замініть весь вміст на код нижче.
 3. Вкажіть свої значення у `PROJECT_BASE_URL` та `WEBHOOK_SECRET`.
 4. Збережіть проект.
-5. Запустіть `clearImportState()` вручну 1 раз, якщо оновлюєте скрипт після попередніх тестів.
-6. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
-7. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
+5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
+6. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
 
 > Скрипт використовує тільки вбудований `GmailApp`; окремо вмикати Gmail REST API у Google Cloud не потрібно.
 
@@ -41,16 +40,12 @@ const LABEL_FAILED      = "suptc/failed";
 const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
-const PROCESSED_IDS_KEY = "suptc_processed_message_ids";
 const MAX_QUEUE_ITEMS   = 100;
-const MAX_PROCESSED_IDS = 500;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
-const PROCESS_READ_THREADS_WITH_ATTACHMENTS = true;
-const SKIP_DOCX_NAME_TOKENS = ["список", "слухач"];
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 queue-v9-skip-bad-docx");
+  Logger.log("Версія скрипта: 2026-04-28 queue-v5");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -88,13 +83,6 @@ function clearPendingQueue() {
   Logger.log("Внутрішню чергу очищено.");
 }
 
-function clearImportState() {
-  const props = PropertiesService.getScriptProperties();
-  props.deleteProperty(PENDING_QUEUE_KEY);
-  props.deleteProperty(PROCESSED_IDS_KEY);
-  Logger.log("Внутрішню чергу та історію оброблених листів очищено.");
-}
-
 function processIncomingEmailsLocked_() {
   const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
   const failLabel = getOrCreateLabel_(LABEL_FAILED);
@@ -128,16 +116,12 @@ function processIncomingEmailsLocked_() {
       });
     }
     thread.refresh();
-    if (!pendingState.hasMoreInThread && !threadHasUnreadMessages_(thread)) {
+    if (!threadHasUnreadMessages_(thread)) {
       thread.addLabel(okLabel);
     }
-    rememberProcessedMessage_(message.getId());
     Logger.log("✅ Лист оброблено: " + message.getSubject());
   } else {
-    const pendingState = removePendingMessage_(message.getId(), thread.getId());
-    rememberProcessedMessage_(message.getId());
-    Logger.log("Черга після помилки: залишилось=" + pendingState.remaining + ", у цьому треді ще=" + pendingState.hasMoreInThread);
-    if (!pendingState.hasMoreInThread) {
+    if (thread.getMessageCount() === 1) {
       thread.addLabel(failLabel);
     }
     Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
@@ -159,7 +143,6 @@ function findNextUnreadMessage_() {
     expectedSenderUnread: 0,
     expectedSenderUnreadWithAttachments: 0,
     fallbackThreadAttachments: 0,
-    readFallbackThreads: 0,
     queuedMessages: 0,
   };
 
@@ -197,18 +180,9 @@ function findNextUnreadMessage_() {
 
       if (threadHasUnread && processableMessages.length > 0) {
         stats.fallbackThreadAttachments += processableMessages.length;
-        const added = enqueueMessages_(thread, processableMessages, unreadMarkerMessages);
-        stats.queuedMessages += added;
-        Logger.log("Тред має непрочитану позначку; поставлено в чергу листів із вкладеннями: " + added);
-      } else if (
-        PROCESS_READ_THREADS_WITH_ATTACHMENTS &&
-        !threadHasUnread &&
-        processableMessages.length > 0
-      ) {
-        stats.readFallbackThreads += 1;
-        const added = enqueueMessages_(thread, processableMessages, []);
-        stats.queuedMessages += added;
-        Logger.log("Тред уже прочитаний; поставлено в чергу ще не оброблених листів із вкладеннями: " + added);
+        enqueueMessages_(thread, processableMessages, unreadMarkerMessages);
+        stats.queuedMessages += processableMessages.length;
+        Logger.log("Тред має непрочитану позначку; поставлено в чергу листів із вкладеннями: " + processableMessages.length);
       }
     }
   }
@@ -227,7 +201,6 @@ function findNextUnreadMessage_() {
     ", від потрібного відправника=" + stats.expectedSenderUnread +
     ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
     ", fallback-вкладень у треді=" + stats.fallbackThreadAttachments +
-    ", read-fallback тредів=" + stats.readFallbackThreads +
     ", поставлено в чергу=" + stats.queuedMessages
   );
   return null;
@@ -253,8 +226,8 @@ function processOneMessage_(message) {
     const isContract = (ext === "xlsx" || ext === "xls") &&
                        (nameLow.includes("договор") || subjectLow.includes("договор"));
 
-    // Розклади: .docx, але не службові списки слухачів
-    const isSchedule = ext === "docx" && !isSkippedDocxFile_(nameLow);
+    // Розклади: будь-який .docx
+    const isSchedule = ext === "docx";
 
     if (!isContract && !isSchedule) {
       Logger.log("Пропущено (не підходить): " + fileName);
@@ -311,12 +284,6 @@ function getNextQueuedTarget_() {
   while (queue.length > 0) {
     const item = queue[0];
     try {
-      if (isMessageAlreadyProcessed_(item.messageId)) {
-        Logger.log("Видаляю з черги вже оброблений лист: " + item.messageId);
-        queue.shift();
-        changed = true;
-        continue;
-      }
       const thread = GmailApp.getThreadById(item.threadId);
       const message = GmailApp.getMessageById(item.messageId);
       if (message && messageHasMatchedAttachments_(message)) {
@@ -362,16 +329,12 @@ function getNextQueuedTarget_() {
 function enqueueMessages_(thread, messages, unreadMarkerMessages) {
   let queue = loadPendingQueue_();
   const seen = {};
-  let added = 0;
   const markReadMessageIds = unreadMarkerMessages.map(function(message) {
     return message.getId();
   });
 
   queue.forEach(function(item) {
     seen[item.messageId] = true;
-  });
-  loadProcessedMessageIds_().forEach(function(messageId) {
-    seen[messageId] = true;
   });
 
   messages.forEach(function(message) {
@@ -386,14 +349,12 @@ function enqueueMessages_(thread, messages, unreadMarkerMessages) {
       queuedAt: new Date().toISOString(),
     });
     seen[messageId] = true;
-    added += 1;
   });
 
   if (queue.length > MAX_QUEUE_ITEMS) {
     queue = queue.slice(queue.length - MAX_QUEUE_ITEMS);
   }
   savePendingQueue_(queue);
-  return added;
 }
 
 function removePendingMessage_(messageId, threadId) {
@@ -428,39 +389,6 @@ function loadPendingQueue_() {
 
 function savePendingQueue_(queue) {
   PropertiesService.getScriptProperties().setProperty(PENDING_QUEUE_KEY, JSON.stringify(queue));
-}
-
-function loadProcessedMessageIds_() {
-  const raw = PropertiesService.getScriptProperties().getProperty(PROCESSED_IDS_KEY);
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    Logger.log("Історію оброблених листів пошкоджено, очищаю: " + e);
-    return [];
-  }
-}
-
-function saveProcessedMessageIds_(ids) {
-  PropertiesService.getScriptProperties().setProperty(PROCESSED_IDS_KEY, JSON.stringify(ids));
-}
-
-function isMessageAlreadyProcessed_(messageId) {
-  return loadProcessedMessageIds_().indexOf(messageId) !== -1;
-}
-
-function rememberProcessedMessage_(messageId) {
-  let ids = loadProcessedMessageIds_().filter(function(item) {
-    return item !== messageId;
-  });
-  ids.push(messageId);
-  if (ids.length > MAX_PROCESSED_IDS) {
-    ids = ids.slice(ids.length - MAX_PROCESSED_IDS);
-  }
-  saveProcessedMessageIds_(ids);
 }
 
 function uniqueMessages_(messages) {
@@ -508,14 +436,8 @@ function messageHasMatchedAttachments_(message) {
     const nameLow = fileName.toLowerCase();
     const isContract = (ext === "xlsx" || ext === "xls") &&
                        (nameLow.includes("договор") || subjectLow.includes("договор"));
-    const isSchedule = ext === "docx" && !isSkippedDocxFile_(nameLow);
+    const isSchedule = ext === "docx";
     return isContract || isSchedule;
-  });
-}
-
-function isSkippedDocxFile_(nameLow) {
-  return SKIP_DOCX_NAME_TOKENS.some(function(token) {
-    return (nameLow || "").indexOf(token) !== -1;
   });
 }
 
