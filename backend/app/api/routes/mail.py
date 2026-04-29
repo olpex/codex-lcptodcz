@@ -119,31 +119,11 @@ def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
     if authorization != expected_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
 
-    if not settings.imap_auto_poll_enabled:
-        return {
-            "message": "Автоматичне IMAP-опитування вимкнено; пошту обробляє Apps Script",
-            "dispatch_mode": "disabled",
-            "result": {"processed": 0, "disabled": True},
-        }
-
-    dispatch_mode = "queued"
-    task_id: str | None = None
-    inline_result: dict | None = None
-    try:
-        task = poll_mailbox_task.delay()
-        task_id = task.id
-    except Exception:
-        dispatch_mode = "inline"
-        inline_result = poll_mailbox_task.run()
-
     payload: dict[str, object] = {
-        "message": "Опитування поштової скриньки запущено",
-        "dispatch_mode": dispatch_mode,
+        "message": "Автоматичне IMAP-опитування вимкнено; пошту обробляє Apps Script",
+        "dispatch_mode": "disabled",
+        "result": {"processed": 0, "disabled": True},
     }
-    if task_id:
-        payload["task_id"] = task_id
-    if inline_result is not None:
-        payload["result"] = inline_result
     return payload
 
 
