@@ -11,7 +11,7 @@ export const uiText = {
     workload: "Навантаження",
     performance: "Успішність",
     documents: "Документи",
-    jobs: "Центр задач",
+    jobs: "Центр імпорту",
     drafts: "Чернетки OCR"
   },
   actions: {
