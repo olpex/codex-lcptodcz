@@ -153,6 +153,7 @@ export interface ImportPreviewGroup {
   subjects: number;
   total_hours: number;
   already_exists: boolean;
+  existing_lessons: number;
 }
 
 export interface ImportDuplicatePreview {

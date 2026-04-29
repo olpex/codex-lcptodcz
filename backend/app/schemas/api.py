@@ -409,6 +409,7 @@ class ImportPreviewGroup(BaseModel):
     subjects: int = 0
     total_hours: float = 0
     already_exists: bool = False
+    existing_lessons: int = 0
 
 
 class ImportDuplicatePreview(BaseModel):

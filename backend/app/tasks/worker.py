@@ -74,9 +74,12 @@ def process_import_job_task(self, import_job_id: int) -> dict:
                 job.document.file_path,
                 branch_id=job.branch_id,
                 actor_user_id=job.document.created_by,
+                update_existing_mode=import_mode,
             )
             created_slots = int(import_result.get("created_slots") or 0)
-            if created_slots <= 0:
+            skipped_groups = int(import_result.get("skipped_existing_groups") or 0)
+            skipped_slots = int(import_result.get("skipped_existing_slots") or 0)
+            if created_slots <= 0 and skipped_groups <= 0 and skipped_slots <= 0:
                 raise ValueError("DOCX розклад оброблено, але жодного заняття не створено")
 
         initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}

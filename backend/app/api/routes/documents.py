@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from celery.utils.log import get_task_logger
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName
+from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName, ScheduleSlot
 from app.schemas.api import ExportRequest, ImportPreviewGroup, ImportPreviewResponse, JobResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES, analyze_trainee_import_duplicates, parse_document_content
@@ -120,6 +120,19 @@ def preview_import_document(
                     .filter(Group.branch_id == current_user.branch_id, Group.code == group_code)
                     .first()
                 )
+                existing_lessons = 0
+                if existing_group and entries:
+                    min_start = min(entry["starts_at"] for entry in entries)
+                    max_end = max(entry["ends_at"] for entry in entries)
+                    existing_lessons = (
+                        db.query(ScheduleSlot)
+                        .filter(
+                            ScheduleSlot.group_id == existing_group.id,
+                            ScheduleSlot.starts_at >= min_start,
+                            ScheduleSlot.starts_at <= max_end,
+                        )
+                        .count()
+                    )
                 groups.append(
                     ImportPreviewGroup(
                         code=group_code,
@@ -131,15 +144,19 @@ def preview_import_document(
                         subjects=len({entry.get("subject_name") for entry in entries if entry.get("subject_name")}),
                         total_hours=round(float(item.get("group_total_hours") or 0), 2),
                         already_exists=existing_group is not None,
+                        existing_lessons=existing_lessons,
                     )
                 )
+            warnings = [] if groups else ["У документі не знайдено груп для імпорту"]
+            if any(group.existing_lessons > 0 for group in groups):
+                warnings.append("У вибраному періоді вже є заняття. Перед імпортом оберіть режим оновлення розкладу.")
             return ImportPreviewResponse(
                 filename=file.filename or "uploaded_file",
                 file_type=doc_type.value,
                 import_kind="schedule",
                 rows=sum(group.lessons for group in groups),
                 groups=groups,
-                warnings=[] if groups else ["У документі не знайдено груп для імпорту"],
+                warnings=warnings,
             )
 
         parsed = parse_document_content(temp_path, doc_type)

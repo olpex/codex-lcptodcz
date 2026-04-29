@@ -318,6 +318,54 @@ def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path
     assert len(slots_after) == 3  # Old slots were deleted and new ones were inserted
 
 
+def test_import_schedule_docx_skip_existing_keeps_current_schedule(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-skip-existing.docx"
+    _build_schedule_docx(file_path)
+
+    summary = import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
+    db_session.commit()
+    assert summary["created_slots"] == 3
+
+    summary2 = import_schedule_docx(
+        db_session,
+        str(file_path),
+        branch_id="main",
+        actor_user_id=1,
+        update_existing_mode="skip_existing",
+    )
+    db_session.commit()
+
+    assert summary2["created_slots"] == 0
+    assert summary2["deleted_slots"] == 0
+    assert summary2["skipped_existing_groups"] == 1
+    assert db_session.query(ScheduleSlot).count() == 3
+
+
+def test_import_schedule_docx_missing_only_restores_deleted_slot(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-missing-only.docx"
+    _build_schedule_docx(file_path)
+
+    import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
+    db_session.commit()
+    first_slot = db_session.query(ScheduleSlot).order_by(ScheduleSlot.starts_at).first()
+    db_session.delete(first_slot)
+    db_session.commit()
+
+    summary = import_schedule_docx(
+        db_session,
+        str(file_path),
+        branch_id="main",
+        actor_user_id=1,
+        update_existing_mode="missing_only",
+    )
+    db_session.commit()
+
+    assert summary["created_slots"] == 1
+    assert summary["deleted_slots"] == 0
+    assert summary["skipped_existing_slots"] == 2
+    assert db_session.query(ScheduleSlot).count() == 3
+
+
 def test_parse_schedule_docx_with_two_groups(tmp_path: Path):
     file_path = tmp_path / "schedule-two-groups.docx"
     _build_schedule_docx_with_two_groups(file_path)

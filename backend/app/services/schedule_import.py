@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Group, GroupStatus, Room, ScheduleSlot, Subject, Teacher
 
+SCHEDULE_UPDATE_MODES = {"skip_existing", "missing_only", "overwrite"}
+
 UA_MONTHS = {
     "січня": 1,
     "лютого": 2,
@@ -641,11 +643,34 @@ def _merge_duplicate_teachers(db: Session, branch_id: str, teacher_ids: list[int
     return merged
 
 
-def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user_id: int | None = None) -> dict:
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    a_start = _as_utc(a_start)
+    a_end = _as_utc(a_end)
+    b_start = _as_utc(b_start)
+    b_end = _as_utc(b_end)
+    return a_start < b_end and b_start < a_end
+
+
+def import_schedule_docx(
+    db: Session,
+    file_path: str,
+    branch_id: str,
+    actor_user_id: int | None = None,
+    update_existing_mode: str = "overwrite",
+) -> dict:
+    if update_existing_mode not in SCHEDULE_UPDATE_MODES:
+        update_existing_mode = "overwrite"
     parsed_list = parse_schedule_docx(file_path)
 
     total_deleted = 0
     total_created = 0
+    total_skipped_groups = 0
+    total_skipped_slots = 0
+    total_existing_slots = 0
     all_merged = 0
     
     # We will accumulate stats across all groups
@@ -689,6 +714,25 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
             db.add(group)
             db.flush()
 
+        parsed_entries = parsed["entries"]
+        if not parsed_entries:
+            continue
+        entry_min_start = min(item["starts_at"] for item in parsed_entries)
+        entry_max_end = max(item["ends_at"] for item in parsed_entries)
+        group_existing_slots = (
+            db.query(ScheduleSlot)
+            .filter(
+                ScheduleSlot.group_id == group.id,
+                ScheduleSlot.starts_at >= entry_min_start,
+                ScheduleSlot.starts_at <= entry_max_end,
+            )
+            .all()
+        )
+        total_existing_slots += len(group_existing_slots)
+        if update_existing_mode == "skip_existing" and group_existing_slots:
+            total_skipped_groups += 1
+            continue
+
         room_name = f"Імпорт: {group.code}"
         room = db.query(Room).filter(Room.branch_id == branch_id, Room.name == room_name).first()
         if not room:
@@ -702,7 +746,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         subject_cache: dict[str, Subject] = {}
         candidates: list[dict] = []
 
-        for entry in parsed["entries"]:
+        for entry in parsed_entries:
             teacher_full_name = _norm(entry["teacher_name"])
             if teacher_full_name not in teacher_cache:
                 last_name, first_name = _split_teacher_name(teacher_full_name)
@@ -791,23 +835,34 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         min_start = min(item["starts_at"] for item in candidates)
         max_end = max(item["ends_at"] for item in candidates)
 
-        # ──────────────────────────────────────────────────────────────────────────
-        # Idempotent import: wipe THIS group's slots in the exact date window that
-        # the document covers before inserting fresh ones.
-        # Using actual entry dates (not the unreliable header) guarantees the wipe
-        # always runs, even when the DOCX omits a date-range header line.
-        # This prevents hours from doubling on every re-import of the same file.
-        # ──────────────────────────────────────────────────────────────────────────
-        deleted_count = (
-            db.query(ScheduleSlot)
-            .filter(
-                ScheduleSlot.group_id == group.id,
-                ScheduleSlot.starts_at >= min_start,
-                ScheduleSlot.starts_at <= max_end,
+        deleted_count = 0
+        if update_existing_mode == "overwrite":
+            # Idempotent replace: wipe THIS group's slots in the exact date window
+            # that the document covers before inserting fresh ones.
+            deleted_count = (
+                db.query(ScheduleSlot)
+                .filter(
+                    ScheduleSlot.group_id == group.id,
+                    ScheduleSlot.starts_at >= min_start,
+                    ScheduleSlot.starts_at <= max_end,
+                )
+                .delete(synchronize_session=False)
             )
-            .delete(synchronize_session=False)
-        )
-        db.flush()
+            db.flush()
+        elif update_existing_mode == "missing_only" and group_existing_slots:
+            original_count = len(candidates)
+            candidates = [
+                candidate
+                for candidate in candidates
+                if not any(
+                    _overlaps(candidate["starts_at"], candidate["ends_at"], slot.starts_at, slot.ends_at)
+                    and (slot.pair_number == candidate["pair_number"] or slot.starts_at == candidate["starts_at"])
+                    for slot in group_existing_slots
+                )
+            ]
+            total_skipped_slots += original_count - len(candidates)
+            if not candidates:
+                continue
 
         # Conflict detection: look for clashes with OTHER groups in the same window
         # (run AFTER the wipe so this group's old slots don't create false alarms)
@@ -822,20 +877,10 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
             .all()
         )
 
-        def as_utc(value: datetime) -> datetime:
-            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-
-        def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
-            a_start = as_utc(a_start)
-            a_end = as_utc(a_end)
-            b_start = as_utc(b_start)
-            b_end = as_utc(b_end)
-            return a_start < b_end and b_start < a_end
-
         conflict_messages: list[str] = []
         for index, candidate in enumerate(candidates):
             for existing in existing_slots:
-                if not overlaps(candidate["starts_at"], candidate["ends_at"], existing.starts_at, existing.ends_at):
+                if not _overlaps(candidate["starts_at"], candidate["ends_at"], existing.starts_at, existing.ends_at):
                     continue
                 conflict_date = candidate["starts_at"].date().isoformat()
                 if existing.teacher_id == candidate["teacher_id"]:
@@ -851,7 +896,7 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                         f"аудиторія {room.name} {conflict_date} пара {candidate['pair_number']}"
                     )
             for previous in candidates[:index]:
-                if not overlaps(candidate["starts_at"], candidate["ends_at"], previous["starts_at"], previous["ends_at"]):
+                if not _overlaps(candidate["starts_at"], candidate["ends_at"], previous["starts_at"], previous["ends_at"]):
                     continue
                 if previous["teacher_id"] == candidate["teacher_id"]:
                     conflict_messages.append(
@@ -902,8 +947,12 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
         "group_code": group_codes[0] if group_codes else "",
         "group_name": group_names[0] if group_names else "",
         "group_total_hours": total_group_hours,
+        "update_existing_mode": update_existing_mode,
         "deleted_slots": total_deleted,
         "created_slots": total_created,
+        "skipped_existing_groups": total_skipped_groups,
+        "skipped_existing_slots": total_skipped_slots,
+        "existing_slots_in_period": total_existing_slots,
         "merged_duplicate_teachers": all_merged,
         "teachers": len(global_teacher_id_cache),
         "subjects": len(global_subject_cache),

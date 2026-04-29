@@ -265,7 +265,7 @@ def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) 
 
     previous_payload = source_job.result_payload if isinstance(source_job.result_payload, dict) else {}
     previous_request = source_job.request_payload if isinstance(source_job.request_payload, dict) else {}
-    import_mode = previous_payload.get("import_mode") or previous_request.get("import_mode") or "missing_only"
+    import_mode = previous_payload.get("import_mode") or previous_request.get("import_mode") or "skip_existing"
     new_payload = {
         "import_mode": import_mode,
         "source": "manual_reprocess",

@@ -127,8 +127,8 @@ export function DocumentsPage() {
       const modeLabel =
         mode === "overwrite"
           ? "перезапис існуючих"
-          : mode === "missing_only"
-            ? "додавання нових/дозаповнення"
+            : mode === "missing_only"
+              ? "додавання/дозаповнення відсутнього"
             : "пропуск наявних";
       setNotice({
         tone: "success",
@@ -301,7 +301,7 @@ export function DocumentsPage() {
             className="rounded-lg border border-pine px-4 py-2 font-semibold text-pine disabled:opacity-50"
             onClick={() => void runImport("missing_only")}
           >
-            {isImporting ? "Дозаповнення..." : "Дозаповнити наявних"}
+            {isImporting ? "Дозаповнення..." : "Додати/дозаповнити"}
           </button>
           <button
             type="button"

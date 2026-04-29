@@ -510,7 +510,7 @@ export function JobCenterPage() {
               disabled={isImporting || isPreviewingImport}
             />
           </FormField>
-          <FormField label="Режим імпорту" helperText="Як обробляти наявні записи">
+          <FormField label="Режим імпорту" helperText="Як обробляти наявних слухачів або розклад">
             <select
               className={formControlClass}
               value={importMode}
@@ -518,8 +518,8 @@ export function JobCenterPage() {
               disabled={isImporting || isPreviewingImport}
             >
               <option value="skip_existing">Пропустити наявні</option>
-              <option value="missing_only">Додати нові та дозаповнити</option>
-              <option value="overwrite">Оновити існуючі дані</option>
+              <option value="missing_only">Додати/дозаповнити відсутнє</option>
+              <option value="overwrite">Замінити/оновити існуюче</option>
             </select>
           </FormField>
           <div className="flex items-end">
@@ -582,6 +582,7 @@ export function JobCenterPage() {
                       <th className="px-2 py-2">Викладачів</th>
                       <th className="px-2 py-2">Предметів</th>
                       <th className="px-2 py-2">Годин</th>
+                      <th className="px-2 py-2">Уже є занять</th>
                       <th className="px-2 py-2">Є в базі</th>
                     </tr>
                   </thead>
@@ -598,6 +599,7 @@ export function JobCenterPage() {
                         <td className="px-2 py-2">{group.teachers}</td>
                         <td className="px-2 py-2">{group.subjects}</td>
                         <td className="px-2 py-2">{group.total_hours}</td>
+                        <td className="px-2 py-2">{group.existing_lessons}</td>
                         <td className="px-2 py-2">{group.already_exists ? "Так" : "Ні"}</td>
                       </tr>
                     ))}
