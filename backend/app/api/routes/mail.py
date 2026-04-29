@@ -174,11 +174,6 @@ def gmail_api_contracts_webhook(
     mime_type = "application/octet-stream"
 
     if doc_type.value == "xlsx":
-        if not _is_contracts_filename(filename):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва Excel файлу має містити ключове слово 'договори'",
-            )
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":
@@ -317,11 +312,6 @@ def google_mail_contracts_webhook(
     mime_type = "application/octet-stream"
 
     if doc_type.value == "xlsx":
-        if not _is_contracts_filename(filename):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Назва Excel файлу має містити ключове слово 'договори'",
-            )
         group_code_hint = _extract_group_code_from_filename(filename)
         mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     elif doc_type.value == "docx":

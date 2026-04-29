@@ -389,6 +389,26 @@ def test_gmail_api_webhook_accepts_docx_when_subject_is_missing(client, monkeypa
     assert response.status_code == 202
 
 
+def test_gmail_api_webhook_accepts_excel_without_contract_keyword(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+
+    file_base64 = base64.urlsafe_b64encode(_contracts_xlsx_bytes()).decode("ascii")
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "80-26 список.xlsx",
+            "messageId": "<gmail-api-xlsx-any-name-test@example.com>",
+            "fileBase64": file_base64,
+            "subject": "",
+        },
+    )
+
+    assert response.status_code == 202
+
+
 def test_gmail_api_webhook_imports_docx_with_group_code_only_filename(client, db_session, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

@@ -2,10 +2,10 @@
 
 Цей сценарій обробляє **одразу два типи** вкладень з одного листа:
 
-| Тип файлу | Ключове слово в назві | Endpoint |
+| Тип файлу | Правило | Endpoint |
 |---|---|---|
-| Договори (`.xlsx`) | `договори` | `/mail/gmail-api-webhook/contracts` |
-| Розклади (`.docx`) | *Будь-який .docx файл* | `/mail/gmail-api-webhook/contracts` |
+| Договори (`.xls/.xlsx`) | *Будь-який Excel-файл від `lcptodcz@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
+| Розклади (`.docx`) | *Будь-який Word-файл від `lcptodcz@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
 
 > Один запит = один файл. Якщо в листі 3 вкладення — скрипт надсилає 3 окремих HTTP-запити.
 
@@ -16,7 +16,7 @@
 | `MAIL_WEBHOOK_SECRET` | довгий випадковий секрет |
 | `IMAP_CONTRACT_SENDER_NAME` | `Львівський центр ПТО ДСЗ` |
 | `IMAP_CONTRACT_SENDER_EMAIL` | `lcptodcz@gmail.com` |
-| `IMAP_CONTRACT_ATTACHMENT_PREFIX` | `Договори` |
+| `IMAP_CONTRACT_ATTACHMENT_PREFIX` | не використовується для Apps Script |
 | `IMAP_CONTRACT_UPDATE_MODE` | `overwrite` |
 
 ## 2) Apps Script (повна версія)
@@ -41,11 +41,11 @@ const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 100;
-const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
+const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 one-unread-queued-v2");
+  Logger.log("Версія скрипта: 2026-04-29 one-unread-any-attachment-v3");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -219,13 +219,9 @@ function processOneMessage_(message) {
   attachments.forEach(function(att) {
     const fileName = (att.getName() || "").trim();
     const ext      = getExtension_(fileName);
-    const nameLow  = fileName.toLowerCase();
 
-    const subjectLow = message.getSubject().toLowerCase();
-
-    // Договори: .xlsx з "договор" в назві або в темі
-    const isContract = (ext === "xlsx" || ext === "xls") &&
-                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+    // Договори: будь-який .xls/.xlsx від SENDER_EMAIL
+    const isContract = ext === "xlsx" || ext === "xls";
 
     // Розклади: будь-який .docx
     const isSchedule = ext === "docx";
@@ -404,9 +400,7 @@ function messageHasMatchedAttachments_(message) {
   return attachments.some(function(att) {
     const fileName = (att.getName() || "").trim();
     const ext = getExtension_(fileName);
-    const nameLow = fileName.toLowerCase();
-    const isContract = (ext === "xlsx" || ext === "xls") &&
-                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+    const isContract = ext === "xlsx" || ext === "xls";
     const isSchedule = ext === "docx";
     return isContract || isSchedule;
   });
@@ -487,6 +481,5 @@ function getOrCreateLabel_(labelName) {
 | HTTP-код | Причина | Рішення |
 |---|---|---|
 | `401` | Невірний `WEBHOOK_SECRET` | Порівняйте з `MAIL_WEBHOOK_SECRET` у Vercel |
-| `400` | Назва Excel файлу без "договор" | Перейменуйте файл |
 | `400` | Неправильний Base64 | Перевірте, що скрипт використовує `base64EncodeWebSafe` |
 | `503` | `MAIL_WEBHOOK_SECRET` не задано у Vercel | Додайте змінну у Vercel Dashboard |
