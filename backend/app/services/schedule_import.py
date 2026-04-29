@@ -3,7 +3,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from docx import Document as DocxDocument
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Group, GroupStatus, Room, ScheduleSlot, Subject, Teacher
@@ -275,6 +274,53 @@ def _split_teacher_name(full_name: str) -> tuple[str, str]:
     return tokens[0], " ".join(tokens[1:])
 
 
+def _teacher_given_parts(first_name: str | None) -> list[str]:
+    value = _norm(first_name or "")
+    if not value or value.casefold() == "викладач":
+        return []
+    return re.findall(r"[A-Za-zА-Яа-яЇїІіЄєҐґ]+", value)
+
+
+def _teacher_initials(first_name: str | None) -> tuple[str, ...]:
+    return tuple(part[0].casefold() for part in _teacher_given_parts(first_name) if part)
+
+
+def _teacher_names_compatible(existing_first_name: str | None, incoming_first_name: str | None) -> bool:
+    existing_parts = _teacher_given_parts(existing_first_name)
+    incoming_parts = _teacher_given_parts(incoming_first_name)
+
+    if not existing_parts or not incoming_parts:
+        return _norm(existing_first_name or "").casefold() == _norm(incoming_first_name or "").casefold()
+
+    existing_initials = _teacher_initials(existing_first_name)
+    incoming_initials = _teacher_initials(incoming_first_name)
+    if not existing_initials or not incoming_initials:
+        return False
+
+    compared_len = min(len(existing_initials), len(incoming_initials))
+    return existing_initials[:compared_len] == incoming_initials[:compared_len]
+
+
+def _teacher_name_is_more_complete(new_first_name: str | None, current_first_name: str | None) -> bool:
+    new_parts = _teacher_given_parts(new_first_name)
+    current_parts = _teacher_given_parts(current_first_name)
+    if not new_parts:
+        return False
+    if len(new_parts) < len(current_parts):
+        return False
+    new_value = _norm(new_first_name or "")
+    current_value = _norm(current_first_name or "")
+    new_has_full_words = any(len(part) > 1 for part in new_parts)
+    current_has_only_initials = bool(current_parts) and all(len(part) == 1 for part in current_parts)
+    return new_has_full_words and (current_has_only_initials or len(new_value) > len(current_value))
+
+
+def _same_teacher_identity(left: Teacher, right: Teacher) -> bool:
+    if (left.last_name or "").strip().casefold() != (right.last_name or "").strip().casefold():
+        return False
+    return _teacher_names_compatible(left.first_name, right.first_name)
+
+
 def parse_schedule_docx(file_path: str) -> list[dict]:
     document = DocxDocument(file_path)
     lines = [_norm(paragraph.text) for paragraph in document.paragraphs if _norm(paragraph.text)]
@@ -531,12 +577,12 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
 
 
 def _merge_duplicate_teachers(db: Session, branch_id: str, teacher_ids: list[int]) -> int:
-    """Merge any duplicate Teacher records that share the same normalised last name.
+    """Merge duplicate Teacher records that share surname and compatible initials.
 
     When two imports run in close succession (e.g. concurrent Vercel lambdas) or
-    when the same surname appears in different cases (ALL-CAPS vs proper case),
+    when the same teacher appears as a full name in one file and initials in another,
     the lookup may fail and create a second record.  This function:
-      1. Finds all teachers in *branch_id* whose normalised last_name collides
+      1. Finds all teachers in *branch_id* whose surname and initials collide
          with any teacher in *teacher_ids*.
       2. Keeps the record with the smallest id (the 'canonical' one).
       3. Reassigns all ScheduleSlot rows from duplicates to the canonical record.
@@ -550,40 +596,39 @@ def _merge_duplicate_teachers(db: Session, branch_id: str, teacher_ids: list[int
     # Fetch the teachers we just touched in this import
     touched = db.query(Teacher).filter(Teacher.id.in_(teacher_ids)).all()
     merged = 0
-    seen_last: dict[str, Teacher] = {}  # normalised_last_name -> canonical teacher
+    seen_by_last: dict[str, list[Teacher]] = {}
 
     for t in sorted(touched, key=lambda x: x.id):
         key = (t.last_name or "").strip().lower()
-        if key in seen_last:
-            # This teacher is a duplicate of an already-seen canonical record
-            canonical = seen_last[key]
-            # Reassign all slots that belong to the duplicate
+        same_last_teachers = seen_by_last.setdefault(key, [])
+        canonical = next((candidate for candidate in same_last_teachers if _same_teacher_identity(candidate, t)), None)
+        if canonical:
+            if _teacher_name_is_more_complete(t.first_name, canonical.first_name):
+                canonical.first_name = t.first_name
+                db.add(canonical)
             db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == t.id).update(
                 {"teacher_id": canonical.id}, synchronize_session=False
             )
             db.delete(t)
             merged += 1
         else:
-            seen_last[key] = t
+            same_last_teachers.append(t)
 
     # Also look for pre-existing duplicates across ALL teachers in the branch
-    # that share a normalised last_name with any teacher we just created/used.
-    for norm_last, canonical in list(seen_last.items()):
-        others = (
-            db.query(Teacher)
-            .filter(
-                Teacher.branch_id == branch_id,
-                func.lower(Teacher.last_name) == norm_last,
-                Teacher.id != canonical.id,
-            )
-            .all()
-        )
+    # that share a surname and compatible initials with any teacher we touched.
+    for norm_last, canonicals in list(seen_by_last.items()):
+        canonical_ids = {canonical.id for canonical in canonicals}
+        others = [
+            teacher
+            for teacher in db.query(Teacher).filter(Teacher.branch_id == branch_id).all()
+            if teacher.id not in canonical_ids and (teacher.last_name or "").strip().casefold() == norm_last.casefold()
+        ]
         for dup in others:
-            # Prefer the teacher with a longer / more complete first name
-            dup_first = (dup.first_name or "").strip()
-            can_first = (canonical.first_name or "").strip()
-            if len(dup_first) > len(can_first) and "." not in dup_first:
-                canonical.first_name = dup_first
+            canonical = next((candidate for candidate in canonicals if _same_teacher_identity(candidate, dup)), None)
+            if not canonical:
+                continue
+            if _teacher_name_is_more_complete(dup.first_name, canonical.first_name):
+                canonical.first_name = dup.first_name
                 db.add(canonical)
             db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == dup.id).update(
                 {"teacher_id": canonical.id}, synchronize_session=False
@@ -665,34 +710,27 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                 first_name = _db_text(first_name, 120) or "Викладач"
                 # Case-insensitive lookup — Ukrainian DOCX files often store surnames
                 # in ALL-CAPS while the DB may have them in proper case (or vice versa).
-                existing_teachers = (
-                    db.query(Teacher)
-                    .filter(
-                        Teacher.branch_id == branch_id,
-                        func.lower(Teacher.last_name) == last_name.lower(),
-                    )
-                    .all()
-                )
+                existing_teachers = [
+                    teacher
+                    for teacher in db.query(Teacher).filter(Teacher.branch_id == branch_id).all()
+                    if (teacher.last_name or "").strip().casefold() == last_name.casefold()
+                ]
                 teacher = None
                 if existing_teachers:
-                    for t in existing_teachers:
-                        t_first = (t.first_name or "").strip()
-                        new_first = (first_name or "").strip()
-                        # Match when either side has no first name, or first letters agree
-                        if not t_first or not new_first:
-                            teacher = t
-                            break
-                        if t_first[0].lower() == new_first[0].lower():
-                            teacher = t
-                            break
-                    if not teacher:
+                    matching_teachers = [
+                        t for t in existing_teachers if _teacher_names_compatible(t.first_name, first_name)
+                    ]
+                    if len(matching_teachers) == 1:
+                        teacher = matching_teachers[0]
+                    elif len(matching_teachers) > 1:
+                        teacher = sorted(matching_teachers, key=lambda item: item.id)[0]
+                    elif len(existing_teachers) == 1 and not _teacher_given_parts(first_name):
                         teacher = existing_teachers[0]
 
-                    # If the incoming name is more complete (longer, no dots), upgrade the DB record
-                    t_first = (teacher.first_name or "").strip()
-                    new_first = (first_name or "").strip()
-                    if new_first and len(new_first) > len(t_first) and "." not in new_first:
-                        teacher.first_name = new_first
+                if teacher:
+                    # If the incoming name is more complete, upgrade the DB record
+                    if _teacher_name_is_more_complete(first_name, teacher.first_name):
+                        teacher.first_name = first_name
                         db.add(teacher)
                         db.flush()
                         # Invalidate any previous cache entry that pointed to this teacher
@@ -739,15 +777,14 @@ def import_schedule_docx(db: Session, file_path: str, branch_id: str, actor_user
                     "teacher_id": teacher.id,
                     "subject_id": subject.id,
                     "room_id": room.id,
-                    "teacher_name": teacher_full_name,
                     "subject_name": subject_name,
+                    "teacher_name": teacher_full_name,
                     "starts_at": entry["starts_at"],
                     "ends_at": entry["ends_at"],
-                    "pair_number": int(entry["pair_number"]),
-                    "academic_hours": float(entry["academic_hours"]),
+                    "pair_number": entry["pair_number"],
+                    "academic_hours": entry["academic_hours"],
                 }
             )
-
         if not candidates:
             continue
 

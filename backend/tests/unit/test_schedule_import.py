@@ -249,6 +249,27 @@ def _build_schedule_docx_as_list_table(path: Path) -> None:
     doc.save(path)
 
 
+def _build_schedule_docx_with_teacher(path: Path, group_code: str, teacher_name: str) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Тестовий курс")
+    doc.add_paragraph(f"Група № {group_code}")
+    doc.add_paragraph("з 21 жовтня 2025 року до 21 жовтня 2025 року")
+
+    table = doc.add_table(rows=3, cols=6)
+    for idx, value in enumerate(
+        ["№п/п", "Назва предмета", "К-сть год.", "21.10", "22.10", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема", "2", "1п/2год", "", teacher_name]):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(["", "Загальний обсяг навчального часу:", "2", "", "", ""]):
+        table.cell(2, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -416,3 +437,48 @@ def test_import_schedule_docx_updates_existing_duplicated_group_name(db_session,
 
     group = db_session.query(Group).filter(Group.code == "47п-25").one()
     assert group.name == "Штучний інтелект: розвиток кар'єри та професійне зростання"
+
+
+def test_import_schedule_docx_matches_teacher_initials_to_full_name(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-teacher-initials.docx"
+    _build_schedule_docx_with_teacher(file_path, "46-26", "Коваль І. П.")
+    existing_teacher = Teacher(
+        branch_id="main",
+        last_name="Коваль",
+        first_name="Іван Петрович",
+        hourly_rate=0,
+        is_active=True,
+    )
+    db_session.add(existing_teacher)
+    db_session.commit()
+
+    import_schedule_docx(db_session, str(file_path), branch_id="main")
+    db_session.commit()
+
+    teachers = db_session.query(Teacher).filter(Teacher.branch_id == "main", Teacher.last_name == "Коваль").all()
+    slot = db_session.query(ScheduleSlot).one()
+    assert len(teachers) == 1
+    assert slot.teacher_id == existing_teacher.id
+
+
+def test_import_schedule_docx_keeps_same_surname_different_initials_separate(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-teacher-different-initials.docx"
+    _build_schedule_docx_with_teacher(file_path, "46-26", "Коваль І. М.")
+    existing_teacher = Teacher(
+        branch_id="main",
+        last_name="Коваль",
+        first_name="Іван Петрович",
+        hourly_rate=0,
+        is_active=True,
+    )
+    db_session.add(existing_teacher)
+    db_session.commit()
+
+    import_schedule_docx(db_session, str(file_path), branch_id="main")
+    db_session.commit()
+
+    teachers = db_session.query(Teacher).filter(Teacher.branch_id == "main", Teacher.last_name == "Коваль").all()
+    slot = db_session.query(ScheduleSlot).one()
+    assert len(teachers) == 2
+    assert slot.teacher_id != existing_teacher.id
+    assert any(teacher.first_name == "І. М." for teacher in teachers)
