@@ -229,14 +229,6 @@ class ActiveGroupBetweenDatesResponse(BaseModel):
     teachers: list[GroupTeacherHoursResponse]
 
 
-class CompletedGroupSummaryResponse(BaseModel):
-    name: str
-    completed_count: int
-    first_completed_date: date | None = None
-    last_completed_date: date | None = None
-    group_codes: list[str]
-
-
 class EnrollRequest(BaseModel):
     trainee_id: int
 

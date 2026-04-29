@@ -154,69 +154,6 @@ def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_s
     assert export_response.content
 
 
-def test_completed_group_summary_groups_by_name_and_filters_by_end_date(client, auth_headers, db_session):
-    db_session.add_all(
-        [
-            Group(
-                branch_id="main",
-                code="AI-001",
-                name="Штучний інтелект",
-                capacity=20,
-                status=GroupStatus.COMPLETED,
-                start_date=date(2025, 1, 10),
-                end_date=date(2025, 2, 10),
-            ),
-            Group(
-                branch_id="main",
-                code="AI-002",
-                name="  Штучний   інтелект  ",
-                capacity=20,
-                status=GroupStatus.COMPLETED,
-                start_date=date(2025, 3, 1),
-                end_date=date(2025, 4, 1),
-            ),
-            Group(
-                branch_id="main",
-                code="HR-001",
-                name="Кадровий облік",
-                capacity=20,
-                status=GroupStatus.COMPLETED,
-                start_date=date(2025, 3, 1),
-                end_date=date(2025, 4, 3),
-            ),
-            Group(
-                branch_id="main",
-                code="AI-ACTIVE",
-                name="Штучний інтелект",
-                capacity=20,
-                status=GroupStatus.ACTIVE,
-                start_date=date(2025, 4, 1),
-                end_date=date(2025, 5, 1),
-            ),
-        ]
-    )
-    db_session.commit()
-
-    response = client.get("/api/v1/groups/completed-summary", headers=auth_headers)
-    assert response.status_code == 200
-    payload = response.json()
-    ai_summary = next(item for item in payload if item["name"] == "Штучний інтелект")
-    assert ai_summary["completed_count"] == 2
-    assert ai_summary["first_completed_date"] == "2025-02-10"
-    assert ai_summary["last_completed_date"] == "2025-04-01"
-    assert ai_summary["group_codes"] == ["AI-001", "AI-002"]
-
-    filtered_response = client.get(
-        "/api/v1/groups/completed-summary?date_from=2025-04-01&date_to=2025-04-30&search=інтелект",
-        headers=auth_headers,
-    )
-    assert filtered_response.status_code == 200
-    filtered_payload = filtered_response.json()
-    assert len(filtered_payload) == 1
-    assert filtered_payload[0]["completed_count"] == 1
-    assert filtered_payload[0]["group_codes"] == ["AI-002"]
-
-
 def test_bulk_group_code_update_flow(client, auth_headers):
     first = client.post(
         "/api/v1/trainees",
