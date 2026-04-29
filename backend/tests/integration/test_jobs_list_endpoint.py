@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.models import Document, DocumentType, ExportJob, ImportJob, JobStatus
+from app.api.routes import jobs as jobs_route
 
 
 def test_jobs_list_returns_import_and_export(client, auth_headers, db_session):
@@ -91,3 +92,51 @@ def test_jobs_list_supports_filters(client, auth_headers, db_session):
     assert len(payload) == 1
     assert payload[0]["job_type"] == "import"
     assert payload[0]["job"]["status"] == "failed"
+
+
+def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):
+    dispatched: list[int] = []
+
+    def fake_dispatch(task, job_id: int) -> str:
+        dispatched.append(job_id)
+        return "queued"
+
+    monkeypatch.setattr(jobs_route, "_dispatch_with_fallback", fake_dispatch)
+
+    document = Document(
+        branch_id="main",
+        file_name="reprocess.xlsx",
+        file_path="/tmp/reprocess.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    db_session.add(document)
+    db_session.commit()
+    db_session.refresh(document)
+
+    source_job = ImportJob(
+        branch_id="main",
+        idempotency_key="import-reprocess-source",
+        document_id=document.id,
+        status=JobStatus.SUCCEEDED,
+        message="done",
+        result_payload={"import_mode": "overwrite", "import_result": {"inserted": 1}},
+    )
+    db_session.add(source_job)
+    db_session.commit()
+    db_session.refresh(source_job)
+
+    response = client.post(f"/api/v1/jobs/{source_job.id}/reprocess-import", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_type"] == "import"
+    assert payload["job"]["id"] != source_job.id
+    assert payload["job"]["status"] == "queued"
+    assert payload["job"]["result_payload"]["import_mode"] == "overwrite"
+    assert payload["job"]["result_payload"]["reprocess_of_job_id"] == source_job.id
+    assert dispatched == [payload["job"]["id"]]
+
+    new_job = db_session.get(ImportJob, payload["job"]["id"])
+    assert new_job is not None
+    assert new_job.document_id == document.id

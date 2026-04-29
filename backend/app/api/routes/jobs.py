@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_
@@ -248,6 +249,65 @@ def retry_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatu
         details={"dispatch_mode": dispatch_mode},
     )
     return JobStatusResponse(job_type=job_type, job=JobResponse.model_validate(job))
+
+
+@router.post(
+    "/{job_id}/reprocess-import",
+    response_model=JobStatusResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatusResponse:
+    job_type, source_job = _resolve_job(job_id, db, current_user.branch_id)
+    if job_type != "import" or not isinstance(source_job, ImportJob):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import job не знайдено")
+    if not source_job.document:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="У цієї задачі немає документа для повторного імпорту")
+
+    previous_payload = source_job.result_payload if isinstance(source_job.result_payload, dict) else {}
+    previous_request = source_job.request_payload if isinstance(source_job.request_payload, dict) else {}
+    import_mode = previous_payload.get("import_mode") or previous_request.get("import_mode") or "missing_only"
+    new_payload = {
+        "import_mode": import_mode,
+        "source": "manual_reprocess",
+        "reprocess_of_job_id": source_job.id,
+    }
+    new_job = ImportJob(
+        branch_id=current_user.branch_id,
+        idempotency_key=f"{current_user.branch_id}:reprocess-{source_job.id}-{uuid4().hex}",
+        document_id=source_job.document_id,
+        status=JobStatus.QUEUED,
+        message=f"Повторний імпорт із задачі #{source_job.id}",
+        request_payload={"reprocess_of_job_id": source_job.id},
+        result_payload=new_payload,
+    )
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    dispatch_mode = _dispatch_with_fallback(process_import_job_task, new_job.id)
+    db.refresh(new_job)
+    if dispatch_mode == "inline":
+        new_job.message = f"Черга недоступна. Повторний імпорт виконано inline. {new_job.message or ''}".strip()
+    elif dispatch_mode == "inline_failed":
+        mark_job_failed(new_job, new_job.message or "Черга недоступна, inline-повторний імпорт завершився помилкою")
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="jobs.reprocess_import",
+        entity_type="import_job",
+        entity_id=str(new_job.id),
+        details={
+            "source_job_id": source_job.id,
+            "document_id": source_job.document_id,
+            "dispatch_mode": dispatch_mode,
+            "import_mode": import_mode,
+        },
+    )
+    return JobStatusResponse(job_type="import", job=JobResponse.model_validate(new_job))
 
 
 @router.post(

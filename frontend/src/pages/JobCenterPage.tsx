@@ -247,6 +247,24 @@ export function JobCenterPage() {
     }
   };
 
+  const reprocessImportJob = async (item: JobListItem) => {
+    if (item.job_type !== "import" || !item.document_id) {
+      showError("Для цієї задачі немає документа для повторного імпорту");
+      return;
+    }
+    try {
+      const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/reprocess-import`, { method: "POST" });
+      setJobType("import");
+      setJobStatus("all");
+      const data = await request<JobListItem[]>("/jobs?limit=200&job_type=import");
+      setRows(data);
+      appendSnapshot(data);
+      showSuccess(`Створено повторний імпорт #${payload.job.id}`);
+    } catch (error) {
+      showError((error as Error).message);
+    }
+  };
+
   const rollbackImportJob = async (item: JobListItem) => {
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/rollback-import`, { method: "POST" });
@@ -387,6 +405,15 @@ export function JobCenterPage() {
                 onClick={() => retryJob(item)}
               >
                 Повторити
+              </button>
+            )}
+            {item.job_type === "import" && item.document_id && (
+              <button
+                type="button"
+                className="rounded bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700"
+                onClick={() => reprocessImportJob(item)}
+              >
+                2.2 Повторно імпортувати
               </button>
             )}
             {item.job_type === "import" && item.job.status === "succeeded" && hasRollbackData(item) && (
