@@ -40,11 +40,12 @@ const LABEL_FAILED      = "suptc/failed";
 const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
+const MAX_QUEUE_ITEMS   = 100;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 one-unread-v1");
+  Logger.log("Версія скрипта: 2026-04-29 one-unread-queued-v2");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -102,6 +103,8 @@ function processIncomingEmailsLocked_() {
   }
 
   if (result.ok) {
+    const pendingState = removePendingMessage_(message.getId(), thread.getId());
+    Logger.log("Черга після обробки: залишилось=" + pendingState.remaining);
     markMessageReadOnly_(message);
     thread.refresh();
     if (!threadHasUnreadMessages_(thread)) {
@@ -109,6 +112,8 @@ function processIncomingEmailsLocked_() {
     }
     Logger.log("✅ Лист оброблено: " + message.getSubject());
   } else {
+    const pendingState = removePendingMessage_(message.getId(), thread.getId());
+    Logger.log("Черга після помилки: залишилось=" + pendingState.remaining);
     markMessageReadOnly_(message);
     thread.addLabel(failLabel);
     Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
@@ -118,14 +123,20 @@ function processIncomingEmailsLocked_() {
 // ─── Допоміжні функції ───────────────────────────────────────────────────────
 
 function findNextUnreadMessage_() {
+  const queuedTarget = getNextQueuedTarget_();
+  if (queuedTarget) {
+    Logger.log("Беремо один лист із внутрішньої черги: " + describeMessage_(queuedTarget.message));
+    return queuedTarget;
+  }
+
   const stats = {
     threads: 0,
     unread: 0,
     expectedSenderUnread: 0,
     expectedSenderUnreadWithAttachments: 0,
     fallbackUnreadWithAttachments: 0,
+    queuedMessages: 0,
   };
-  let fallbackTarget = null;
 
   for (let start = 0; start < SCAN_THREAD_LIMIT; start += SCAN_PAGE_SIZE) {
     const threads = GmailApp.getInboxThreads(start, SCAN_PAGE_SIZE);
@@ -136,6 +147,8 @@ function findNextUnreadMessage_() {
     for (const thread of threads) {
       stats.threads += 1;
       const messages = thread.getMessages();
+      const expectedUnreadMessages = [];
+      const fallbackUnreadMessages = [];
 
       for (const message of messages) {
         if (!message.isUnread()) {
@@ -146,12 +159,9 @@ function findNextUnreadMessage_() {
         const hasMatchedAttachment = messageHasMatchedAttachments_(message);
         if (!isExpectedSender_(message)) {
           Logger.log("Unread-marker не від цільового відправника: " + describeMessage_(message));
-          if (ALLOW_THREAD_ATTACHMENT_FALLBACK && hasMatchedAttachment && !fallbackTarget) {
+          if (ALLOW_THREAD_ATTACHMENT_FALLBACK && hasMatchedAttachment) {
             stats.fallbackUnreadWithAttachments += 1;
-            fallbackTarget = {
-              thread: thread,
-              message: message,
-            };
+            fallbackUnreadMessages.push(message);
           }
           continue;
         }
@@ -159,21 +169,31 @@ function findNextUnreadMessage_() {
         stats.expectedSenderUnread += 1;
         if (hasMatchedAttachment) {
           stats.expectedSenderUnreadWithAttachments += 1;
-          Logger.log("Беремо один непрочитаний лист до обробки: " + describeMessage_(message));
-          return {
-            thread: thread,
-            message: message,
-          };
+          expectedUnreadMessages.push(message);
         } else {
           Logger.log("Непрочитаний лист від цільового відправника без придатних вкладень: " + describeMessage_(message));
         }
       }
+
+      if (expectedUnreadMessages.length > 0) {
+        const added = enqueueMessages_(thread, expectedUnreadMessages);
+        stats.queuedMessages += added;
+        Logger.log("Поставлено в чергу непрочитаних листів від цільового відправника: " + added);
+      } else if (fallbackUnreadMessages.length > 0) {
+        const added = enqueueMessages_(thread, fallbackUnreadMessages);
+        stats.queuedMessages += added;
+        Logger.log("Поставлено в fallback-чергу непрочитаних листів із вкладеннями: " + added);
+      }
     }
   }
 
-  if (fallbackTarget) {
-    Logger.log("Беремо один fallback-непрочитаний лист до обробки: " + describeMessage_(fallbackTarget.message));
-    return fallbackTarget;
+  if (stats.queuedMessages > 0) {
+    Logger.log("Знімок непрочитаних листів збережено в чергу: " + stats.queuedMessages);
+    const target = getNextQueuedTarget_();
+    if (target) {
+      Logger.log("Беремо перший лист зі знімка черги: " + describeMessage_(target.message));
+      return target;
+    }
   }
 
   Logger.log(
@@ -181,7 +201,8 @@ function findNextUnreadMessage_() {
     ", непрочитаних=" + stats.unread +
     ", від потрібного відправника=" + stats.expectedSenderUnread +
     ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
-    ", fallback-непрочитаних з вкладеннями=" + stats.fallbackUnreadWithAttachments
+    ", fallback-непрочитаних з вкладеннями=" + stats.fallbackUnreadWithAttachments +
+    ", поставлено в чергу=" + stats.queuedMessages
   );
   return null;
 }
@@ -255,6 +276,104 @@ function processOneMessage_(message) {
     ok: ok,
     hasMatchedAttachment: hasMatchedAttachment,
   };
+}
+
+function getNextQueuedTarget_() {
+  let queue = loadPendingQueue_();
+  let changed = false;
+
+  while (queue.length > 0) {
+    const item = queue[0];
+    try {
+      const thread = GmailApp.getThreadById(item.threadId);
+      const message = GmailApp.getMessageById(item.messageId);
+      if (message && messageHasMatchedAttachments_(message)) {
+        if (changed) {
+          savePendingQueue_(queue);
+        }
+        return {
+          thread: thread,
+          message: message,
+        };
+      }
+      Logger.log("Видаляю з черги лист без придатних вкладень: " + item.messageId);
+      queue.shift();
+      changed = true;
+    } catch (e) {
+      Logger.log("Видаляю з черги недоступний лист " + item.messageId + ": " + e);
+      queue.shift();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    savePendingQueue_(queue);
+  }
+  return null;
+}
+
+function enqueueMessages_(thread, messages) {
+  let queue = loadPendingQueue_();
+  const seen = {};
+  let added = 0;
+
+  queue.forEach(function(item) {
+    seen[item.messageId] = true;
+  });
+
+  messages.forEach(function(message) {
+    const messageId = message.getId();
+    if (seen[messageId]) {
+      return;
+    }
+    queue.push({
+      threadId: thread.getId(),
+      messageId: messageId,
+      queuedAt: new Date().toISOString(),
+    });
+    seen[messageId] = true;
+    added += 1;
+  });
+
+  if (queue.length > MAX_QUEUE_ITEMS) {
+    queue = queue.slice(queue.length - MAX_QUEUE_ITEMS);
+  }
+  savePendingQueue_(queue);
+  return added;
+}
+
+function removePendingMessage_(messageId, threadId) {
+  const queue = loadPendingQueue_();
+  const next = queue.filter(function(item) {
+    return item.messageId !== messageId;
+  });
+  if (next.length !== queue.length) {
+    savePendingQueue_(next);
+  }
+  return {
+    hasMoreInThread: next.some(function(item) {
+      return item.threadId === threadId;
+    }),
+    remaining: next.length,
+  };
+}
+
+function loadPendingQueue_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(PENDING_QUEUE_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    Logger.log("Чергу листів пошкоджено, очищаю: " + e);
+    return [];
+  }
+}
+
+function savePendingQueue_(queue) {
+  PropertiesService.getScriptProperties().setProperty(PENDING_QUEUE_KEY, JSON.stringify(queue));
 }
 
 function getExtension_(name) {
