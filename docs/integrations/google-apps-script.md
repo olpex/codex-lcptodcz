@@ -45,11 +45,11 @@ const PROCESSED_IDS_KEY = "suptc_processed_message_ids";
 const MAX_QUEUE_ITEMS   = 100;
 const MAX_PROCESSED_IDS = 500;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
-const PROCESS_READ_UNLABELED_THREADS = true;
+const PROCESS_READ_THREADS_WITH_ATTACHMENTS = true;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 queue-v7-read-fallback");
+  Logger.log("Версія скрипта: 2026-04-29 queue-v8-read-labeled-fallback");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -156,7 +156,6 @@ function findNextUnreadMessage_() {
     expectedSenderUnreadWithAttachments: 0,
     fallbackThreadAttachments: 0,
     readFallbackThreads: 0,
-    skippedLabeledReadThreads: 0,
     queuedMessages: 0,
   };
 
@@ -198,18 +197,14 @@ function findNextUnreadMessage_() {
         stats.queuedMessages += added;
         Logger.log("Тред має непрочитану позначку; поставлено в чергу листів із вкладеннями: " + added);
       } else if (
-        PROCESS_READ_UNLABELED_THREADS &&
+        PROCESS_READ_THREADS_WITH_ATTACHMENTS &&
         !threadHasUnread &&
         processableMessages.length > 0
       ) {
-        if (threadHasLabel_(thread, LABEL_PROCESSED) || threadHasLabel_(thread, LABEL_FAILED)) {
-          stats.skippedLabeledReadThreads += 1;
-          continue;
-        }
         stats.readFallbackThreads += 1;
         const added = enqueueMessages_(thread, processableMessages, []);
         stats.queuedMessages += added;
-        Logger.log("Тред уже прочитаний, але без мітки обробки; поставлено в чергу листів із вкладеннями: " + added);
+        Logger.log("Тред уже прочитаний; поставлено в чергу ще не оброблених листів із вкладеннями: " + added);
       }
     }
   }
@@ -229,7 +224,6 @@ function findNextUnreadMessage_() {
     ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
     ", fallback-вкладень у треді=" + stats.fallbackThreadAttachments +
     ", read-fallback тредів=" + stats.readFallbackThreads +
-    ", пропущено промаркованих read-тредів=" + stats.skippedLabeledReadThreads +
     ", поставлено в чергу=" + stats.queuedMessages
   );
   return null;
@@ -560,12 +554,6 @@ function describeMessage_(message) {
 function threadHasUnreadMessages_(thread) {
   return thread.getMessages().some(function(message) {
     return message.isUnread();
-  });
-}
-
-function threadHasLabel_(thread, labelName) {
-  return thread.getLabels().some(function(label) {
-    return label.getName() === labelName;
   });
 }
 
