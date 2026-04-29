@@ -28,6 +28,8 @@
 5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
 6. Створіть тригер: `processIncomingEmails`, time-driven, кожні 5 хвилин.
 
+> Скрипт використовує тільки вбудований `GmailApp`; окремо вмикати Gmail REST API у Google Cloud не потрібно.
+
 ```javascript
 // ─── Налаштування ───────────────────────────────────────────────────────────
 const PROJECT_BASE_URL  = "https://codex-lcptodcz.vercel.app";
@@ -75,7 +77,7 @@ function processIncomingEmailsLocked_() {
     }
 
     if (result.ok) {
-      markMessageReadOnly_(message.getId());
+      markMessageReadOnly_(message);
       thread.refresh();
       if (!threadHasUnreadMessages_(thread)) {
         thread.addLabel(okLabel);
@@ -178,26 +180,11 @@ function threadHasUnreadMessages_(thread) {
   });
 }
 
-function markMessageReadOnly_(messageId) {
-  const url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" +
-              encodeURIComponent(messageId) +
-              "/modify";
-
-  const resp = UrlFetchApp.fetch(url, {
-    method: "post",
-    contentType: "application/json",
-    headers: {
-      Authorization: "Bearer " + ScriptApp.getOAuthToken(),
-    },
-    payload: JSON.stringify({
-      removeLabelIds: ["UNREAD"],
-    }),
-    muteHttpExceptions: true,
-  });
-
-  const code = resp.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error("Не вдалося позначити прочитаним саме цей лист: " + resp.getContentText());
+function markMessageReadOnly_(message) {
+  try {
+    GmailApp.markMessagesRead([message]);
+  } catch (e) {
+    message.markRead();
   }
 }
 
