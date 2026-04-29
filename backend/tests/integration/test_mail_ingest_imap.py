@@ -25,6 +25,7 @@ from app.services import mail_ingest
 class FakeIMAP4SSL:
     def __init__(self, raw_message: bytes):
         self.raw_message = raw_message
+        self.fetch_payloads: list[str] = []
         self.logged_out = False
 
     def login(self, user: str, password: str):
@@ -37,6 +38,7 @@ class FakeIMAP4SSL:
         return "OK", [b"1"]
 
     def fetch(self, msg_id: bytes, payload: str):
+        self.fetch_payloads.append(payload)
         return "OK", [(b"1 (UID 1001 RFC822 {256})", self.raw_message)]
 
     def logout(self):
@@ -47,6 +49,7 @@ class FakeIMAP4SSL:
 class FakeIMAP4SSLMulti:
     def __init__(self, raw_messages: list[bytes]):
         self.raw_messages = raw_messages
+        self.fetch_payloads: list[str] = []
         self.logged_out = False
 
     def login(self, user: str, password: str):
@@ -60,6 +63,7 @@ class FakeIMAP4SSLMulti:
         return "OK", [ids]
 
     def fetch(self, msg_id: bytes, payload: str):
+        self.fetch_payloads.append(payload)
         index = int(msg_id.decode("ascii")) - 1
         uid = 1001 + index
         raw_message = self.raw_messages[index]
@@ -195,6 +199,7 @@ def test_ingest_mailbox_creates_draft_for_docx_attachment(db_session, monkeypatc
 
     result = mail_ingest.ingest_mailbox(db_session)
     assert result["processed"] == 1
+    assert fake_client.fetch_payloads == ["(UID BODY.PEEK[])"]
 
     message = db_session.query(MailMessage).filter(MailMessage.message_id == "<test-message-1@example.com>").one()
     assert message.status == MailStatus.PROCESSED

@@ -162,7 +162,10 @@ def ingest_mailbox(db: Session) -> dict:
 
     ids = data[0].split()
     for msg_id in ids:
-        status, message_data = mailbox.fetch(msg_id, "(UID RFC822)")
+        # BODY.PEEK[] reads the full message without setting the IMAP \Seen flag.
+        # Apps Script also relies on unread state, so the backend poller must not
+        # consume that signal when it inspects the mailbox.
+        status, message_data = mailbox.fetch(msg_id, "(UID BODY.PEEK[])")
         if status != "OK" or not message_data:
             continue
 
