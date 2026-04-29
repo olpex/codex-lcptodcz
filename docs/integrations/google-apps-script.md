@@ -40,12 +40,13 @@ const LABEL_FAILED      = "suptc/failed";
 const SCAN_THREAD_LIMIT = 300;
 const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
+const PROCESSED_IDS_KEY = "suptc_processed_message_ids";
 const MAX_QUEUE_ITEMS   = 100;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 one-unread-any-attachment-v3");
+  Logger.log("Версія скрипта: 2026-04-29 trusted-any-attachment-v4");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -83,6 +84,13 @@ function clearPendingQueue() {
   Logger.log("Внутрішню чергу очищено.");
 }
 
+function clearImportState() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(PENDING_QUEUE_KEY);
+  props.deleteProperty(PROCESSED_IDS_KEY);
+  Logger.log("Внутрішню чергу та історію оброблених листів очищено.");
+}
+
 function processIncomingEmailsLocked_() {
   const okLabel   = getOrCreateLabel_(LABEL_PROCESSED);
   const failLabel = getOrCreateLabel_(LABEL_FAILED);
@@ -105,6 +113,7 @@ function processIncomingEmailsLocked_() {
   if (result.ok) {
     const pendingState = removePendingMessage_(message.getId(), thread.getId());
     Logger.log("Черга після обробки: залишилось=" + pendingState.remaining);
+    rememberProcessedMessage_(message.getId());
     markMessageReadOnly_(message);
     thread.refresh();
     if (!threadHasUnreadMessages_(thread)) {
@@ -114,6 +123,7 @@ function processIncomingEmailsLocked_() {
   } else {
     const pendingState = removePendingMessage_(message.getId(), thread.getId());
     Logger.log("Черга після помилки: залишилось=" + pendingState.remaining);
+    rememberProcessedMessage_(message.getId());
     markMessageReadOnly_(message);
     thread.addLabel(failLabel);
     Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
@@ -134,9 +144,11 @@ function findNextUnreadMessage_() {
     unread: 0,
     expectedSenderUnread: 0,
     expectedSenderUnreadWithAttachments: 0,
+    expectedSenderReadWithAttachments: 0,
     fallbackUnreadWithAttachments: 0,
     queuedMessages: 0,
   };
+  const readCandidates = [];
 
   for (let start = 0; start < SCAN_THREAD_LIMIT; start += SCAN_PAGE_SIZE) {
     const threads = GmailApp.getInboxThreads(start, SCAN_PAGE_SIZE);
@@ -151,12 +163,21 @@ function findNextUnreadMessage_() {
       const fallbackUnreadMessages = [];
 
       for (const message of messages) {
+        const hasMatchedAttachment = messageHasMatchedAttachments_(message);
+        const expectedSender = isExpectedSender_(message);
+
         if (!message.isUnread()) {
+          if (expectedSender && hasMatchedAttachment && !isMessageAlreadyProcessed_(message.getId())) {
+            stats.expectedSenderReadWithAttachments += 1;
+            readCandidates.push({
+              thread: thread,
+              message: message,
+            });
+          }
           continue;
         }
 
         stats.unread += 1;
-        const hasMatchedAttachment = messageHasMatchedAttachments_(message);
         if (!isExpectedSender_(message)) {
           Logger.log("Unread-marker не від цільового відправника: " + describeMessage_(message));
           if (ALLOW_THREAD_ATTACHMENT_FALLBACK && hasMatchedAttachment) {
@@ -196,11 +217,18 @@ function findNextUnreadMessage_() {
     }
   }
 
+  if (readCandidates.length > 0) {
+    const candidate = readCandidates[0];
+    Logger.log("Немає непрочитаних; беру один ще не оброблений лист від цільового відправника: " + describeMessage_(candidate.message));
+    return candidate;
+  }
+
   Logger.log(
     "Діагностика пошуку: тредів=" + stats.threads +
     ", непрочитаних=" + stats.unread +
     ", від потрібного відправника=" + stats.expectedSenderUnread +
     ", з вкладеннями=" + stats.expectedSenderUnreadWithAttachments +
+    ", прочитаних від потрібного відправника з вкладеннями=" + stats.expectedSenderReadWithAttachments +
     ", fallback-непрочитаних з вкладеннями=" + stats.fallbackUnreadWithAttachments +
     ", поставлено в чергу=" + stats.queuedMessages
   );
@@ -316,6 +344,9 @@ function enqueueMessages_(thread, messages) {
   queue.forEach(function(item) {
     seen[item.messageId] = true;
   });
+  loadProcessedMessageIds_().forEach(function(messageId) {
+    seen[messageId] = true;
+  });
 
   messages.forEach(function(message) {
     const messageId = message.getId();
@@ -370,6 +401,39 @@ function loadPendingQueue_() {
 
 function savePendingQueue_(queue) {
   PropertiesService.getScriptProperties().setProperty(PENDING_QUEUE_KEY, JSON.stringify(queue));
+}
+
+function loadProcessedMessageIds_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(PROCESSED_IDS_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    Logger.log("Історію оброблених листів пошкоджено, очищаю: " + e);
+    return [];
+  }
+}
+
+function saveProcessedMessageIds_(ids) {
+  PropertiesService.getScriptProperties().setProperty(PROCESSED_IDS_KEY, JSON.stringify(ids));
+}
+
+function isMessageAlreadyProcessed_(messageId) {
+  return loadProcessedMessageIds_().indexOf(messageId) !== -1;
+}
+
+function rememberProcessedMessage_(messageId) {
+  let ids = loadProcessedMessageIds_().filter(function(item) {
+    return item !== messageId;
+  });
+  ids.push(messageId);
+  if (ids.length > MAX_QUEUE_ITEMS * 5) {
+    ids = ids.slice(ids.length - MAX_QUEUE_ITEMS * 5);
+  }
+  saveProcessedMessageIds_(ids);
 }
 
 function getExtension_(name) {
