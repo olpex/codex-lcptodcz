@@ -196,10 +196,8 @@ def gmail_api_contracts_webhook(
 
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        if doc_type.value != "docx":
-            return JobResponse.model_validate(existing)
         idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
-    elif out_path is None:
+    if out_path is None:
         out_path = storage_path() / f"{uuid4().hex}_{filename}"
         with Path(out_path).open("wb") as fh:
             fh.write(file_bytes)
@@ -329,8 +327,6 @@ def google_mail_contracts_webhook(
 
     existing = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
     if existing:
-        if doc_type.value != "docx":
-            return JobResponse.model_validate(existing)
         idempotency_key = f"{idempotency_key}:re:{uuid4().hex[:8]}"
 
     if not path or not sha256:

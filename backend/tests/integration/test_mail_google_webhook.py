@@ -393,6 +393,7 @@ def test_gmail_api_webhook_accepts_excel_without_contract_keyword(client, monkey
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda job_id: "queued")
 
     file_base64 = base64.urlsafe_b64encode(_contracts_xlsx_bytes()).decode("ascii")
     response = client.post(
@@ -407,6 +408,36 @@ def test_gmail_api_webhook_accepts_excel_without_contract_keyword(client, monkey
     )
 
     assert response.status_code == 202
+
+
+def test_gmail_api_webhook_reprocesses_excel_with_same_message_id(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes, "_dispatch_import_with_fallback", lambda job_id: "queued")
+
+    payload = {
+        "filename": "80-26 список.xlsx",
+        "messageId": "<gmail-api-xlsx-reprocess-test@example.com>",
+        "fileBase64": base64.urlsafe_b64encode(_contracts_xlsx_bytes()).decode("ascii"),
+        "subject": "",
+    }
+
+    first = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json=payload,
+    )
+    assert first.status_code == 202
+
+    second = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json=payload,
+    )
+    assert second.status_code == 202
+    assert second.json()["id"] != first.json()["id"]
+    assert db_session.query(ImportJob).count() == 2
 
 
 def test_gmail_api_webhook_imports_docx_with_group_code_only_filename(client, db_session, monkeypatch):
