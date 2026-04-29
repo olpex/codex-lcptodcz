@@ -411,6 +411,16 @@ class ImportPreviewGroup(BaseModel):
     already_exists: bool = False
 
 
+class ImportDuplicatePreview(BaseModel):
+    row_number: int | None = None
+    incoming_name: str
+    contract_number: str | None = None
+    group_code: str | None = None
+    existing_id: int
+    existing_name: str
+    match_reason: str | None = None
+
+
 class ImportPreviewResponse(BaseModel):
     filename: str
     file_type: str
@@ -420,7 +430,11 @@ class ImportPreviewResponse(BaseModel):
     headers: list[str] = Field(default_factory=list)
     default_group_code: str | None = None
     default_group_name: str | None = None
+    new_count: int = 0
+    duplicate_count: int = 0
+    invalid_count: int = 0
     groups: list[ImportPreviewGroup] = Field(default_factory=list)
+    duplicate_preview: list[ImportDuplicatePreview] = Field(default_factory=list)
     preview: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

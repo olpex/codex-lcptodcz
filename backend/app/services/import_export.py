@@ -35,7 +35,7 @@ from app.services.storage import storage_path
 PREFERRED_TRAINEE_SHEET_NAMES = ("Додаток", "додаток")
 HEADER_SCAN_LIMIT = 30
 ROW_SAMPLE_LIMIT = 20
-IMPORT_UPDATE_MODES = {"missing_only", "overwrite"}
+IMPORT_UPDATE_MODES = {"skip_existing", "missing_only", "overwrite"}
 
 FIRST_NAME_ALIASES = {
     "first_name",
@@ -477,6 +477,187 @@ def parse_document_content(file_path: str, doc_type: DocumentType) -> dict:
     return {"rows": 0, "data": []}
 
 
+def _looks_like_trainee_registry(parsed: dict) -> bool:
+    headers = {_normalize_header(h) for h in parsed.get("headers", [])}
+    return bool(
+        (_has_any_alias(headers, FIRST_NAME_ALIASES) and _has_any_alias(headers, LAST_NAME_ALIASES))
+        or _has_any_alias(headers, FULL_NAME_ALIASES)
+    )
+
+
+def _extract_trainee_payload(
+    row: dict[str, Any],
+    default_group_code: str = "",
+    default_group_name: str = "",
+) -> dict[str, Any] | None:
+    keymap = {_normalize_header(k): v for k, v in row.items()}
+
+    first_name = _normalize_text_value(_first_non_empty(keymap, FIRST_NAME_ALIASES))
+    last_name = _normalize_text_value(_first_non_empty(keymap, LAST_NAME_ALIASES))
+    middle_name = _normalize_text_value(_first_non_empty(keymap, MIDDLE_NAME_ALIASES))
+
+    if not first_name or not last_name:
+        full_name_raw = _normalize_text_value(_first_non_empty(keymap, FULL_NAME_ALIASES))
+        if full_name_raw:
+            parsed_last, parsed_first, parsed_middle = _split_full_name(full_name_raw)
+            last_name = last_name or parsed_last
+            first_name = first_name or parsed_first
+            middle_name = middle_name or parsed_middle
+
+    if not first_name or not last_name:
+        return None
+
+    source_row_number_raw = _first_non_empty(keymap, ROW_NUMBER_ALIASES)
+    source_row_number: int | None = None
+    try:
+        if source_row_number_raw is not None and _normalize_text_value(source_row_number_raw):
+            source_row_number = int(float(_normalize_text_value(source_row_number_raw)))
+    except ValueError:
+        source_row_number = None
+
+    status_value = _normalize_text_value(_first_non_empty(keymap, STATUS_ALIASES)).lower() or "active"
+    return {
+        "first_name": first_name,
+        "last_name": last_name,
+        "middle_name": middle_name,
+        "birth_date": _parse_date_value(_first_non_empty(keymap, BIRTH_DATE_ALIASES)),
+        "source_row_number": source_row_number,
+        "employment_center": _normalize_text_value(_first_non_empty(keymap, EMPLOYMENT_CENTER_ALIASES)) or None,
+        "contract_number": _normalize_text_value(_first_non_empty(keymap, CONTRACT_NUMBER_ALIASES)) or None,
+        "certificate_number": _normalize_text_value(_first_non_empty(keymap, CERTIFICATE_NUMBER_ALIASES)) or None,
+        "certificate_issue_date": _parse_date_value(_first_non_empty(keymap, CERTIFICATE_ISSUE_DATE_ALIASES)),
+        "postal_index": _normalize_text_value(_first_non_empty(keymap, POSTAL_INDEX_ALIASES)) or None,
+        "address": _normalize_text_value(_first_non_empty(keymap, ADDRESS_ALIASES)) or None,
+        "passport_series": _normalize_text_value(_first_non_empty(keymap, PASSPORT_SERIES_ALIASES)) or None,
+        "passport_number": _normalize_text_value(_first_non_empty(keymap, PASSPORT_NUMBER_ALIASES)) or None,
+        "passport_issued_by": _normalize_text_value(_first_non_empty(keymap, PASSPORT_ISSUED_BY_ALIASES)) or None,
+        "passport_issued_date": _parse_date_value(_first_non_empty(keymap, PASSPORT_ISSUED_DATE_ALIASES)),
+        "tax_id": _normalize_text_value(_first_non_empty(keymap, TAX_ID_ALIASES)) or None,
+        "phone_value": _normalize_text_value(_first_non_empty(keymap, PHONE_ALIASES)) or None,
+        "status": status_value if status_value in {"active", "completed", "expelled"} else "active",
+        "group_code": _normalize_text_value(_first_non_empty(keymap, GROUP_CODE_ALIASES)) or default_group_code,
+        "group_name": _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES)) or default_group_name,
+    }
+
+
+def _find_existing_trainee(
+    db: Session,
+    branch_id: str,
+    first_name: str,
+    last_name: str,
+    middle_name: str,
+    birth_date: date | None,
+    contract_number: str | None,
+) -> tuple[Trainee | None, str | None]:
+    if contract_number:
+        existing = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == branch_id,
+                Trainee.contract_number == contract_number,
+            )
+            .first()
+        )
+        if existing:
+            return existing, "contract_number"
+
+    normalized_first_name = first_name if not middle_name else f"{first_name} {middle_name}"
+    existing_query = db.query(Trainee).filter(
+        Trainee.branch_id == branch_id,
+        Trainee.first_name == normalized_first_name,
+        Trainee.last_name == last_name,
+    )
+    if birth_date:
+        existing_query = existing_query.filter(
+            or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
+        )
+    existing = existing_query.first()
+    if existing:
+        return existing, "name_birth_date"
+
+    if middle_name:
+        fallback_query = db.query(Trainee).filter(
+            Trainee.branch_id == branch_id,
+            Trainee.last_name == last_name,
+            Trainee.first_name.ilike(f"{first_name}%"),
+        )
+        if birth_date:
+            fallback_query = fallback_query.filter(
+                or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
+            )
+        existing = fallback_query.first()
+        if existing:
+            return existing, "partial_name_birth_date"
+
+    return None, None
+
+
+def analyze_trainee_import_duplicates(
+    db: Session,
+    parsed: dict,
+    branch_id: str,
+    preview_limit: int = 10,
+) -> dict[str, Any]:
+    if not _looks_like_trainee_registry(parsed):
+        return {
+            "new_count": 0,
+            "duplicate_count": 0,
+            "invalid_count": 0,
+            "duplicate_preview": [],
+            "note": "Структура не схожа на реєстр слухачів",
+        }
+
+    default_group_code = _normalize_text_value(parsed.get("default_group_code"))
+    default_group_name = _normalize_text_value(parsed.get("default_group_name"))
+    new_count = 0
+    duplicate_count = 0
+    invalid_count = 0
+    duplicate_preview: list[dict[str, Any]] = []
+
+    for index, row in enumerate(parsed.get("data", []), start=1):
+        payload = _extract_trainee_payload(row, default_group_code, default_group_name)
+        if not payload:
+            invalid_count += 1
+            continue
+
+        existing, match_reason = _find_existing_trainee(
+            db,
+            branch_id,
+            payload["first_name"],
+            payload["last_name"],
+            payload["middle_name"],
+            payload["birth_date"],
+            payload["contract_number"],
+        )
+        if not existing:
+            new_count += 1
+            continue
+
+        duplicate_count += 1
+        if len(duplicate_preview) < preview_limit:
+            incoming_name = f"{payload['last_name']} {payload['first_name']}"
+            if payload["middle_name"]:
+                incoming_name = f"{incoming_name} {payload['middle_name']}"
+            duplicate_preview.append(
+                {
+                    "row_number": payload["source_row_number"] or index,
+                    "incoming_name": incoming_name,
+                    "contract_number": payload["contract_number"],
+                    "group_code": payload["group_code"],
+                    "existing_id": existing.id,
+                    "existing_name": f"{existing.last_name} {existing.first_name}",
+                    "match_reason": match_reason,
+                }
+            )
+
+    return {
+        "new_count": new_count,
+        "duplicate_count": duplicate_count,
+        "invalid_count": invalid_count,
+        "duplicate_preview": duplicate_preview,
+    }
+
+
 def try_import_trainees(
     db: Session,
     parsed: dict,
@@ -487,12 +668,7 @@ def try_import_trainees(
         update_existing_mode = "missing_only"
     overwrite_existing = update_existing_mode == "overwrite"
 
-    headers = {_normalize_header(h) for h in parsed.get("headers", [])}
-    required_match = bool(
-        (_has_any_alias(headers, FIRST_NAME_ALIASES) and _has_any_alias(headers, LAST_NAME_ALIASES))
-        or _has_any_alias(headers, FULL_NAME_ALIASES)
-    )
-    if not required_match:
+    if not _looks_like_trainee_registry(parsed):
         return {"inserted": 0, "skipped_invalid": 0, "skipped_existing": 0, "note": "Структура не схожа на реєстр слухачів"}
 
     inserted = 0
@@ -507,83 +683,46 @@ def try_import_trainees(
 
     group_cache: dict[str, Group] = {}
     for row in parsed.get("data", []):
-        keymap = {_normalize_header(k): v for k, v in row.items()}
-
-        first_name = _normalize_text_value(_first_non_empty(keymap, FIRST_NAME_ALIASES))
-        last_name = _normalize_text_value(_first_non_empty(keymap, LAST_NAME_ALIASES))
-        middle_name = _normalize_text_value(_first_non_empty(keymap, MIDDLE_NAME_ALIASES))
-
-        if not first_name or not last_name:
-            full_name_raw = _normalize_text_value(_first_non_empty(keymap, FULL_NAME_ALIASES))
-            if full_name_raw:
-                parsed_last, parsed_first, parsed_middle = _split_full_name(full_name_raw)
-                last_name = last_name or parsed_last
-                first_name = first_name or parsed_first
-                middle_name = middle_name or parsed_middle
-
-        if not first_name or not last_name:
+        payload = _extract_trainee_payload(row, default_group_code, default_group_name)
+        if not payload:
             skipped_invalid += 1
             continue
 
-        birth_date = _parse_date_value(_first_non_empty(keymap, BIRTH_DATE_ALIASES))
-        source_row_number_raw = _first_non_empty(keymap, ROW_NUMBER_ALIASES)
-        source_row_number: int | None = None
-        try:
-            if source_row_number_raw is not None and _normalize_text_value(source_row_number_raw):
-                source_row_number = int(float(_normalize_text_value(source_row_number_raw)))
-        except ValueError:
-            source_row_number = None
-        employment_center = _normalize_text_value(_first_non_empty(keymap, EMPLOYMENT_CENTER_ALIASES)) or None
-        contract_number = _normalize_text_value(_first_non_empty(keymap, CONTRACT_NUMBER_ALIASES)) or None
-        certificate_number = _normalize_text_value(_first_non_empty(keymap, CERTIFICATE_NUMBER_ALIASES)) or None
-        certificate_issue_date = _parse_date_value(_first_non_empty(keymap, CERTIFICATE_ISSUE_DATE_ALIASES))
-        postal_index = _normalize_text_value(_first_non_empty(keymap, POSTAL_INDEX_ALIASES)) or None
-        address = _normalize_text_value(_first_non_empty(keymap, ADDRESS_ALIASES)) or None
-        passport_series = _normalize_text_value(_first_non_empty(keymap, PASSPORT_SERIES_ALIASES)) or None
-        passport_number = _normalize_text_value(_first_non_empty(keymap, PASSPORT_NUMBER_ALIASES)) or None
-        passport_issued_by = _normalize_text_value(_first_non_empty(keymap, PASSPORT_ISSUED_BY_ALIASES)) or None
-        passport_issued_date = _parse_date_value(_first_non_empty(keymap, PASSPORT_ISSUED_DATE_ALIASES))
-        tax_id = _normalize_text_value(_first_non_empty(keymap, TAX_ID_ALIASES)) or None
-        phone_value = _normalize_text_value(_first_non_empty(keymap, PHONE_ALIASES)) or None
-        status_value = _normalize_text_value(_first_non_empty(keymap, STATUS_ALIASES)).lower() or "active"
-        status = status_value if status_value in {"active", "completed", "expelled"} else "active"
-        group_code = _normalize_text_value(_first_non_empty(keymap, GROUP_CODE_ALIASES)) or default_group_code
-        group_name = _normalize_text_value(_first_non_empty(keymap, GROUP_NAME_ALIASES)) or default_group_name
+        first_name = payload["first_name"]
+        last_name = payload["last_name"]
+        middle_name = payload["middle_name"]
+        birth_date = payload["birth_date"]
+        source_row_number = payload["source_row_number"]
+        employment_center = payload["employment_center"]
+        contract_number = payload["contract_number"]
+        certificate_number = payload["certificate_number"]
+        certificate_issue_date = payload["certificate_issue_date"]
+        postal_index = payload["postal_index"]
+        address = payload["address"]
+        passport_series = payload["passport_series"]
+        passport_number = payload["passport_number"]
+        passport_issued_by = payload["passport_issued_by"]
+        passport_issued_date = payload["passport_issued_date"]
+        tax_id = payload["tax_id"]
+        phone_value = payload["phone_value"]
+        status = payload["status"]
+        group_code = payload["group_code"]
+        group_name = payload["group_name"]
 
-        existing = None
-        if contract_number:
-            existing = (
-                db.query(Trainee)
-                .filter(
-                    Trainee.branch_id == branch_id,
-                    Trainee.contract_number == contract_number,
-                )
-                .first()
-            )
-        if not existing:
-            normalized_first_name = first_name if not middle_name else f"{first_name} {middle_name}"
-            existing_query = db.query(Trainee).filter(
-                Trainee.branch_id == branch_id,
-                Trainee.first_name == normalized_first_name,
-                Trainee.last_name == last_name,
-            )
-            if birth_date:
-                existing_query = existing_query.filter(
-                    or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
-                )
-            existing = existing_query.first()
-        if not existing and middle_name:
-            fallback_query = db.query(Trainee).filter(
-                Trainee.branch_id == branch_id,
-                Trainee.last_name == last_name,
-                Trainee.first_name.ilike(f"{first_name}%"),
-            )
-            if birth_date:
-                fallback_query = fallback_query.filter(
-                    or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
-                )
-            existing = fallback_query.first()
+        existing, _match_reason = _find_existing_trainee(
+            db,
+            branch_id,
+            first_name,
+            last_name,
+            middle_name,
+            birth_date,
+            contract_number,
+        )
         if existing:
+            if update_existing_mode == "skip_existing":
+                skipped_existing += 1
+                continue
+
             changed = False
             changed = _set_plain_value(existing, "source_row_number", source_row_number, overwrite_existing) or changed
             changed = _set_plain_value(existing, "birth_date", birth_date, overwrite_existing) or changed

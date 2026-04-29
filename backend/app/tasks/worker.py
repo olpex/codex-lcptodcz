@@ -63,7 +63,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         db.commit()
 
         raw_import_mode = (job.result_payload or {}).get("import_mode") if isinstance(job.result_payload, dict) else None
-        import_mode = raw_import_mode if raw_import_mode in IMPORT_UPDATE_MODES else "missing_only"
+        import_mode = raw_import_mode if raw_import_mode in IMPORT_UPDATE_MODES else "skip_existing"
         parsed = parse_document_content(job.document.file_path, job.document.file_type)
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:

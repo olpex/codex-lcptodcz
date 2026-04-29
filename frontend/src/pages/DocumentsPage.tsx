@@ -20,7 +20,7 @@ type JobStatusPayload = {
 type NoticeTone = "info" | "success" | "error";
 type KnownJobType = "import" | "export";
 type KnownJobStatus = Job["status"];
-type ImportMode = "missing_only" | "overwrite";
+type ImportMode = "skip_existing" | "missing_only" | "overwrite";
 
 type KnownJob = {
   jobType: KnownJobType;
@@ -124,7 +124,12 @@ export function DocumentsPage() {
       setActiveJobStatus(job.status);
       setOutputDocumentId(null);
       showSuccess(job.message || "Імпорт запущено");
-      const modeLabel = mode === "overwrite" ? "перезапис існуючих" : "додавання нових/дозаповнення";
+      const modeLabel =
+        mode === "overwrite"
+          ? "перезапис існуючих"
+          : mode === "missing_only"
+            ? "додавання нових/дозаповнення"
+            : "пропуск наявних";
       setNotice({
         tone: "success",
         text: job.message || `Імпорт запущено (${modeLabel}). Перевірте статус задачі нижче.`
@@ -140,7 +145,7 @@ export function DocumentsPage() {
 
   const uploadImport = async (event: FormEvent) => {
     event.preventDefault();
-    await runImport("missing_only");
+    await runImport("skip_existing");
   };
 
   const runExport = async () => {
@@ -289,6 +294,14 @@ export function DocumentsPage() {
             className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
           >
             {isImporting ? "Завантаження..." : "Завантажити нові"}
+          </button>
+          <button
+            type="button"
+            disabled={isImporting}
+            className="rounded-lg border border-pine px-4 py-2 font-semibold text-pine disabled:opacity-50"
+            onClick={() => void runImport("missing_only")}
+          >
+            {isImporting ? "Дозаповнення..." : "Дозаповнити наявних"}
           </button>
           <button
             type="button"

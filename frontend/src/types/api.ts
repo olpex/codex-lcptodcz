@@ -155,6 +155,16 @@ export interface ImportPreviewGroup {
   already_exists: boolean;
 }
 
+export interface ImportDuplicatePreview {
+  row_number: number | null;
+  incoming_name: string;
+  contract_number: string | null;
+  group_code: string | null;
+  existing_id: number;
+  existing_name: string;
+  match_reason: string | null;
+}
+
 export interface ImportPreview {
   filename: string;
   file_type: string;
@@ -164,7 +174,11 @@ export interface ImportPreview {
   headers: string[];
   default_group_code: string | null;
   default_group_name: string | null;
+  new_count: number;
+  duplicate_count: number;
+  invalid_count: number;
   groups: ImportPreviewGroup[];
+  duplicate_preview: ImportDuplicatePreview[];
   preview: Record<string, string>[];
   warnings: string[];
 }

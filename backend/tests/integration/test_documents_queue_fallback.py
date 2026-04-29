@@ -4,6 +4,7 @@ from docx import Document as DocxDocument
 from openpyxl import Workbook
 
 from app.api.routes import documents as documents_route
+from app.models import Trainee
 
 
 def _docx_bytes(text: str) -> bytes:
@@ -65,6 +66,31 @@ def test_import_preview_summarizes_contract_xlsx(client, auth_headers):
     assert payload["sheet_name"] == "Додаток"
     assert payload["default_group_code"] == "46-26"
     assert payload["preview"][0]["ПІБ безробітного"] == "Іваненко Іван Іванович"
+
+
+def test_import_preview_reports_contract_duplicates(client, auth_headers, db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Іван Іванович",
+            last_name="Іваненко",
+            contract_number="46-26/001",
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/documents/import/preview",
+        headers=auth_headers,
+        files={"file": ("contracts.xlsx", _contracts_xlsx_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["duplicate_count"] == 1
+    assert payload["new_count"] == 0
+    assert payload["duplicate_preview"][0]["incoming_name"] == "Іваненко Іван Іванович"
 
 
 def test_import_preview_summarizes_schedule_docx(client, auth_headers):

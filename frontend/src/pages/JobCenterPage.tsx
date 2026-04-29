@@ -19,7 +19,7 @@ type JobStatusPayload = {
 
 type JobTypeFilter = "all" | "import" | "export";
 type JobStatusFilter = "all" | "queued" | "running" | "succeeded" | "failed";
-type ImportMode = "missing_only" | "overwrite";
+type ImportMode = "skip_existing" | "missing_only" | "overwrite";
 
 const REFRESH_INTERVAL_MS = 8000;
 const STATS_HISTORY_LIMIT = 12;
@@ -40,6 +40,13 @@ function toIsoDateRangeEnd(value: string): string {
   return `${value}T23:59:59Z`;
 }
 
+function formatDuplicateMatchReason(reason: string | null): string {
+  if (reason === "contract_number") return "№ договору";
+  if (reason === "name_birth_date") return "ПІБ і дата";
+  if (reason === "partial_name_birth_date") return "Частковий ПІБ";
+  return "—";
+}
+
 export function JobCenterPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -53,7 +60,7 @@ export function JobCenterPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<JobStatsSnapshot[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importMode, setImportMode] = useState<ImportMode>("missing_only");
+  const [importMode, setImportMode] = useState<ImportMode>("skip_existing");
   const [isImporting, setIsImporting] = useState(false);
   const [isPreviewingImport, setIsPreviewingImport] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -143,7 +150,7 @@ export function JobCenterPage() {
       const message =
         preview.import_kind === "schedule"
           ? `Перевірено: груп ${preview.groups.length}, занять ${preview.rows}`
-          : `Перевірено: рядків ${preview.rows}`;
+          : `Перевірено: нових ${preview.new_count}, дублікатів ${preview.duplicate_count}`;
       setImportNotice({ tone: preview.warnings.length ? "info" : "success", text: message });
       showSuccess(message);
     } catch (error) {
@@ -510,6 +517,7 @@ export function JobCenterPage() {
               onChange={(event) => setImportMode(event.target.value as ImportMode)}
               disabled={isImporting || isPreviewingImport}
             >
+              <option value="skip_existing">Пропустити наявні</option>
               <option value="missing_only">Додати нові та дозаповнити</option>
               <option value="overwrite">Оновити існуючі дані</option>
             </select>
@@ -548,6 +556,13 @@ export function JobCenterPage() {
               {importPreview.default_group_code && (
                 <span className="text-slate-600">Група: {importPreview.default_group_code}</span>
               )}
+              {importPreview.import_kind === "contracts" && (
+                <>
+                  <span className="text-slate-600">Нових: {importPreview.new_count}</span>
+                  <span className="text-slate-600">Дублікатів: {importPreview.duplicate_count}</span>
+                  <span className="text-slate-600">Некоректних: {importPreview.invalid_count}</span>
+                </>
+              )}
             </div>
             {importPreview.warnings.length > 0 && (
               <div className="mb-3 space-y-1 text-sm text-amber-800">
@@ -584,6 +599,37 @@ export function JobCenterPage() {
                         <td className="px-2 py-2">{group.subjects}</td>
                         <td className="px-2 py-2">{group.total_hours}</td>
                         <td className="px-2 py-2">{group.already_exists ? "Так" : "Ні"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {importPreview.duplicate_preview.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <div className="mb-2 text-sm font-semibold text-ink">Знайдені дублікати</div>
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-2 py-2">Рядок</th>
+                      <th className="px-2 py-2">У файлі</th>
+                      <th className="px-2 py-2">У базі</th>
+                      <th className="px-2 py-2">Договір</th>
+                      <th className="px-2 py-2">Група</th>
+                      <th className="px-2 py-2">Збіг</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.duplicate_preview.map((item) => (
+                      <tr key={`${item.row_number}-${item.existing_id}`} className="border-t border-slate-200">
+                        <td className="px-2 py-2">{item.row_number || "?"}</td>
+                        <td className="px-2 py-2 font-semibold text-ink">{item.incoming_name}</td>
+                        <td className="px-2 py-2 text-slate-700">
+                          #{item.existing_id} {item.existing_name}
+                        </td>
+                        <td className="px-2 py-2">{item.contract_number || "—"}</td>
+                        <td className="px-2 py-2">{item.group_code || "—"}</td>
+                        <td className="px-2 py-2">{formatDuplicateMatchReason(item.match_reason)}</td>
                       </tr>
                     ))}
                   </tbody>

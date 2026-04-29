@@ -11,7 +11,7 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same
 from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName
 from app.schemas.api import ExportRequest, ImportPreviewGroup, ImportPreviewResponse, JobResponse
 from app.services.audit import write_audit
-from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content
+from app.services.import_export import IMPORT_UPDATE_MODES, analyze_trainee_import_duplicates, parse_document_content
 from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, persist_upload
 from app.tasks.worker import process_export_job_task, process_import_job_task
@@ -80,11 +80,14 @@ def preview_import_document(
     try:
         if doc_type.value in {"xlsx", "csv"}:
             parsed = parse_document_content(temp_path, doc_type)
+            duplicate_analysis = analyze_trainee_import_duplicates(db, parsed, current_user.branch_id)
             warnings: list[str] = []
             if not parsed.get("headers"):
                 warnings.append("Не знайдено заголовків таблиці")
             if not parsed.get("rows"):
                 warnings.append("Не знайдено рядків для імпорту")
+            if duplicate_analysis.get("duplicate_count"):
+                warnings.append("Знайдено наявних слухачів. Перед імпортом оберіть дію для дублікатів.")
             return ImportPreviewResponse(
                 filename=file.filename or "uploaded_file",
                 file_type=doc_type.value,
@@ -94,6 +97,10 @@ def preview_import_document(
                 headers=[str(item) for item in parsed.get("headers", [])],
                 default_group_code=parsed.get("default_group_code"),
                 default_group_name=parsed.get("default_group_name"),
+                new_count=int(duplicate_analysis.get("new_count") or 0),
+                duplicate_count=int(duplicate_analysis.get("duplicate_count") or 0),
+                invalid_count=int(duplicate_analysis.get("invalid_count") or 0),
+                duplicate_preview=duplicate_analysis.get("duplicate_preview", []),
                 preview=_preview_rows(parsed.get("data", [])),
                 warnings=warnings,
             )
@@ -161,7 +168,7 @@ def import_document(
     db: DbSession,
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    update_existing_mode: str = Form(default="missing_only"),
+    update_existing_mode: str = Form(default="skip_existing"),
     x_idempotency_key: str | None = Header(default=None),
 ) -> JobResponse:
     doc_type = detect_document_type(file.filename)

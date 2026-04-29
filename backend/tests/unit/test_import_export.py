@@ -4,7 +4,7 @@ from openpyxl import Workbook
 
 from app.models import Trainee
 from app.models import DocumentType
-from app.services.import_export import parse_document_content, try_import_trainees
+from app.services.import_export import analyze_trainee_import_duplicates, parse_document_content, try_import_trainees
 
 
 def test_parse_xlsx_and_import_trainees(tmp_path: Path, db_session):
@@ -147,3 +147,56 @@ def test_import_overwrite_mode_updates_existing_non_empty_fields(tmp_path: Path,
     assert trainee.contract_number == "1499"
     assert trainee.group_code == "73-26"
     assert trainee.status == "active"
+
+
+def test_import_skip_existing_mode_does_not_update_duplicate(tmp_path: Path, db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Тетяна Анатоліївна",
+            last_name="Бортнік",
+            contract_number="1499",
+            status="completed",
+            group_code="OLD-GROUP",
+        )
+    )
+    db_session.commit()
+
+    file_path = tmp_path / "contracts_skip_existing.xlsx"
+    _create_contract_like_workbook(file_path)
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    result = try_import_trainees(db_session, parsed, "main", update_existing_mode="skip_existing")
+    assert result["inserted"] == 0
+    assert result["updated_existing"] == 0
+    assert result["skipped_existing"] == 1
+    assert result["update_existing_mode"] == "skip_existing"
+
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "1499").first()
+    assert trainee is not None
+    assert trainee.group_code == "OLD-GROUP"
+    assert trainee.status == "completed"
+
+
+def test_analyze_trainee_import_duplicates_reports_existing_rows(tmp_path: Path, db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Тетяна Анатоліївна",
+            last_name="Бортнік",
+            contract_number="1499",
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    file_path = tmp_path / "contracts_duplicate_preview.xlsx"
+    _create_contract_like_workbook(file_path)
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    result = analyze_trainee_import_duplicates(db_session, parsed, "main")
+    assert result["duplicate_count"] == 1
+    assert result["new_count"] == 0
+    assert result["invalid_count"] == 0
+    assert result["duplicate_preview"][0]["incoming_name"] == "Бортнік Тетяна Анатоліївна"
+    assert result["duplicate_preview"][0]["match_reason"] == "contract_number"
