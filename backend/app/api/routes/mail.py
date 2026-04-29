@@ -82,11 +82,11 @@ def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
     task_id: str | None = None
     inline_result: dict | None = None
     try:
-        task = poll_mailbox_task.delay()
+        task = poll_mailbox_task.delay(True)
         task_id = task.id
     except Exception:
         dispatch_mode = "inline"
-        inline_result = poll_mailbox_task.run()
+        inline_result = poll_mailbox_task.run(True)
 
     write_audit(
         db,
@@ -118,6 +118,13 @@ def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
     expected_header = f"Bearer {expected_secret}"
     if authorization != expected_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
+
+    if not settings.imap_auto_poll_enabled:
+        return {
+            "message": "Автоматичне IMAP-опитування вимкнено; пошту обробляє Apps Script",
+            "dispatch_mode": "disabled",
+            "result": {"processed": 0, "disabled": True},
+        }
 
     dispatch_mode = "queued"
     task_id: str | None = None

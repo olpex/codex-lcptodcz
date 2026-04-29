@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     imap_password: str = Field(default="")
     imap_mailbox: str = Field(default="INBOX")
     imap_branch_id: str = Field(default="main")
+    imap_auto_poll_enabled: bool = Field(default=False)
     imap_poll_interval_seconds: int = Field(default=300)
     imap_allowed_senders: str = Field(default="")
     imap_contract_sender_name: str = Field(default="Львівський центр ПТО ДСЗ")

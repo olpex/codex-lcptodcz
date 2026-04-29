@@ -12,12 +12,12 @@ celery_app.conf.task_routes = {
     "app.tasks.worker.process_export_job_task": {"queue": "report_export"},
 }
 
-celery_app.conf.beat_schedule = {
-    "poll-imap-mailbox": {
+celery_app.conf.beat_schedule = {}
+if settings.imap_auto_poll_enabled:
+    celery_app.conf.beat_schedule["poll-imap-mailbox"] = {
         "task": "app.tasks.worker.poll_mailbox_task",
         "schedule": schedule(run_every=settings.imap_poll_interval_seconds),
     }
-}
 
 celery_app.conf.timezone = "UTC"
 celery_app.autodiscover_tasks(["app.tasks"])

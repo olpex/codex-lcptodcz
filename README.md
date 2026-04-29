@@ -70,8 +70,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 Такі вкладення обробляються як імпорт слухачів (аналогічно ручному імпорту), а в задачах мають джерело `mail_auto_contracts`.
 
-Для Vercel додано cron (`vercel.json`), який викликає `GET /api/api/v1/mail/poll-cron` кожні 5 хвилин.
-Потрібно обов'язково задати `CRON_SECRET` у Vercel Environment Variables.
+Автоматичне IMAP-опитування за замовчуванням вимкнене (`IMAP_AUTO_POLL_ENABLED=false`), щоб не конкурувати з Google Apps Script і не знімати ознаку непрочитаного листа. Якщо потрібно повернути IMAP-полер, увімкніть `IMAP_AUTO_POLL_ENABLED=true` і задайте `CRON_SECRET` у Vercel Environment Variables.
 
 Якщо IMAP для Gmail недоступний (немає `App Password`), використовуйте інтеграцію через Google Apps Script:
 

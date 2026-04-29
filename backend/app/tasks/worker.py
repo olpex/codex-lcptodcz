@@ -4,6 +4,7 @@ from celery.utils.log import get_task_logger
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Document, ExportJob, ImportJob, JobStatus, OCRResult
 from app.services.import_export import (
@@ -166,7 +167,9 @@ def process_export_job_task(self, export_job_id: int) -> dict:
     retry_backoff=True,
     retry_kwargs={"max_retries": 5},
 )
-def poll_mailbox_task(self) -> dict:
+def poll_mailbox_task(self, force: bool = False) -> dict:
+    if not force and not settings.imap_auto_poll_enabled:
+        return {"processed": 0, "disabled": True}
     db = _get_db()
     try:
         return ingest_mailbox(db)
