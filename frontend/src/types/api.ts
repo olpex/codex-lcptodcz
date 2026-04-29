@@ -143,6 +143,32 @@ export interface JobListItem {
   output_file_name?: string | null;
 }
 
+export interface ImportPreviewGroup {
+  code: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+  lessons: number;
+  teachers: number;
+  subjects: number;
+  total_hours: number;
+  already_exists: boolean;
+}
+
+export interface ImportPreview {
+  filename: string;
+  file_type: string;
+  import_kind: string;
+  rows: number;
+  sheet_name: string | null;
+  headers: string[];
+  default_group_code: string | null;
+  default_group_name: string | null;
+  groups: ImportPreviewGroup[];
+  preview: Record<string, string>[];
+  warnings: string[];
+}
+
 export interface Draft {
   id: number;
   document_id: number;

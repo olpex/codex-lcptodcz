@@ -10,7 +10,7 @@ import { formatImportSource, formatJobStatus, formatJobType } from "../i18n/stat
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { Job, JobListItem } from "../types/api";
+import type { ImportPreview, Job, JobListItem } from "../types/api";
 
 type JobStatusPayload = {
   job_type: "import" | "export";
@@ -55,6 +55,8 @@ export function JobCenterPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importMode, setImportMode] = useState<ImportMode>("missing_only");
   const [isImporting, setIsImporting] = useState(false);
+  const [isPreviewingImport, setIsPreviewingImport] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
@@ -122,6 +124,38 @@ export function JobCenterPage() {
     return `Слухачі: додано ${inserted}, оновлено ${updated}, прив'язок ${memberships}, пропущено ${skippedExisting + skippedInvalid}`;
   };
 
+  const previewImport = async () => {
+    if (!importFile) {
+      const message = "Оберіть файл для перевірки";
+      setImportNotice({ tone: "error", text: message });
+      showError(message);
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", importFile);
+    setIsPreviewingImport(true);
+    try {
+      const preview = await request<ImportPreview>("/documents/import/preview", {
+        method: "POST",
+        body: formData
+      });
+      setImportPreview(preview);
+      const message =
+        preview.import_kind === "schedule"
+          ? `Перевірено: груп ${preview.groups.length}, занять ${preview.rows}`
+          : `Перевірено: рядків ${preview.rows}`;
+      setImportNotice({ tone: preview.warnings.length ? "info" : "success", text: message });
+      showSuccess(message);
+    } catch (error) {
+      const message = (error as Error).message;
+      setImportPreview(null);
+      setImportNotice({ tone: "error", text: message });
+      showError(message);
+    } finally {
+      setIsPreviewingImport(false);
+    }
+  };
+
   const uploadImport = async () => {
     if (!importFile) {
       const message = "Оберіть XLSX/CSV договір або DOCX розклад";
@@ -140,6 +174,7 @@ export function JobCenterPage() {
       });
       setJobType("import");
       setJobStatus("all");
+      setImportPreview(null);
       setImportNotice({ tone: "success", text: job.message || `Імпорт #${job.id} створено` });
       showSuccess(job.message || `Імпорт #${job.id} створено`);
       const data = await request<JobListItem[]>("/jobs?limit=200&job_type=import");
@@ -455,14 +490,17 @@ export function JobCenterPage() {
   return (
     <div className="space-y-5">
       <Panel title="1.1 Центр імпорту">
-        <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_auto]">
+        <div className="mb-4 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_auto_auto]">
           <FormField label="Файл" helperText="Договір XLS/XLSX/CSV або розклад DOCX">
             <input
               type="file"
               className={formControlClass}
               accept=".xls,.xlsx,.csv,.docx"
-              onChange={(event) => setImportFile(event.target.files?.[0] || null)}
-              disabled={isImporting}
+              onChange={(event) => {
+                setImportFile(event.target.files?.[0] || null);
+                setImportPreview(null);
+              }}
+              disabled={isImporting || isPreviewingImport}
             />
           </FormField>
           <FormField label="Режим імпорту" helperText="Як обробляти наявні записи">
@@ -470,7 +508,7 @@ export function JobCenterPage() {
               className={formControlClass}
               value={importMode}
               onChange={(event) => setImportMode(event.target.value as ImportMode)}
-              disabled={isImporting}
+              disabled={isImporting || isPreviewingImport}
             >
               <option value="missing_only">Додати нові та дозаповнити</option>
               <option value="overwrite">Оновити існуючі дані</option>
@@ -479,15 +517,107 @@ export function JobCenterPage() {
           <div className="flex items-end">
             <button
               type="button"
+              className="w-full rounded-lg border border-pine px-4 py-2 font-semibold text-pine disabled:opacity-50"
+              onClick={previewImport}
+              disabled={isImporting || isPreviewingImport}
+            >
+              {isPreviewingImport ? "Перевіряємо..." : "2.3 Перевірити"}
+            </button>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
               className="w-full rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
               onClick={uploadImport}
-              disabled={isImporting}
+              disabled={isImporting || isPreviewingImport}
             >
               {isImporting ? "Завантажуємо..." : "2.1 Завантажити файл"}
             </button>
           </div>
         </div>
         {importNotice && <InlineNotice className="mb-4" tone={importNotice.tone} text={importNotice.text} />}
+        {importPreview && (
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+              <span className="font-semibold text-ink">{importPreview.filename}</span>
+              <span className="rounded bg-white px-2 py-1 text-xs font-semibold uppercase text-slate-600">
+                {importPreview.import_kind === "schedule" ? "Розклад" : "Договори"}
+              </span>
+              <span className="text-slate-600">Рядків/занять: {importPreview.rows}</span>
+              {importPreview.sheet_name && <span className="text-slate-600">Аркуш: {importPreview.sheet_name}</span>}
+              {importPreview.default_group_code && (
+                <span className="text-slate-600">Група: {importPreview.default_group_code}</span>
+              )}
+            </div>
+            {importPreview.warnings.length > 0 && (
+              <div className="mb-3 space-y-1 text-sm text-amber-800">
+                {importPreview.warnings.map((warning) => (
+                  <div key={warning}>{warning}</div>
+                ))}
+              </div>
+            )}
+            {importPreview.groups.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-2 py-2">Група</th>
+                      <th className="px-2 py-2">Період</th>
+                      <th className="px-2 py-2">Занять</th>
+                      <th className="px-2 py-2">Викладачів</th>
+                      <th className="px-2 py-2">Предметів</th>
+                      <th className="px-2 py-2">Годин</th>
+                      <th className="px-2 py-2">Є в базі</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.groups.map((group) => (
+                      <tr key={`${group.code}-${group.name}`} className="border-t border-slate-200">
+                        <td className="px-2 py-2 font-semibold text-ink">
+                          {group.code} {group.name}
+                        </td>
+                        <td className="px-2 py-2 text-slate-700">
+                          {group.start_date || "?"} - {group.end_date || "?"}
+                        </td>
+                        <td className="px-2 py-2">{group.lessons}</td>
+                        <td className="px-2 py-2">{group.teachers}</td>
+                        <td className="px-2 py-2">{group.subjects}</td>
+                        <td className="px-2 py-2">{group.total_hours}</td>
+                        <td className="px-2 py-2">{group.already_exists ? "Так" : "Ні"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {importPreview.preview.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase text-slate-500">
+                    <tr>
+                      {(importPreview.headers.length ? importPreview.headers : Object.keys(importPreview.preview[0])).map((header) => (
+                        <th key={header} className="px-2 py-2">
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.preview.map((row, index) => (
+                      <tr key={index} className="border-t border-slate-200">
+                        {(importPreview.headers.length ? importPreview.headers : Object.keys(row)).map((header) => (
+                          <td key={header} className="max-w-64 truncate px-2 py-2 text-slate-700">
+                            {row[header] || ""}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
         <StickyActionBar className="mb-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="block">

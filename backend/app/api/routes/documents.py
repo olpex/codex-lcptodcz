@@ -1,15 +1,18 @@
 from uuid import uuid4
 from pathlib import Path
+import shutil
+import tempfile
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from celery.utils.log import get_task_logger
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Document, ExportJob, ImportJob, JobStatus, RoleName
-from app.schemas.api import ExportRequest, JobResponse
+from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName
+from app.schemas.api import ExportRequest, ImportPreviewGroup, ImportPreviewResponse, JobResponse
 from app.services.audit import write_audit
-from app.services.import_export import IMPORT_UPDATE_MODES
+from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content
+from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, persist_upload
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
@@ -43,6 +46,109 @@ def _with_dispatch_notice(job: JobResponse, dispatch_mode: str) -> JobResponse:
         suffix = f" {job.message}" if job.message else ""
         job.message = f"Черга недоступна, а inline-виконання завершилось помилкою.{suffix}"
     return job
+
+
+def _preview_rows(rows: list[dict], limit: int = 10) -> list[dict[str, str]]:
+    preview: list[dict[str, str]] = []
+    for row in rows[:limit]:
+        preview.append({str(key): "" if value is None else str(value) for key, value in row.items()})
+    return preview
+
+
+def _write_upload_to_temp(file: UploadFile) -> str:
+    suffix = f".{file.filename.rsplit('.', 1)[1].lower()}" if file.filename and "." in file.filename else ""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        return tmp.name
+
+
+@router.post(
+    "/import/preview",
+    response_model=ImportPreviewResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def preview_import_document(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+) -> ImportPreviewResponse:
+    doc_type = detect_document_type(file.filename)
+    if doc_type.value not in {"xlsx", "pdf", "docx", "csv"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються .xls/.xlsx, .pdf, .docx, .csv")
+
+    temp_path = _write_upload_to_temp(file)
+    try:
+        if doc_type.value in {"xlsx", "csv"}:
+            parsed = parse_document_content(temp_path, doc_type)
+            warnings: list[str] = []
+            if not parsed.get("headers"):
+                warnings.append("Не знайдено заголовків таблиці")
+            if not parsed.get("rows"):
+                warnings.append("Не знайдено рядків для імпорту")
+            return ImportPreviewResponse(
+                filename=file.filename or "uploaded_file",
+                file_type=doc_type.value,
+                import_kind="contracts",
+                rows=int(parsed.get("rows") or 0),
+                sheet_name=parsed.get("sheet_name"),
+                headers=[str(item) for item in parsed.get("headers", [])],
+                default_group_code=parsed.get("default_group_code"),
+                default_group_name=parsed.get("default_group_name"),
+                preview=_preview_rows(parsed.get("data", [])),
+                warnings=warnings,
+            )
+
+        if doc_type.value == "docx":
+            try:
+                schedules = parse_schedule_docx(temp_path)
+            except Exception as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"DOCX не схожий на розклад: {exc}") from exc
+
+            groups: list[ImportPreviewGroup] = []
+            for item in schedules:
+                entries = item.get("entries") or []
+                group_code = str(item.get("group_code") or "")
+                existing_group = (
+                    db.query(Group)
+                    .filter(Group.branch_id == current_user.branch_id, Group.code == group_code)
+                    .first()
+                )
+                groups.append(
+                    ImportPreviewGroup(
+                        code=group_code,
+                        name=str(item.get("group_name") or ""),
+                        start_date=item.get("start_date"),
+                        end_date=item.get("end_date"),
+                        lessons=len(entries),
+                        teachers=len({entry.get("teacher_name") for entry in entries if entry.get("teacher_name")}),
+                        subjects=len({entry.get("subject_name") for entry in entries if entry.get("subject_name")}),
+                        total_hours=round(float(item.get("group_total_hours") or 0), 2),
+                        already_exists=existing_group is not None,
+                    )
+                )
+            return ImportPreviewResponse(
+                filename=file.filename or "uploaded_file",
+                file_type=doc_type.value,
+                import_kind="schedule",
+                rows=sum(group.lessons for group in groups),
+                groups=groups,
+                warnings=[] if groups else ["У документі не знайдено груп для імпорту"],
+            )
+
+        parsed = parse_document_content(temp_path, doc_type)
+        return ImportPreviewResponse(
+            filename=file.filename or "uploaded_file",
+            file_type=doc_type.value,
+            import_kind="text",
+            rows=int(parsed.get("rows") or 0),
+            preview=[{"text_preview": str(parsed.get("text_preview") or "")[:1000]}],
+            warnings=["PDF/DOCX-текст розпізнано, але автоматичний імпорт підтримує договори XLS/XLSX/CSV і розклади DOCX"],
+        )
+    finally:
+        try:
+            Path(temp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @router.post(

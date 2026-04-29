@@ -399,6 +399,32 @@ class ExportRequest(BaseModel):
     end_date: date | None = None
 
 
+class ImportPreviewGroup(BaseModel):
+    code: str
+    name: str
+    start_date: str | None = None
+    end_date: str | None = None
+    lessons: int = 0
+    teachers: int = 0
+    subjects: int = 0
+    total_hours: float = 0
+    already_exists: bool = False
+
+
+class ImportPreviewResponse(BaseModel):
+    filename: str
+    file_type: str
+    import_kind: str
+    rows: int = 0
+    sheet_name: str | None = None
+    headers: list[str] = Field(default_factory=list)
+    default_group_code: str | None = None
+    default_group_name: str | None = None
+    groups: list[ImportPreviewGroup] = Field(default_factory=list)
+    preview: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class JobResponse(ORMModel):
     id: int
     status: JobStatus
