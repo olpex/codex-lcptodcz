@@ -76,6 +76,14 @@ export interface ActiveGroupBetweenDates {
   teachers: GroupTeacherHours[];
 }
 
+export interface CompletedGroupSummary {
+  name: string;
+  completed_count: number;
+  first_completed_date: string | null;
+  last_completed_date: string | null;
+  group_codes: string[];
+}
+
 export interface Teacher {
   id: number;
   first_name: string;

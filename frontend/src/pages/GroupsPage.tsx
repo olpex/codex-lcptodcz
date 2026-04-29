@@ -8,24 +8,30 @@ import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ActiveGroupBetweenDates, Group } from "../types/api";
+import type { ActiveGroupBetweenDates, CompletedGroupSummary, Group } from "../types/api";
 
 export function GroupsPage() {
   const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
   const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
+  const [completedSummaries, setCompletedSummaries] = useState<CompletedGroupSummary[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [capacity, setCapacity] = useState(25);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [completedDateFrom, setCompletedDateFrom] = useState("");
+  const [completedDateTo, setCompletedDateTo] = useState("");
+  const [completedSearch, setCompletedSearch] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
+  const [isLoadingCompletedSummary, setIsLoadingCompletedSummary] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [completedSummaryError, setCompletedSummaryError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
 
@@ -163,6 +169,44 @@ export function GroupsPage() {
     []
   );
 
+  const completedSummaryColumns = useMemo<DataTableColumn<CompletedGroupSummary>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Назва / напрямок",
+        render: (item) => item.name,
+        sortAccessor: (item) => item.name
+      },
+      {
+        key: "completed_count",
+        header: "Проведено груп",
+        render: (item) => <span className="font-semibold text-pine">{item.completed_count}</span>,
+        sortAccessor: (item) => item.completed_count
+      },
+      {
+        key: "period",
+        header: "Період завершення",
+        render: (item) =>
+          item.first_completed_date && item.last_completed_date
+            ? `${item.first_completed_date} — ${item.last_completed_date}`
+            : "Без дати завершення",
+        sortAccessor: (item) => item.last_completed_date || ""
+      },
+      {
+        key: "group_codes",
+        header: "Коди груп",
+        render: (item) => item.group_codes.join(", "),
+        sortAccessor: (item) => item.group_codes.join(" ")
+      }
+    ],
+    []
+  );
+
+  const completedSummaryTotal = useMemo(
+    () => completedSummaries.reduce((total, item) => total + item.completed_count, 0),
+    [completedSummaries]
+  );
+
   const loadGroups = async () => {
     setIsLoading(true);
     try {
@@ -188,6 +232,7 @@ export function GroupsPage() {
 
   useEffect(() => {
     loadGroups();
+    loadCompletedSummary();
   }, []);
 
   usePageRefresh(loadGroups);
@@ -222,6 +267,43 @@ export function GroupsPage() {
       showError(message);
     } finally {
       setIsFiltering(false);
+    }
+  };
+
+  const validateCompletedSummaryPeriod = () => {
+    if (completedDateFrom && completedDateTo && completedDateTo < completedDateFrom) {
+      return "Дата завершення має бути не раніше дати початку";
+    }
+    return null;
+  };
+
+  const loadCompletedSummary = async (showToast = false) => {
+    const validationMessage = validateCompletedSummaryPeriod();
+    if (validationMessage) {
+      setCompletedSummaryError(validationMessage);
+      showError(validationMessage);
+      return;
+    }
+    setIsLoadingCompletedSummary(true);
+    try {
+      const params = new URLSearchParams();
+      if (completedDateFrom) params.set("date_from", completedDateFrom);
+      if (completedDateTo) params.set("date_to", completedDateTo);
+      if (completedSearch.trim()) params.set("search", completedSearch.trim());
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+      const data = await request<CompletedGroupSummary[]>(`/groups/completed-summary${suffix}`);
+      setCompletedSummaries(data);
+      setCompletedSummaryError(null);
+      if (showToast) {
+        const totalCompleted = data.reduce((total, item) => total + item.completed_count, 0);
+        showSuccess(data.length ? `Напрямків: ${data.length}, проведено груп: ${totalCompleted}` : "Проведених груп не знайдено");
+      }
+    } catch (error) {
+      const message = (error as Error).message;
+      setCompletedSummaryError(message);
+      showError(message);
+    } finally {
+      setIsLoadingCompletedSummary(false);
     }
   };
 
@@ -472,6 +554,63 @@ export function GroupsPage() {
           </form>
         </Panel>
       )}
+      <Panel title="Проведені групи за напрямками">
+        <div className="grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_auto]">
+          <FormField label="Назва / напрямок" helperText="Можна залишити порожнім">
+            <input
+              className={formControlClass}
+              placeholder="Наприклад: Штучний інтелект"
+              value={completedSearch}
+              onChange={(event) => setCompletedSearch(event.target.value)}
+            />
+          </FormField>
+          <FormField label="Завершено з" helperText="Початок періоду">
+            <input
+              type="date"
+              className={formControlClass}
+              value={completedDateFrom}
+              onChange={(event) => setCompletedDateFrom(event.target.value)}
+            />
+          </FormField>
+          <FormField label="Завершено по" helperText="Кінець періоду">
+            <input
+              type="date"
+              className={formControlClass}
+              value={completedDateTo}
+              onChange={(event) => setCompletedDateTo(event.target.value)}
+            />
+          </FormField>
+          <div className="flex items-end">
+            <button
+              type="button"
+              className="w-full rounded-lg bg-pine px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={isLoadingCompletedSummary}
+              onClick={() => loadCompletedSummary(true)}
+            >
+              {isLoadingCompletedSummary ? "Рахуємо..." : "Порахувати"}
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-700">
+          <span className="rounded-md bg-slate-100 px-2 py-1 font-semibold">Напрямків: {completedSummaries.length}</span>
+          <span className="rounded-md bg-slate-100 px-2 py-1 font-semibold">Проведено груп: {completedSummaryTotal}</span>
+        </div>
+        <div className="mt-4">
+          <DataTable
+            data={completedSummaries}
+            columns={completedSummaryColumns}
+            rowKey={(item) => item.name}
+            isLoading={isLoadingCompletedSummary}
+            errorText={completedSummaryError}
+            onRetry={() => loadCompletedSummary(true)}
+            emptyText="Проведених груп не знайдено"
+            search={{
+              placeholder: "Пошук у результатах за назвою або кодом",
+              getSearchText: (item) => `${item.name} ${item.group_codes.join(" ")}`
+            }}
+          />
+        </div>
+      </Panel>
       <Panel title="Групи, що навчалися у періоді">
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
           <FormField label="Дата з" helperText="Початок періоду">

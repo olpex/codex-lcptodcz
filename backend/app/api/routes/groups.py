@@ -8,9 +8,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee
+from app.models import Group, GroupMembership, GroupStatus, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee
 from app.schemas.api import (
     ActiveGroupBetweenDatesResponse,
+    CompletedGroupSummaryResponse,
     EnrollRequest,
     ExpelRequest,
     GroupCreate,
@@ -119,6 +120,64 @@ def list_active_groups_between_dates(
     current_user: CurrentUser,
 ) -> list[ActiveGroupBetweenDatesResponse]:
     return _active_groups_between_dates(db, current_user.branch_id, date_from, date_to)
+
+
+@router.get("/completed-summary", response_model=list[CompletedGroupSummaryResponse])
+def list_completed_group_summary(
+    db: DbSession,
+    current_user: CurrentUser,
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=255),
+) -> list[CompletedGroupSummaryResponse]:
+    if date_from and date_to:
+        _validate_period(date_from, date_to)
+
+    query = apply_branch_scope(db.query(Group), Group, current_user.branch_id).filter(
+        Group.status == GroupStatus.COMPLETED
+    )
+    if date_from:
+        query = query.filter(Group.end_date.is_not(None), Group.end_date >= date_from)
+    if date_to:
+        query = query.filter(Group.end_date.is_not(None), Group.end_date <= date_to)
+
+    search_value = (search or "").strip().lower()
+    rows = query.order_by(Group.name.asc(), Group.end_date.asc(), Group.code.asc()).all()
+    grouped: dict[str, dict] = {}
+
+    for group in rows:
+        normalized_name = " ".join(group.name.split())
+        if search_value and search_value not in normalized_name.lower():
+            continue
+        key = normalized_name.lower()
+        bucket = grouped.setdefault(
+            key,
+            {
+                "name": normalized_name,
+                "completed_count": 0,
+                "dates": [],
+                "group_codes": [],
+            },
+        )
+        bucket["completed_count"] += 1
+        if group.end_date:
+            bucket["dates"].append(group.end_date)
+        bucket["group_codes"].append(group.code)
+
+    summaries: list[CompletedGroupSummaryResponse] = []
+    for bucket in grouped.values():
+        dates = bucket["dates"]
+        summaries.append(
+            CompletedGroupSummaryResponse(
+                name=bucket["name"],
+                completed_count=bucket["completed_count"],
+                first_completed_date=min(dates) if dates else None,
+                last_completed_date=max(dates) if dates else None,
+                group_codes=sorted(bucket["group_codes"]),
+            )
+        )
+
+    return sorted(summaries, key=lambda item: (-item.completed_count, item.name.lower()))
 
 
 @router.get("/active-between/export")
