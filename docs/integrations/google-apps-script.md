@@ -46,10 +46,11 @@ const MAX_QUEUE_ITEMS   = 100;
 const MAX_PROCESSED_IDS = 500;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
 const PROCESS_READ_THREADS_WITH_ATTACHMENTS = true;
+const SKIP_DOCX_NAME_TOKENS = ["список", "слухач"];
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 queue-v8-read-labeled-fallback");
+  Logger.log("Версія скрипта: 2026-04-29 queue-v9-skip-bad-docx");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -133,7 +134,10 @@ function processIncomingEmailsLocked_() {
     rememberProcessedMessage_(message.getId());
     Logger.log("✅ Лист оброблено: " + message.getSubject());
   } else {
-    if (thread.getMessageCount() === 1) {
+    const pendingState = removePendingMessage_(message.getId(), thread.getId());
+    rememberProcessedMessage_(message.getId());
+    Logger.log("Черга після помилки: залишилось=" + pendingState.remaining + ", у цьому треді ще=" + pendingState.hasMoreInThread);
+    if (!pendingState.hasMoreInThread) {
       thread.addLabel(failLabel);
     }
     Logger.log("❌ Лист позначено як помилковий: " + message.getSubject());
@@ -249,8 +253,8 @@ function processOneMessage_(message) {
     const isContract = (ext === "xlsx" || ext === "xls") &&
                        (nameLow.includes("договор") || subjectLow.includes("договор"));
 
-    // Розклади: будь-який .docx
-    const isSchedule = ext === "docx";
+    // Розклади: .docx, але не службові списки слухачів
+    const isSchedule = ext === "docx" && !isSkippedDocxFile_(nameLow);
 
     if (!isContract && !isSchedule) {
       Logger.log("Пропущено (не підходить): " + fileName);
@@ -504,8 +508,14 @@ function messageHasMatchedAttachments_(message) {
     const nameLow = fileName.toLowerCase();
     const isContract = (ext === "xlsx" || ext === "xls") &&
                        (nameLow.includes("договор") || subjectLow.includes("договор"));
-    const isSchedule = ext === "docx";
+    const isSchedule = ext === "docx" && !isSkippedDocxFile_(nameLow);
     return isContract || isSchedule;
+  });
+}
+
+function isSkippedDocxFile_(nameLow) {
+  return SKIP_DOCX_NAME_TOKENS.some(function(token) {
+    return (nameLow || "").indexOf(token) !== -1;
   });
 }
 
