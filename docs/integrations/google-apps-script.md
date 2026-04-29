@@ -42,11 +42,10 @@ const SCAN_PAGE_SIZE    = 50;
 const PENDING_QUEUE_KEY = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 100;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = true;
-const ACCEPT_ANY_EXCEL_FROM_EXPECTED_SENDER = true;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-04-29 queue-v6-forward");
+  Logger.log("Версія скрипта: 2026-04-28 queue-v5");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -82,32 +81,6 @@ function installSingleTrigger() {
 function clearPendingQueue() {
   PropertiesService.getScriptProperties().deleteProperty(PENDING_QUEUE_KEY);
   Logger.log("Внутрішню чергу очищено.");
-}
-
-function debugUnreadForwardCandidates() {
-  for (let start = 0; start < Math.min(SCAN_THREAD_LIMIT, 100); start += SCAN_PAGE_SIZE) {
-    const threads = GmailApp.getInboxThreads(start, SCAN_PAGE_SIZE);
-    if (!threads.length) {
-      break;
-    }
-
-    threads.forEach(function(thread) {
-      thread.getMessages().forEach(function(message) {
-        if (!message.isUnread()) {
-          return;
-        }
-        Logger.log("Unread-кандидат: " + describeMessage_(message));
-        const attachments = message.getAttachments({
-          includeInlineImages: false,
-          includeAttachments: true,
-        });
-        attachments.forEach(function(att) {
-          const match = getAttachmentMatch_(message, att);
-          Logger.log("  file='" + match.fileName + "', ext='" + match.ext + "', matched=" + match.matched + ", reason=" + match.reason);
-        });
-      });
-    });
-  }
 }
 
 function processIncomingEmailsLocked_() {
@@ -243,15 +216,24 @@ function processOneMessage_(message) {
   });
 
   attachments.forEach(function(att) {
-    const match = getAttachmentMatch_(message, att);
-    const fileName = match.fileName;
+    const fileName = (att.getName() || "").trim();
+    const ext      = getExtension_(fileName);
+    const nameLow  = fileName.toLowerCase();
 
-    if (!match.matched) {
-      Logger.log("Пропущено (не підходить): " + fileName + " reason=" + match.reason);
+    const subjectLow = message.getSubject().toLowerCase();
+
+    // Договори: .xlsx з "договор" в назві або в темі
+    const isContract = (ext === "xlsx" || ext === "xls") &&
+                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+
+    // Розклади: будь-який .docx
+    const isSchedule = ext === "docx";
+
+    if (!isContract && !isSchedule) {
+      Logger.log("Пропущено (не підходить): " + fileName);
       return;
     }
 
-    Logger.log("Вкладення підходить: " + fileName + " reason=" + match.reason);
     hasMatchedAttachment = true;
 
     const bytes = att.getBytes();
@@ -433,18 +415,6 @@ function isExpectedSender_(message) {
   return from.indexOf(SENDER_EMAIL.toLowerCase()) !== -1;
 }
 
-function isForwardedSubject_(subjectLow) {
-  const subject = (subjectLow || "").trim().toLowerCase();
-  return subject.indexOf("fwd:") === 0 ||
-         subject.indexOf("fw:") === 0 ||
-         subject.indexOf("пересл") !== -1 ||
-         subject.indexOf("перенаправ") !== -1;
-}
-
-function hasGroupCode_(value) {
-  return /(\d{1,4}\s*[-/]\s*\d{1,4})/.test(value || "");
-}
-
 function messageHasAttachments_(message) {
   const attachments = message.getAttachments({
     includeInlineImages: false,
@@ -454,48 +424,21 @@ function messageHasAttachments_(message) {
 }
 
 function messageHasMatchedAttachments_(message) {
+  const subjectLow = (message.getSubject() || "").toLowerCase();
   const attachments = message.getAttachments({
     includeInlineImages: false,
     includeAttachments: true,
   });
 
   return attachments.some(function(att) {
-    return getAttachmentMatch_(message, att).matched;
+    const fileName = (att.getName() || "").trim();
+    const ext = getExtension_(fileName);
+    const nameLow = fileName.toLowerCase();
+    const isContract = (ext === "xlsx" || ext === "xls") &&
+                       (nameLow.includes("договор") || subjectLow.includes("договор"));
+    const isSchedule = ext === "docx";
+    return isContract || isSchedule;
   });
-}
-
-function getAttachmentMatch_(message, att) {
-  const fileName = (att.getName() || "").trim();
-  const ext = getExtension_(fileName);
-  const nameLow = fileName.toLowerCase();
-  const subjectLow = (message.getSubject() || "").toLowerCase();
-  const isExcel = ext === "xlsx" || ext === "xls";
-  const isExpectedSender = isExpectedSender_(message);
-  const isForwarded = isForwardedSubject_(subjectLow);
-  const hasContractKeyword = nameLow.includes("договор") || subjectLow.includes("договор");
-  const hasGroupCode = hasGroupCode_(fileName);
-
-  if (ext === "docx") {
-    return { matched: true, reason: "docx schedule", fileName: fileName, ext: ext };
-  }
-
-  if (!isExcel) {
-    return { matched: false, reason: "not docx/xls/xlsx", fileName: fileName, ext: ext };
-  }
-
-  if (hasContractKeyword) {
-    return { matched: true, reason: "excel contract keyword", fileName: fileName, ext: ext };
-  }
-
-  if (ACCEPT_ANY_EXCEL_FROM_EXPECTED_SENDER && isExpectedSender) {
-    return { matched: true, reason: "excel from expected sender", fileName: fileName, ext: ext };
-  }
-
-  if (ALLOW_THREAD_ATTACHMENT_FALLBACK && isForwarded && hasGroupCode) {
-    return { matched: true, reason: "forwarded excel with group code", fileName: fileName, ext: ext };
-  }
-
-  return { matched: false, reason: "excel without contract keyword or trusted forward marker", fileName: fileName, ext: ext };
 }
 
 function findExpectedSenderMessagesWithMatchedAttachments_(messages) {
@@ -561,17 +504,12 @@ function getOrCreateLabel_(labelName) {
 
 ## 3) Як перевірити
 
-1. Надішліть або перешліть тестовий лист на `lcptodcz.audyt@gmail.com`:
+1. Надішліть тестовий лист на `lcptodcz.audyt@gmail.com`:
    - від `lcptodcz@gmail.com`,
-   - **кілька вкладень**: наприклад `Розклад_46-26.docx` + `73-26.xlsx`.
-2. Якщо лист був forwarded і скрипт його “прочитав, але не обробив”, спочатку запустіть `debugUnreadForwardCandidates()` вручну.
-3. В Google Apps Script → **Виконання** перевірте логи. Для кожного вкладення має бути рядок:
-   - `matched=true` для файлів, які скрипт має обробити;
-   - `reason=excel from expected sender` для Excel-файлів від `lcptodcz@gmail.com` без слова `договор`;
-   - `reason=forwarded excel with group code` для forwarded Excel-файлів з кодом групи у назві.
-4. Запустіть `processIncomingEmails()` вручну або зачекайте тригер (5 хв).
-5. В логах має бути рядок `✅ Успіх` для **кожного** файлу.
-6. Перевірте `/schedule` або `/jobs` — розклад/імпорт мають з'явитися в системі.
+   - **кілька вкладень**: наприклад `Розклад_46-26.docx` + `Розклад_47-26.docx`.
+2. Запустіть `processIncomingEmails()` вручну або зачекайте тригер (5 хв).
+3. В Google Apps Script → **Виконання** перевірте логи — має бути рядок `✅ Успіх` для **кожного** файлу.
+4. Перевірте `/schedule` — обидві групи мають з'явитися в календарі.
 
 ## 4) Типові помилки
 
