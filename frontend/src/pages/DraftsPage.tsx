@@ -292,6 +292,9 @@ export function DraftsPage() {
           errorText={loadError}
           onRetry={load}
           emptyText="Листи відсутні"
+          emptyActionLabel="Оновити листи"
+          onEmptyAction={load}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук за відправником або темою",
             getSearchText: (message) => `${message.sender} ${message.subject} ${message.status} ${formatMailStatus(message.status)}`
@@ -335,6 +338,9 @@ export function DraftsPage() {
             errorText={loadError}
             onRetry={load}
             emptyText="Чернетки відсутні"
+            emptyActionLabel="Оновити чернетки"
+            onEmptyAction={load}
+            emptyActionDisabled={isLoading}
             search={{
               placeholder: "Пошук за типом або статусом",
               getSearchText: (draft) => `${draft.id} ${draft.draft_type} ${draft.status} ${formatDraftStatus(draft.status)}`

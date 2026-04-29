@@ -762,6 +762,9 @@ export function JobCenterPage() {
           errorText={loadError}
           onRetry={() => loadJobs(true)}
           emptyText="Задачі не знайдено"
+          emptyActionLabel="Оновити задачі"
+          onEmptyAction={() => loadJobs(true)}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук за ID, типом, статусом, результатом або назвою документа",
             getSearchText: (item) =>

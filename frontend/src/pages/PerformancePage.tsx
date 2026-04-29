@@ -380,6 +380,9 @@ export function PerformancePage() {
           errorText={loadError}
           onRetry={load}
           emptyText="Записи успішності відсутні"
+          emptyActionLabel="Оновити записи"
+          onEmptyAction={load}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук за групою, слухачем або ID",
             getSearchText: (item) =>

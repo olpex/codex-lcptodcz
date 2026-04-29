@@ -430,6 +430,9 @@ export function WorkloadPage() {
           errorText={loadError}
           onRetry={() => load()}
           emptyText="Дані педнавантаження відсутні"
+          emptyActionLabel="Оновити навантаження"
+          onEmptyAction={() => load()}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук викладача",
             getSearchText: (row) => row.teacher_name

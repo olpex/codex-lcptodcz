@@ -748,9 +748,24 @@ export function SchedulePage() {
         )}
 
         {!visibleGroupedSchedule.length && (
-          <p className="text-sm text-slate-600">
-            {showConflictsOnly ? "Конфліктних занять не знайдено." : "Занять у розкладі поки немає."}
-          </p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <p className="text-sm text-slate-600">
+              {showConflictsOnly ? "Конфліктних занять не знайдено." : "Занять у розкладі поки немає."}
+            </p>
+            <button
+              type="button"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              onClick={() => {
+                if (showConflictsOnly) {
+                  setShowConflictsOnly(false);
+                  return;
+                }
+                fetchSchedule();
+              }}
+            >
+              {showConflictsOnly ? "Показати весь розклад" : "Оновити розклад"}
+            </button>
+          </div>
         )}
 
         <div className="flex flex-col xl:flex-row gap-5">

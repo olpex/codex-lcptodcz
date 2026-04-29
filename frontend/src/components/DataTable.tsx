@@ -28,6 +28,9 @@ type DataTableProps<T> = {
   onRetry?: (() => void) | null;
   retryLabel?: string;
   emptyText?: string;
+  emptyActionLabel?: string;
+  onEmptyAction?: (() => void) | null;
+  emptyActionDisabled?: boolean;
   pageSizeOptions?: number[];
   initialPageSize?: number;
   search?: DataTableSearchConfig<T>;
@@ -61,6 +64,9 @@ export function DataTable<T>({
   onRetry = null,
   retryLabel = "Повторити",
   emptyText = "Дані відсутні",
+  emptyActionLabel,
+  onEmptyAction = null,
+  emptyActionDisabled = false,
   pageSizeOptions = [10, 20, 50],
   initialPageSize = 10,
   search,
@@ -135,6 +141,7 @@ export function DataTable<T>({
   };
 
   const emptyLabel = query && search?.emptyResultText ? search.emptyResultText : emptyText;
+  const showClearSearchAction = Boolean(query.trim() && search);
 
   return (
     <div className={clsx("space-y-3", className)}>
@@ -229,8 +236,31 @@ export function DataTable<T>({
               </tr>
             ) : paginatedData.length === 0 ? (
               <tr>
-                <td className="px-2 py-3 text-sm text-slate-600" colSpan={columns.length}>
-                  {emptyLabel}
+                <td className="px-2 py-4" colSpan={columns.length}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="text-sm text-slate-600">{emptyLabel}</p>
+                    {showClearSearchAction ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        onClick={() => setQuery("")}
+                      >
+                        Очистити пошук
+                      </button>
+                    ) : (
+                      onEmptyAction &&
+                      emptyActionLabel && (
+                        <button
+                          type="button"
+                          className="rounded-lg border border-pine bg-white px-3 py-1.5 text-xs font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+                          onClick={onEmptyAction}
+                          disabled={emptyActionDisabled}
+                        >
+                          {emptyActionLabel}
+                        </button>
+                      )
+                    )}
+                  </div>
                 </td>
               </tr>
             ) : (

@@ -535,6 +535,9 @@ export function GroupsPage() {
             errorText={filterError}
             onRetry={loadActiveGroups}
             emptyText="Вкажіть фільтри або залиште поля порожніми та натисніть «Показати»"
+            emptyActionLabel="Показати всі групи"
+            onEmptyAction={loadActiveGroups}
+            emptyActionDisabled={isFiltering}
             search={{
               placeholder: "Пошук у результатах за кодом, назвою або викладачем",
               getSearchText: (group) =>
@@ -587,6 +590,9 @@ export function GroupsPage() {
           errorText={loadError}
           onRetry={loadGroups}
           emptyText="Групи відсутні"
+          emptyActionLabel="Оновити реєстр"
+          onEmptyAction={loadGroups}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук за кодом, назвою або статусом",
             getSearchText: (group) => `${group.code} ${group.name} ${group.status} ${formatGroupStatus(group.status)}`

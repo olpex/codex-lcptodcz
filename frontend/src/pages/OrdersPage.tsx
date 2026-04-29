@@ -415,6 +415,9 @@ export function OrdersPage() {
           errorText={loadError}
           onRetry={load}
           emptyText="Накази відсутні"
+          emptyActionLabel="Оновити реєстр"
+          onEmptyAction={load}
+          emptyActionDisabled={isLoading}
           search={{
             placeholder: "Пошук за номером, типом або статусом",
             getSearchText: (row) =>
