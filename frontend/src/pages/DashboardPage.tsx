@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { InlineNotice } from "../components/InlineNotice";
 import { KpiBarChart } from "../components/KpiBarChart";
 import { KpiSparkline } from "../components/KpiSparkline";
@@ -7,7 +8,7 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { KPI } from "../types/api";
+import type { AttentionSummary, KPI } from "../types/api";
 
 const EMPTY_KPI: KPI = {
   active_groups: 0,
@@ -19,6 +20,11 @@ const EMPTY_KPI: KPI = {
 };
 
 const HISTORY_LIMIT = 12;
+const EMPTY_ATTENTION: AttentionSummary = {
+  generated_at: "",
+  total_count: 0,
+  items: []
+};
 
 const KPI_CARDS = [
   {
@@ -56,10 +62,23 @@ function formatDelta(delta: number | null, suffix = ""): string {
   return `${sign}${delta}${suffix}`;
 }
 
+function attentionToneClass(severity: string): string {
+  if (severity === "error") return "bg-red-100 text-red-700";
+  if (severity === "warning") return "bg-amber-100 text-amber-700";
+  return "bg-sky-100 text-sky-700";
+}
+
+function formatAttentionSeverity(severity: string): string {
+  if (severity === "error") return "Критично";
+  if (severity === "warning") return "Увага";
+  return "Інфо";
+}
+
 export function DashboardPage() {
   const { request } = useAuth();
   const { showError } = useToast();
   const [kpi, setKpi] = useState<KPI>(EMPTY_KPI);
+  const [attention, setAttention] = useState<AttentionSummary>(EMPTY_ATTENTION);
   const [history, setHistory] = useState<KPI[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -71,8 +90,12 @@ export function DashboardPage() {
       setIsLoading(true);
     }
     try {
-      const data = await request<KPI>("/dashboard/kpi");
+      const [data, attentionData] = await Promise.all([
+        request<KPI>("/dashboard/kpi"),
+        request<AttentionSummary>("/dashboard/attention")
+      ]);
       setKpi(data);
+      setAttention(attentionData);
       setHistory((prev) => {
         const next = [...prev, data];
         if (next.length <= HISTORY_LIMIT) return next;
@@ -154,6 +177,37 @@ export function DashboardPage() {
           );
         })}
       </div>
+      <Panel title="2.7 Що потребує уваги">
+        {isLoading && !hasLoadedOnce ? (
+          <div className="flex h-24 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-600">
+            Завантаження перевірок...
+          </div>
+        ) : attention.items.length === 0 ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+            Немає критичних питань. Дані виглядають охайно.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+            {attention.items.map((item) => (
+              <div key={item.key} className="grid gap-3 px-4 py-3 md:grid-cols-[auto_1fr_auto] md:items-center">
+                <div className="text-2xl font-heading font-bold text-ink">{item.count}</div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-ink">{item.title}</span>
+                    <span className={clsx("rounded-full px-2 py-1 text-xs font-semibold", attentionToneClass(item.severity))}>
+                      {formatAttentionSeverity(item.severity)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-600">{item.description}</p>
+                </div>
+                <Link className="rounded-lg border border-pine px-3 py-2 text-center text-sm font-semibold text-pine" to={item.action_href}>
+                  Перейти
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
       <Panel title="Прогнозні показники">
         {isLoading && !hasLoadedOnce ? (
           <div className="flex h-72 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-600">

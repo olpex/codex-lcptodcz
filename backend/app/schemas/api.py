@@ -361,6 +361,21 @@ class DashboardKPIResponse(BaseModel):
     forecast_employment: int
 
 
+class DashboardAttentionItem(BaseModel):
+    key: str
+    title: str
+    count: int
+    severity: str
+    description: str
+    action_href: str
+
+
+class DashboardAttentionResponse(BaseModel):
+    generated_at: datetime
+    total_count: int
+    items: list[DashboardAttentionItem] = Field(default_factory=list)
+
+
 class PerformanceBase(BaseModel):
     trainee_id: int
     group_id: int

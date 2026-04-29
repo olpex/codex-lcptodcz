@@ -120,6 +120,21 @@ export interface KPI {
   forecast_employment: number;
 }
 
+export interface AttentionItem {
+  key: string;
+  title: string;
+  count: number;
+  severity: "error" | "warning" | "info" | string;
+  description: string;
+  action_href: string;
+}
+
+export interface AttentionSummary {
+  generated_at: string;
+  total_count: number;
+  items: AttentionItem[];
+}
+
 export interface Job {
   id: number;
   status: "queued" | "running" | "succeeded" | "failed";

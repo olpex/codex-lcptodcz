@@ -1,6 +1,22 @@
 from datetime import date, datetime, timedelta, timezone
 
-from app.models import Group, GroupMembership, GroupStatus, Performance, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.models import (
+    Document,
+    DocumentType,
+    DraftStatus,
+    Group,
+    GroupMembership,
+    GroupStatus,
+    ImportJob,
+    JobStatus,
+    OCRResult,
+    Performance,
+    Room,
+    ScheduleSlot,
+    Subject,
+    Teacher,
+    Trainee,
+)
 
 
 def test_auth_login_and_me(client):
@@ -77,6 +93,66 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     assert kpi_response.status_code == 200
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
+
+
+def test_dashboard_attention_collects_actionable_items(client, auth_headers, db_session):
+    document = Document(
+        branch_id="main",
+        file_name="attention.docx",
+        file_path="tmp/attention.docx",
+        file_type=DocumentType.DOCX,
+        source="upload",
+    )
+    scheduled_group = Group(branch_id="main", code="OK-1", name="З розкладом", status=GroupStatus.ACTIVE)
+    group_without_schedule = Group(branch_id="main", code="NO-SCHEDULE", name="Без розкладу", status=GroupStatus.ACTIVE)
+    teacher = Teacher(branch_id="main", first_name="Тест", last_name="Викладач", hourly_rate=0, is_active=True)
+    subject = Subject(branch_id="main", name="Предмет", hours_total=2)
+    room = Room(branch_id="main", name="Аудиторія", capacity=20)
+    db_session.add_all([document, scheduled_group, group_without_schedule, teacher, subject, room])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=scheduled_group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime.now(timezone.utc),
+                ends_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                pair_number=1,
+                academic_hours=2,
+            ),
+            ImportJob(
+                branch_id="main",
+                idempotency_key="main:attention-failed",
+                document_id=document.id,
+                status=JobStatus.FAILED,
+                message="Помилка тесту",
+            ),
+            OCRResult(
+                branch_id="main",
+                document_id=document.id,
+                extracted_text="draft",
+                status=DraftStatus.PENDING,
+                confidence=0.7,
+            ),
+            Trainee(branch_id="main", first_name="Без", last_name="Групи", status="active"),
+            Trainee(branch_id="main", first_name="Сирітський", last_name="Код", status="active", group_code="MISSING"),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/attention", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    items = {item["key"]: item for item in payload["items"]}
+    assert items["failed_jobs"]["count"] == 1
+    assert items["pending_drafts"]["count"] == 1
+    assert items["unassigned_trainees"]["count"] == 1
+    assert items["orphan_group_codes"]["count"] == 1
+    assert items["groups_without_schedule"]["count"] == 1
+    assert payload["total_count"] == 5
 
 
 def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_session):
