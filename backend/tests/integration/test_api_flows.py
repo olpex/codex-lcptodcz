@@ -143,6 +143,19 @@ def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_s
     assert payload[0]["total_hours"] == 3.5
     assert {item["teacher_name"] for item in payload[0]["teachers"]} == {"Штогрин Лілія", "Костів Артур"}
 
+    all_time_response = client.get("/api/v1/groups/active-between", headers=auth_headers)
+    assert all_time_response.status_code == 200
+    assert {item["code"] for item in all_time_response.json()} == {"167-25", "999-25"}
+
+    partial_search_response = client.get(
+        "/api/v1/groups/active-between?search=трудових відносин",
+        headers=auth_headers,
+    )
+    assert partial_search_response.status_code == 200
+    partial_search_payload = partial_search_response.json()
+    assert len(partial_search_payload) == 1
+    assert partial_search_payload[0]["code"] == "167-25"
+
     export_response = client.get(
         "/api/v1/groups/active-between/export?date_from=2025-10-20&date_to=2025-10-25",
         headers=auth_headers,

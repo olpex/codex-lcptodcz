@@ -20,6 +20,7 @@ export function GroupsPage() {
   const [capacity, setCapacity] = useState(25);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [activeGroupSearch, setActiveGroupSearch] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
@@ -193,13 +194,19 @@ export function GroupsPage() {
   usePageRefresh(loadGroups);
 
   const validatePeriod = () => {
-    if (!dateFrom || !dateTo) {
-      return "Вкажіть дату початку і дату завершення";
-    }
-    if (dateTo < dateFrom) {
+    if (dateFrom && dateTo && dateTo < dateFrom) {
       return "Дата завершення має бути не раніше дати початку";
     }
     return null;
+  };
+
+  const buildActiveGroupParams = () => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const search = activeGroupSearch.trim();
+    if (search) params.set("search", search);
+    return params.toString();
   };
 
   const loadActiveGroups = async () => {
@@ -211,11 +218,11 @@ export function GroupsPage() {
     }
     setIsFiltering(true);
     try {
-      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-      const data = await request<ActiveGroupBetweenDates[]>(`/groups/active-between?${params.toString()}`);
+      const params = buildActiveGroupParams();
+      const data = await request<ActiveGroupBetweenDates[]>(`/groups/active-between${params ? `?${params}` : ""}`);
       setActiveGroups(data);
       setFilterError(null);
-      showSuccess(data.length ? `Знайдено груп: ${data.length}` : "За цей період груп не знайдено");
+      showSuccess(data.length ? `Знайдено груп: ${data.length}` : "Груп не знайдено");
     } catch (error) {
       const message = (error as Error).message;
       setFilterError(message);
@@ -238,8 +245,8 @@ export function GroupsPage() {
     }
     setIsExporting(true);
     try {
-      const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-      const response = await fetch(`${API_URL}/groups/active-between/export?${params.toString()}`, {
+      const params = buildActiveGroupParams();
+      const response = await fetch(`${API_URL}/groups/active-between/export${params ? `?${params}` : ""}`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       if (!response.ok) {
@@ -248,7 +255,7 @@ export function GroupsPage() {
       const blob = await response.blob();
       const disposition = response.headers.get("content-disposition") || "";
       const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
-      const fileName = fileNameMatch?.[1] || `groups_${dateFrom}_${dateTo}.xlsx`;
+      const fileName = fileNameMatch?.[1] || `groups_${dateFrom || "all"}_${dateTo || "all"}.xlsx`;
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
@@ -473,7 +480,15 @@ export function GroupsPage() {
         </Panel>
       )}
       <Panel title="Групи, що навчалися у періоді">
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
+        <div className="grid gap-3 md:grid-cols-[1.2fr_1fr_1fr_auto_auto]">
+          <FormField label="Пошук групи" helperText="Код або частина назви">
+            <input
+              className={formControlClass}
+              placeholder="Наприклад: трудових відносин"
+              value={activeGroupSearch}
+              onChange={(event) => setActiveGroupSearch(event.target.value)}
+            />
+          </FormField>
           <FormField label="Дата з" helperText="Початок періоду">
             <input
               type="date"
@@ -518,10 +533,10 @@ export function GroupsPage() {
             rowKey={(group) => group.group_id}
             isLoading={isFiltering}
             errorText={filterError}
-            onRetry={dateFrom && dateTo ? loadActiveGroups : null}
-            emptyText="Оберіть дати та натисніть «Показати»"
+            onRetry={loadActiveGroups}
+            emptyText="Вкажіть фільтри або залиште поля порожніми та натисніть «Показати»"
             search={{
-              placeholder: "Пошук за кодом, назвою або викладачем",
+              placeholder: "Пошук у результатах за кодом, назвою або викладачем",
               getSearchText: (group) =>
                 `${group.code} ${group.name} ${group.teachers.map((teacher) => teacher.teacher_name).join(" ")}`
             }}

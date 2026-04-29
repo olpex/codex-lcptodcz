@@ -30,36 +30,49 @@ def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]
     return [GroupResponse.model_validate(group) for group in groups]
 
 
-def _validate_period(date_from: date, date_to: date) -> None:
-    if date_to < date_from:
+def _validate_period(date_from: date | None, date_to: date | None) -> None:
+    if date_from and date_to and date_to < date_from:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Дата завершення має бути не раніше дати початку")
+
+
+def _matches_group_search(group: Group, search: str | None) -> bool:
+    tokens = [token.casefold() for token in (search or "").split() if token.strip()]
+    if not tokens:
+        return True
+
+    haystack = f"{group.code} {group.name}".casefold()
+    return all(token in haystack for token in tokens)
 
 
 def _active_groups_between_dates(
     db: DbSession,
     branch_id: str,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
+    search: str | None = None,
 ) -> list[ActiveGroupBetweenDatesResponse]:
     _validate_period(date_from, date_to)
-    window_start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
-    window_end = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+    filters = [Group.branch_id == branch_id]
+    if date_from:
+        window_start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        filters.append(ScheduleSlot.starts_at >= window_start)
+    if date_to:
+        window_end = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+        filters.append(ScheduleSlot.starts_at <= window_end)
 
     rows = (
         db.query(ScheduleSlot, Group, Teacher)
         .join(Group, Group.id == ScheduleSlot.group_id)
         .join(Teacher, Teacher.id == ScheduleSlot.teacher_id)
-        .filter(
-            Group.branch_id == branch_id,
-            ScheduleSlot.starts_at >= window_start,
-            ScheduleSlot.starts_at <= window_end,
-        )
+        .filter(*filters)
         .order_by(Group.code.asc(), ScheduleSlot.starts_at.asc())
         .all()
     )
 
     grouped: dict[int, dict] = {}
     for slot, group, teacher in rows:
+        if not _matches_group_search(group, search):
+            continue
         bucket = grouped.setdefault(
             group.id,
             {
@@ -113,22 +126,24 @@ def _active_groups_between_dates(
 
 @router.get("/active-between", response_model=list[ActiveGroupBetweenDatesResponse])
 def list_active_groups_between_dates(
-    date_from: date,
-    date_to: date,
     db: DbSession,
     current_user: CurrentUser,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = Query(default=None),
 ) -> list[ActiveGroupBetweenDatesResponse]:
-    return _active_groups_between_dates(db, current_user.branch_id, date_from, date_to)
+    return _active_groups_between_dates(db, current_user.branch_id, date_from, date_to, search)
 
 
 @router.get("/active-between/export")
 def export_active_groups_between_dates(
-    date_from: date,
-    date_to: date,
     db: DbSession,
     current_user: CurrentUser,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = Query(default=None),
 ) -> StreamingResponse:
-    report = _active_groups_between_dates(db, current_user.branch_id, date_from, date_to)
+    report = _active_groups_between_dates(db, current_user.branch_id, date_from, date_to, search)
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Групи за період"
@@ -185,7 +200,9 @@ def export_active_groups_between_dates(
     stream = BytesIO()
     workbook.save(stream)
     stream.seek(0)
-    filename = f"active_groups_{date_from.isoformat()}_{date_to.isoformat()}.xlsx"
+    date_from_part = date_from.isoformat() if date_from else "all"
+    date_to_part = date_to.isoformat() if date_to else "all"
+    filename = f"active_groups_{date_from_part}_{date_to_part}.xlsx"
     return StreamingResponse(
         stream,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
