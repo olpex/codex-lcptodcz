@@ -57,11 +57,19 @@ type ClearOrphanGroupsResponse = {
   cleared_ids: number[];
 };
 
+type TraineeProblemFilter = "all" | "unassigned" | "orphan_group" | "archived";
+
 const TRAINEE_STATUS_OPTIONS = [
   { value: "active", label: "Активний" },
   { value: "completed", label: "Завершив навчання" },
   { value: "expelled", label: "Відрахований" }
 ] as const;
+const PROBLEM_FILTERS: Array<{ value: TraineeProblemFilter; label: string }> = [
+  { value: "all", label: "Усі" },
+  { value: "unassigned", label: "Без групи" },
+  { value: "orphan_group", label: "Невідомі групи" },
+  { value: "archived", label: "Архів" }
+];
 const TRAINEE_STATUS_LABELS: Record<string, string> = Object.fromEntries(
   TRAINEE_STATUS_OPTIONS.map((item) => [item.value, item.label])
 );
@@ -128,6 +136,7 @@ export function TraineesPage() {
   const [groupCode, setGroupCode] = useState("");
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [problemFilter, setProblemFilter] = useState<TraineeProblemFilter>("all");
   const [createErrors, setCreateErrors] = useState<{ firstName?: string; lastName?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -161,9 +170,39 @@ export function TraineesPage() {
     [trainees]
   );
 
+  const validGroupCodes = useMemo(
+    () => new Set(groups.map((group) => (group.code || "").trim()).filter(Boolean)),
+    [groups]
+  );
+
+  const problemCounts = useMemo(
+    () => ({
+      all: sortedTrainees.length,
+      unassigned: sortedTrainees.filter((item) => !item.is_deleted && !(item.group_code || "").trim()).length,
+      orphan_group: sortedTrainees.filter((item) => {
+        const code = (item.group_code || "").trim();
+        return !item.is_deleted && Boolean(code) && !validGroupCodes.has(code);
+      }).length,
+      archived: sortedTrainees.filter((item) => item.is_deleted).length
+    }),
+    [sortedTrainees, validGroupCodes]
+  );
+
+  const filteredTrainees = useMemo(
+    () =>
+      sortedTrainees.filter((trainee) => {
+        const code = (trainee.group_code || "").trim();
+        if (problemFilter === "unassigned") return !trainee.is_deleted && !code;
+        if (problemFilter === "orphan_group") return !trainee.is_deleted && Boolean(code) && !validGroupCodes.has(code);
+        if (problemFilter === "archived") return trainee.is_deleted;
+        return true;
+      }),
+    [problemFilter, sortedTrainees, validGroupCodes]
+  );
+
   const groupedTrainees = useMemo(() => {
     const buckets = new Map<string, { key: string; label: string; trainees: Trainee[] }>();
-    for (const trainee of sortedTrainees) {
+    for (const trainee of filteredTrainees) {
       const bucket = resolveGroupBucket(trainee.group_code);
       const existing = buckets.get(bucket.key);
       if (existing) {
@@ -179,15 +218,15 @@ export function TraineesPage() {
       return a.label.localeCompare(b.label, "uk", { numeric: true, sensitivity: "base" });
     });
     return groups;
-  }, [sortedTrainees]);
+  }, [filteredTrainees]);
 
   const rowNumberById = useMemo(() => {
     const entries: Record<number, number> = {};
-    sortedTrainees.forEach((trainee, idx) => {
+    filteredTrainees.forEach((trainee, idx) => {
       entries[trainee.id] = trainee.source_row_number ?? idx + 1;
     });
     return entries;
-  }, [sortedTrainees]);
+  }, [filteredTrainees]);
 
   const selectedIds = useMemo(
     () => Object.entries(selected).filter(([, checked]) => checked).map(([id]) => Number(id)),
@@ -222,7 +261,7 @@ export function TraineesPage() {
           if (term.trim()) {
             params.set("search", term.trim());
           }
-          if (showArchived) {
+          if (showArchived || problemFilter === "archived") {
             params.set("include_deleted", "true");
           }
           const query = params.toString() ? `?${params.toString()}` : "";
@@ -250,7 +289,7 @@ export function TraineesPage() {
 
   useEffect(() => {
     fetchTrainees(search);
-  }, [showArchived]);
+  }, [showArchived, problemFilter]);
 
   usePageRefresh(() => fetchTrainees(search), {
     enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating
@@ -329,7 +368,7 @@ export function TraineesPage() {
 
   const expandAll = () => {
     const next: Record<number, boolean> = {};
-    for (const trainee of sortedTrainees) next[trainee.id] = true;
+    for (const trainee of filteredTrainees) next[trainee.id] = true;
     setExpanded(next);
     const nextGroups: Record<string, boolean> = {};
     for (const group of groupedTrainees) nextGroups[group.key] = true;
@@ -347,7 +386,7 @@ export function TraineesPage() {
 
   const selectAllVisible = () => {
     const next: Record<number, boolean> = {};
-    for (const trainee of sortedTrainees) next[trainee.id] = true;
+    for (const trainee of filteredTrainees) next[trainee.id] = true;
     setSelected(next);
   };
 
@@ -669,6 +708,29 @@ export function TraineesPage() {
         {loadError && <InlineNotice className="mb-3" tone="error" text={loadError} />}
         <StickyActionBar className="mb-3">
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
+              {PROBLEM_FILTERS.map((item) => {
+                const count = problemCounts[item.value];
+                const active = problemFilter === item.value;
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    className={`rounded-md px-3 py-1.5 text-sm font-semibold ${
+                      active ? "bg-pine text-white" : "text-slate-700 hover:bg-slate-100"
+                    }`}
+                    onClick={() => {
+                      setProblemFilter(item.value);
+                      if (item.value === "archived") {
+                        setShowArchived(true);
+                      }
+                    }}
+                  >
+                    {item.label} <span className={active ? "text-white" : "text-slate-500"}>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
             <label className="mr-2 flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -765,7 +827,11 @@ export function TraineesPage() {
           </div>
         </StickyActionBar>
         {isLoading && <p className="text-sm text-slate-600">Завантаження...</p>}
-        {!isLoading && sortedTrainees.length === 0 && <p className="text-sm text-slate-600">Слухачі відсутні</p>}
+        {!isLoading && filteredTrainees.length === 0 && (
+          <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+            За вибраним фільтром записів немає
+          </p>
+        )}
         <div className="space-y-2">
           {groupedTrainees.map((group) => {
             const groupExpanded = Boolean(expandedGroups[group.key]);
@@ -794,8 +860,17 @@ export function TraineesPage() {
                       const isEditing = editingId === trainee.id;
                       const number = rowNumberById[trainee.id] ?? trainee.id;
                       const isSelected = Boolean(selected[trainee.id]);
+                      const traineeGroupCode = (trainee.group_code || "").trim();
+                      const hasUnknownGroup = Boolean(traineeGroupCode) && !validGroupCodes.has(traineeGroupCode);
                       return (
-                        <article key={trainee.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                        <article
+                          key={trainee.id}
+                          className={`overflow-hidden rounded-lg border bg-white ${
+                            hasUnknownGroup || (!trainee.is_deleted && !traineeGroupCode)
+                              ? "border-amber-300"
+                              : "border-slate-200"
+                          }`}
+                        >
                           <div className="flex items-center gap-2 px-3 py-2">
                             {canEdit && (
                               <input
@@ -824,6 +899,16 @@ export function TraineesPage() {
                                 {trainee.is_deleted && (
                                   <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
                                     В архіві
+                                  </p>
+                                )}
+                                {!trainee.is_deleted && !traineeGroupCode && (
+                                  <p className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                                    Без групи
+                                  </p>
+                                )}
+                                {!trainee.is_deleted && hasUnknownGroup && (
+                                  <p className="mt-1 inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+                                    Невідомий код групи
                                   </p>
                                 )}
                               </div>
