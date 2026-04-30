@@ -41,6 +41,8 @@ IMPORT_UPDATE_MODES = {"skip_existing", "missing_only", "overwrite"}
 PDF_REPORT_ROW_LIMIT = 500
 PDF_FONT_CANDIDATES = (
     "PDF_FONT_PATH",
+    "backend/assets/fonts/NotoSans-Regular.ttf",
+    "assets/fonts/NotoSans-Regular.ttf",
     "backend/assets/fonts/DejaVuSans.ttf",
     "assets/fonts/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -1065,15 +1067,16 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str, request_p
 
 
 def _resolve_pdf_font_path() -> Path:
+    backend_root = Path(__file__).resolve().parents[2]
     for candidate in PDF_FONT_CANDIDATES:
         value = os.environ.get(candidate) if candidate == "PDF_FONT_PATH" else candidate
         if not value:
             continue
         path = Path(value)
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        if path.exists():
-            return path
+        paths = [path] if path.is_absolute() else [Path.cwd() / path, backend_root / path, backend_root.parent / path]
+        for candidate_path in paths:
+            if candidate_path.exists():
+                return candidate_path
     raise RuntimeError(
         "Не знайдено Unicode-шрифт для PDF. Вкажіть PDF_FONT_PATH або додайте DejaVuSans.ttf до backend/assets/fonts."
     )
