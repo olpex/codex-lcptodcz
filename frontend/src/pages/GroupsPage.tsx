@@ -8,12 +8,55 @@ import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ActiveGroupBetweenDates, Group } from "../types/api";
+import type { ActiveGroupBetweenDates, Group, ScheduleSlot, Trainee } from "../types/api";
+
+type GroupDetail = {
+  activeTrainees: number;
+  archivedTrainees: number;
+  capacityUsedPct: number;
+  scheduleSlots: number;
+  scheduleHours: number;
+  scheduleDateFrom: string | null;
+  scheduleDateTo: string | null;
+  teachers: string[];
+};
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("uk-UA");
+}
+
+function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlots: ScheduleSlot[]): GroupDetail | null {
+  if (!group) return null;
+  const groupCode = group.code.trim();
+  const groupTrainees = trainees.filter((trainee) => (trainee.group_code || "").trim() === groupCode);
+  const groupSlots = scheduleSlots.filter((slot) => slot.group_id === group.id);
+  const activeTrainees = groupTrainees.filter((trainee) => !trainee.is_deleted).length;
+  const archivedTrainees = groupTrainees.length - activeTrainees;
+  const capacityUsedPct = group.capacity > 0 ? Math.round((activeTrainees / group.capacity) * 100) : 0;
+  const scheduleDates = groupSlots.map((slot) => slot.starts_at).filter(Boolean).sort();
+  const teachers = Array.from(
+    new Set(groupSlots.map((slot) => (slot.teacher_name || "").trim()).filter(Boolean))
+  ).sort((left, right) => left.localeCompare(right, "uk-UA", { sensitivity: "base" }));
+
+  return {
+    activeTrainees,
+    archivedTrainees,
+    capacityUsedPct,
+    scheduleSlots: groupSlots.length,
+    scheduleHours: Number(groupSlots.reduce((sum, slot) => sum + (slot.academic_hours || 0), 0).toFixed(1)),
+    scheduleDateFrom: scheduleDates[0] || null,
+    scheduleDateTo: scheduleDates[scheduleDates.length - 1] || null,
+    teachers
+  };
+}
 
 export function GroupsPage() {
   const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
+  const [trainees, setTrainees] = useState<Trainee[]>([]);
+  const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
   const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -29,6 +72,7 @@ export function GroupsPage() {
   const [filterError, setFilterError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
+  const [selectedDetailGroupId, setSelectedDetailGroupId] = useState<number | null>(null);
 
   // --- Стан видалення групи ---
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -51,6 +95,14 @@ export function GroupsPage() {
 
   const selectedGroupCount = selectedGroups.length;
   const allGroupsSelected = groups.length > 0 && groups.every((group) => selectedGroupIds[group.id]);
+  const selectedDetailGroup = useMemo(
+    () => groups.find((group) => group.id === selectedDetailGroupId) || groups[0] || null,
+    [groups, selectedDetailGroupId]
+  );
+  const selectedGroupDetail = useMemo(
+    () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots),
+    [scheduleSlots, selectedDetailGroup, trainees]
+  );
 
   const columns = useMemo<DataTableColumn<Group>[]>(
     () => [
@@ -100,17 +152,29 @@ export function GroupsPage() {
               key: "actions" as const,
               header: "",
               render: (group: Group) => (
-                <button
-                  type="button"
-                  id={`delete-group-${group.id}`}
-                  className="rounded-lg border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openDeleteDialog(group);
-                  }}
-                >
-                  Видалити
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedDetailGroupId(group.id);
+                    }}
+                  >
+                    Деталі
+                  </button>
+                  <button
+                    type="button"
+                    id={`delete-group-${group.id}`}
+                    className="rounded-lg border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openDeleteDialog(group);
+                    }}
+                  >
+                    Видалити
+                  </button>
+                </div>
               )
             }
           ]
@@ -167,8 +231,14 @@ export function GroupsPage() {
   const loadGroups = async () => {
     setIsLoading(true);
     try {
-      const data = await request<Group[]>("/groups");
+      const [data, traineeRows, scheduleRows] = await Promise.all([
+        request<Group[]>("/groups"),
+        request<Trainee[]>("/trainees?include_deleted=true"),
+        request<ScheduleSlot[]>("/schedule")
+      ]);
       setGroups(data);
+      setTrainees(traineeRows);
+      setScheduleSlots(scheduleRows);
       setSelectedGroupIds((prev) => {
         const availableIds = new Set(data.map((group) => group.id));
         return Object.fromEntries(
@@ -176,6 +246,10 @@ export function GroupsPage() {
             .filter(([id, selected]) => selected && availableIds.has(Number(id)))
             .map(([id]) => [Number(id), true])
         );
+      });
+      setSelectedDetailGroupId((current) => {
+        if (current && data.some((group) => group.id === current)) return current;
+        return data[0]?.id ?? null;
       });
       setLoadError(null);
     } catch (error) {
@@ -546,6 +620,70 @@ export function GroupsPage() {
           />
         </div>
       </Panel>
+      <Panel title="1.3 Детальна картка групи">
+        {selectedDetailGroup && selectedGroupDetail ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Вибрана група</p>
+                  <h3 className="mt-1 text-lg font-semibold text-ink">
+                    {selectedDetailGroup.code} — {selectedDetailGroup.name}
+                  </h3>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  {formatGroupStatus(selectedDetailGroup.status)}
+                </span>
+              </div>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Початок</dt>
+                  <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDate(selectedDetailGroup.start_date)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Завершення</dt>
+                  <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDate(selectedDetailGroup.end_date)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Місткість</dt>
+                  <dd className="mt-1 text-sm font-semibold text-slate-800">
+                    {selectedGroupDetail.activeTrainees} / {selectedDetailGroup.capacity} ({selectedGroupDetail.capacityUsedPct}%)
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Архів слухачів</dt>
+                  <dd className="mt-1 text-sm font-semibold text-slate-800">{selectedGroupDetail.archivedTrainees}</dd>
+                </div>
+              </dl>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Занять у розкладі</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{selectedGroupDetail.scheduleSlots}</p>
+                <p className="mt-1 text-xs text-slate-600">Годин: {selectedGroupDetail.scheduleHours}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Період розкладу</p>
+                <p className="mt-2 text-sm font-semibold text-ink">
+                  {formatDate(selectedGroupDetail.scheduleDateFrom)} — {formatDate(selectedGroupDetail.scheduleDateTo)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Викладачі</p>
+                <p className="mt-2 text-2xl font-semibold text-ink">{selectedGroupDetail.teachers.length}</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  {selectedGroupDetail.teachers.slice(0, 2).join(", ") || "Не знайдено"}
+                  {selectedGroupDetail.teachers.length > 2 ? ` та ще ${selectedGroupDetail.teachers.length - 2}` : ""}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+            Групу для перегляду ще не вибрано.
+          </div>
+        )}
+      </Panel>
       <Panel title="Реєстр груп">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           {canEdit ? (
@@ -589,6 +727,7 @@ export function GroupsPage() {
           isLoading={isLoading}
           errorText={loadError}
           onRetry={loadGroups}
+          rowClassName={(group) => (group.id === selectedDetailGroup?.id ? "bg-emerald-50" : undefined)}
           emptyText="Групи відсутні"
           emptyActionLabel="Оновити реєстр"
           onEmptyAction={loadGroups}
