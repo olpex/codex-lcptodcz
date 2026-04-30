@@ -1,11 +1,12 @@
 from app.models import DocumentType
 from app.services.import_export import save_report_file
+from pypdf import PdfReader
 
 
 def test_save_report_in_all_formats():
     rows = [
-        {"metric": "active_groups", "value": 3},
-        {"metric": "active_trainees", "value": 54},
+        {"metric": "Активні групи", "value": 3},
+        {"metric": "Активні слухачі", "value": 54},
     ]
 
     csv_path, csv_type = save_report_file(rows, "kpi", "csv")
@@ -16,3 +17,7 @@ def test_save_report_in_all_formats():
     assert xlsx_type == DocumentType.XLSX and xlsx_path.endswith(".xlsx")
     assert pdf_type == DocumentType.PDF and pdf_path.endswith(".pdf")
 
+    pdf_text = "\n".join((page.extract_text() or "") for page in PdfReader(pdf_path).pages)
+    assert "Звіт: Показники" in pdf_text
+    assert "Активні групи" in pdf_text
+    assert "?" not in pdf_text

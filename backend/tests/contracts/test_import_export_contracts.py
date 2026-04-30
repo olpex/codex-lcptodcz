@@ -118,4 +118,7 @@ def test_export_contract_structures(db_session):
         pdf_path, pdf_type = save_report_file(rows, report_type, "pdf")
         assert pdf_type == DocumentType.PDF
         pdf_text = _normalize_text("\n".join((page.extract_text() or "") for page in PdfReader(pdf_path).pages))
-        assert f"Report: {report_type}" in pdf_text
+        assert f"Звіт: " in pdf_text
+        assert "????" not in pdf_text
+        if report_type == "teacher_workload":
+            assert "Бондар Марія Іванівна" in pdf_text

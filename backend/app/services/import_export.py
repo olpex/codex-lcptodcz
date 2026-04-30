@@ -1,4 +1,5 @@
 import csv
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 from docx import Document as DocxDocument
 from fpdf import FPDF
+from fpdf.fonts import FontFace
 from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader
 from sqlalchemy import or_
@@ -36,6 +38,25 @@ PREFERRED_TRAINEE_SHEET_NAMES = ("Додаток", "додаток")
 HEADER_SCAN_LIMIT = 30
 ROW_SAMPLE_LIMIT = 20
 IMPORT_UPDATE_MODES = {"skip_existing", "missing_only", "overwrite"}
+PDF_REPORT_ROW_LIMIT = 500
+PDF_FONT_CANDIDATES = (
+    "PDF_FONT_PATH",
+    "backend/assets/fonts/DejaVuSans.ttf",
+    "assets/fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+)
+REPORT_TYPE_LABELS = {
+    "trainees": "Слухачі",
+    "teacher_workload": "Навантаження викладачів",
+    "kpi": "Показники",
+    "form_1pa": "Форма 1-ПА",
+    "employment": "Працевлаштування",
+    "financial": "Фінансовий звіт",
+}
 
 FIRST_NAME_ALIASES = {
     "first_name",
@@ -117,11 +138,6 @@ TRAINEE_HEADER_HINTS = (
     | GROUP_NAME_ALIASES
 )
 GROUP_CONTEXT_PATTERN = re.compile(r"\bгрупа\s*([0-9a-zа-яіїєґ\/\-]+)\b", re.IGNORECASE)
-
-
-def _safe_pdf_text(value: str) -> str:
-    # Built-in FPDF fonts only support latin-1; replace unsupported chars to avoid runtime crash.
-    return value.encode("latin-1", errors="replace").decode("latin-1")
 
 
 def _normalize_header(value: Any) -> str:
@@ -1048,6 +1064,152 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str, request_p
     return []
 
 
+def _resolve_pdf_font_path() -> Path:
+    for candidate in PDF_FONT_CANDIDATES:
+        value = os.environ.get(candidate) if candidate == "PDF_FONT_PATH" else candidate
+        if not value:
+            continue
+        path = Path(value)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if path.exists():
+            return path
+    raise RuntimeError(
+        "Не знайдено Unicode-шрифт для PDF. Вкажіть PDF_FONT_PATH або додайте DejaVuSans.ttf до backend/assets/fonts."
+    )
+
+
+def _configure_pdf(pdf: FPDF) -> str:
+    font_path = _resolve_pdf_font_path()
+    font_family = "ReportFont"
+    pdf.add_font(font_family, "", str(font_path))
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.set_creator("SUPTC")
+    pdf.set_author("SUPTC")
+    return font_family
+
+
+def _format_report_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "Так" if value else "Ні"
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return str(round(value, 2))
+    return str(value)
+
+
+def _prepare_pdf_sections(report_rows: list[dict] | dict[str, list[dict]]) -> list[tuple[str | None, list[dict]]]:
+    if isinstance(report_rows, dict):
+        return [(str(section_name), rows) for section_name, rows in report_rows.items()]
+    return [(None, report_rows)]
+
+
+def _pdf_column_widths(headers: list[str], rows: list[dict], available_width: float) -> list[float]:
+    if not headers:
+        return [available_width]
+    weights: list[float] = []
+    for header in headers:
+        sample_lengths = [len(header)]
+        for row in rows[:30]:
+            sample_lengths.append(min(len(_format_report_value(row.get(header))), 60))
+        weights.append(max(10, min(max(sample_lengths), 42)))
+
+    total = sum(weights) or 1
+    min_width = 18
+    widths = [max(min_width, available_width * weight / total) for weight in weights]
+    width_sum = sum(widths)
+    if width_sum > available_width:
+        scale = available_width / width_sum
+        widths = [width * scale for width in widths]
+    return widths
+
+
+def _write_pdf_table(pdf: FPDF, headers: list[str], rows: list[dict], font_family: str) -> None:
+    if not rows:
+        pdf.set_font(font_family, size=9)
+        pdf.multi_cell(0, 6, text="Дані відсутні", new_x="LMARGIN", new_y="NEXT")
+        return
+
+    body_rows = rows[:PDF_REPORT_ROW_LIMIT]
+    font_size = 7 if len(headers) > 6 else 8
+    line_height = 4.6 if len(headers) > 6 else 5.2
+    pdf.set_font(font_family, size=font_size)
+    col_widths = _pdf_column_widths(headers, body_rows, pdf.epw)
+    headings_style = FontFace(fill_color=(232, 238, 244), color=(15, 23, 42))
+
+    with pdf.table(
+        width=pdf.epw,
+        col_widths=col_widths,
+        line_height=line_height,
+        headings_style=headings_style,
+        text_align="LEFT",
+        v_align="TOP",
+        wrapmode="CHAR",
+        padding=(1.2, 1.1),
+        repeat_headings=1,
+    ) as table:
+        header_row = table.row()
+        for header in headers:
+            header_row.cell(header)
+
+        for source_row in body_rows:
+            row = table.row()
+            for header in headers:
+                row.cell(_format_report_value(source_row.get(header))[:500])
+
+    if len(rows) > PDF_REPORT_ROW_LIMIT:
+        pdf.ln(2)
+        pdf.set_font(font_family, size=8)
+        pdf.multi_cell(
+            0,
+            5,
+            text=f"Показано перші {PDF_REPORT_ROW_LIMIT} рядків із {len(rows)}.",
+            new_x="LMARGIN",
+            new_y="NEXT",
+        )
+
+
+def _save_report_pdf(report_rows: list[dict] | dict[str, list[dict]], report_type: str, out_file: Path) -> None:
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_margins(10, 10, 10)
+    pdf.add_page()
+    font_family = _configure_pdf(pdf)
+
+    title = REPORT_TYPE_LABELS.get(report_type, report_type)
+    pdf.set_title(title)
+    pdf.set_font(font_family, size=15)
+    pdf.multi_cell(0, 8, text=f"Звіт: {title}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font(font_family, size=8)
+    pdf.set_text_color(71, 85, 105)
+    pdf.multi_cell(
+        0,
+        5,
+        text=f"Сформовано: {datetime.now(timezone.utc).astimezone().strftime('%d.%m.%Y %H:%M')}",
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(2)
+
+    for index, (section_name, rows) in enumerate(_prepare_pdf_sections(report_rows)):
+        if index > 0:
+            pdf.add_page()
+        if section_name:
+            pdf.set_font(font_family, size=11)
+            pdf.multi_cell(0, 6, text=section_name, new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(1)
+
+        headers = list(rows[0].keys()) if rows else ["Дані"]
+        _write_pdf_table(pdf, headers, rows, font_family)
+
+    pdf.output(str(out_file))
+
+
 def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_type: str, export_format: str, request_payload: dict | None = None) -> tuple[str, DocumentType]:
     out_dir = storage_path()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -1057,8 +1219,7 @@ def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_typ
     if isinstance(report_rows, dict):
         for name, rows in report_rows.items():
             for r in rows:
-                r["Вкладка"] = name
-                flat_report_rows.append(r)
+                flat_report_rows.append({**r, "Вкладка": name})
     else:
         flat_report_rows = report_rows
 
@@ -1109,15 +1270,7 @@ def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_typ
         return str(out_file), DocumentType.XLSX
 
     out_file = out_dir / f"{base_name}.pdf"
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=11)
-    pdf.cell(0, 8, _safe_pdf_text(f"Report: {report_type}"), new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
-    for row in flat_report_rows[:200]:
-        line = "; ".join(f"{k}: {v}" for k, v in row.items()).replace("_", " ")
-        pdf.cell(0, 7, _safe_pdf_text(line[:120]), new_x="LMARGIN", new_y="NEXT")
-    pdf.output(str(out_file))
+    _save_report_pdf(report_rows, report_type, out_file)
     return str(out_file), DocumentType.PDF
 
 
