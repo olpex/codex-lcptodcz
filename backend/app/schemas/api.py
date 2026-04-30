@@ -363,6 +363,18 @@ class WorkloadResponse(BaseModel):
     remaining_hours: float
 
 
+class TeacherMergeRequest(BaseModel):
+    target_teacher_id: int
+    source_teacher_ids: list[int] = Field(min_length=1)
+
+
+class TeacherMergeResponse(BaseModel):
+    target_teacher_id: int
+    merged_teacher_ids: list[int]
+    reassigned_slots: int
+    annual_load_hours: float
+
+
 class DashboardKPIResponse(BaseModel):
     active_groups: int
     active_trainees: int

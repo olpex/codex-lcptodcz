@@ -6,7 +6,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
-import type { Workload, Job } from "../types/api";
+import type { Workload, Job, TeacherMergeResult } from "../types/api";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 
 const STATS_HISTORY_LIMIT = 12;
@@ -40,6 +40,9 @@ export function WorkloadPage() {
   const [annualLoadErrors, setAnnualLoadErrors] = useState<Record<number, string>>({});
   const [savingTeacherId, setSavingTeacherId] = useState<number | null>(null);
   const [deletingTeacher, setDeletingTeacher] = useState<Workload | null>(null);
+  const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
+  const [mergeTargetTeacherId, setMergeTargetTeacherId] = useState<number | null>(null);
+  const [isMergingTeachers, setIsMergingTeachers] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -122,6 +125,30 @@ export function WorkloadPage() {
     [statsHistory]
   );
 
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedTeacherIds.includes(row.teacher_id)),
+    [rows, selectedTeacherIds]
+  );
+
+  const mergeTarget = useMemo(
+    () => selectedRows.find((row) => row.teacher_id === mergeTargetTeacherId) || selectedRows[0] || null,
+    [mergeTargetTeacherId, selectedRows]
+  );
+
+  const mergeSources = useMemo(
+    () => selectedRows.filter((row) => row.teacher_id !== mergeTarget?.teacher_id),
+    [mergeTarget?.teacher_id, selectedRows]
+  );
+
+  const openMergeDialog = () => {
+    if (selectedRows.length < 2) {
+      showError("Оберіть щонайменше двох викладачів для об'єднання");
+      return;
+    }
+    setMergeTargetTeacherId(selectedRows[0].teacher_id);
+    setIsMergeDialogOpen(true);
+  };
+
   const saveAnnualLoad = async (teacherId: number) => {
     if (savingTeacherId !== null) return;
     const draftValue = annualLoadDrafts[teacherId];
@@ -160,6 +187,31 @@ export function WorkloadPage() {
       showError((error as Error).message);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleMergeTeachers = async () => {
+    if (!mergeTarget || mergeSources.length === 0) return;
+    setIsMergingTeachers(true);
+    try {
+      const result = await request<TeacherMergeResult>("/teacher-workload/merge-teachers", {
+        method: "POST",
+        body: JSON.stringify({
+          target_teacher_id: mergeTarget.teacher_id,
+          source_teacher_ids: mergeSources.map((row) => row.teacher_id)
+        })
+      });
+      showSuccess(
+        `Викладачів об'єднано: перенесено занять ${result.reassigned_slots}, річне навантаження ${result.annual_load_hours}`
+      );
+      setIsMergeDialogOpen(false);
+      setSelectedTeacherIds([]);
+      setMergeTargetTeacherId(null);
+      await load();
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsMergingTeachers(false);
     }
   };
 
@@ -430,6 +482,16 @@ export function WorkloadPage() {
 
           {canEditAnnualLoad && (
             <button
+              className="rounded-lg bg-slate-800 px-4 py-2 font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
+              onClick={openMergeDialog}
+              disabled={selectedTeacherIds.length < 2 || isMergingTeachers}
+            >
+              Об'єднати обраних ({selectedTeacherIds.length})
+            </button>
+          )}
+
+          {canEditAnnualLoad && (
+            <button
               className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white disabled:opacity-50 hover:bg-indigo-700"
               onClick={handleExport}
               disabled={isExporting || rows.length === 0}
@@ -456,6 +518,54 @@ export function WorkloadPage() {
           }}
         />
       </Panel>
+
+      <ConfirmDialog
+        open={isMergeDialogOpen}
+        title="Об'єднання викладачів"
+        description={
+          mergeTarget
+            ? `Основним залишиться "${mergeTarget.teacher_name}". Усі заняття й річне навантаження обраних дублікатів буде перенесено на нього.`
+            : "Оберіть основного викладача для об'єднання."
+        }
+        confirmLabel="Об'єднати"
+        cancelLabel="Скасувати"
+        confirmVariant="primary"
+        confirmDisabled={!mergeTarget || mergeSources.length === 0 || isMergingTeachers}
+        onConfirm={handleMergeTeachers}
+        onCancel={() => {
+          setIsMergeDialogOpen(false);
+          setMergeTargetTeacherId(null);
+        }}
+      >
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Основний викладач
+            </span>
+            <select
+              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={mergeTarget?.teacher_id || ""}
+              onChange={(event) => setMergeTargetTeacherId(Number(event.target.value))}
+            >
+              {selectedRows.map((row) => (
+                <option key={row.teacher_id} value={row.teacher_id}>
+                  {row.teacher_name} · {row.total_hours} год · річне {row.annual_load_hours}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+            <p className="font-semibold text-ink">Будуть приєднані:</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {mergeSources.map((row) => (
+                <li key={row.teacher_id}>
+                  {row.teacher_name}: {row.total_hours} год, річне {row.annual_load_hours}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={!!deletingTeacher}

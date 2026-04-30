@@ -122,6 +122,13 @@ export interface Workload {
   remaining_hours: number;
 }
 
+export interface TeacherMergeResult {
+  target_teacher_id: number;
+  merged_teacher_ids: number[];
+  reassigned_slots: number;
+  annual_load_hours: number;
+}
+
 export interface KPI {
   active_groups: number;
   active_trainees: number;
