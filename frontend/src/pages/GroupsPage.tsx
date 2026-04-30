@@ -18,7 +18,13 @@ type GroupDetail = {
   scheduleHours: number;
   scheduleDateFrom: string | null;
   scheduleDateTo: string | null;
-  teachers: string[];
+  teachers: GroupDetailTeacher[];
+};
+
+type GroupDetailTeacher = {
+  teacherId: number;
+  name: string;
+  hours: number;
 };
 
 function formatDate(value: string | null | undefined): string {
@@ -28,6 +34,10 @@ function formatDate(value: string | null | undefined): string {
 
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString("uk-UA");
+}
+
+function formatHours(value: number): string {
+  return value.toLocaleString("uk-UA", { maximumFractionDigits: 2 });
 }
 
 function formatAuditAction(action: string): string {
@@ -59,9 +69,21 @@ function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlot
   const archivedTrainees = groupTrainees.length - activeTrainees;
   const capacityUsedPct = group.capacity > 0 ? Math.round((activeTrainees / group.capacity) * 100) : 0;
   const scheduleDates = groupSlots.map((slot) => slot.starts_at).filter(Boolean).sort();
-  const teachers = Array.from(
-    new Set(groupSlots.map((slot) => (slot.teacher_name || "").trim()).filter(Boolean))
-  ).sort((left, right) => left.localeCompare(right, "uk-UA", { sensitivity: "base" }));
+  const teacherBuckets = new Map<number, GroupDetailTeacher>();
+  groupSlots.forEach((slot) => {
+    const name = (slot.teacher_name || "").trim();
+    if (!name) return;
+    const existing = teacherBuckets.get(slot.teacher_id);
+    const nextHours = (existing?.hours || 0) + (slot.academic_hours || 0);
+    teacherBuckets.set(slot.teacher_id, {
+      teacherId: slot.teacher_id,
+      name: existing && existing.name.length >= name.length ? existing.name : name,
+      hours: Number(nextHours.toFixed(2))
+    });
+  });
+  const teachers = Array.from(teacherBuckets.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, "uk-UA", { sensitivity: "base" })
+  );
 
   return {
     activeTrainees,
@@ -721,10 +743,18 @@ export function GroupsPage() {
               <div className="rounded-lg border border-slate-200 bg-white p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Викладачі</p>
                 <p className="mt-2 text-2xl font-semibold text-ink">{selectedGroupDetail.teachers.length}</p>
-                <p className="mt-1 text-xs text-slate-600">
-                  {selectedGroupDetail.teachers.slice(0, 2).join(", ") || "Не знайдено"}
-                  {selectedGroupDetail.teachers.length > 2 ? ` та ще ${selectedGroupDetail.teachers.length - 2}` : ""}
-                </p>
+                {selectedGroupDetail.teachers.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-sm leading-5 text-slate-700">
+                    {selectedGroupDetail.teachers.map((teacher) => (
+                      <li key={teacher.teacherId} className="break-words">
+                        {teacher.name}{" "}
+                        <span className="font-semibold text-ink">({formatHours(teacher.hours)} год)</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-600">Не знайдено</p>
+                )}
               </div>
             </div>
             <div className="xl:col-span-2">
