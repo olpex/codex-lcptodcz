@@ -20,3 +20,25 @@ def test_guess_schedule_draft_from_text():
     assert draft_type == "schedule"
     assert payload["group_code"] == "46-26"
     assert payload["entries"] == []
+
+
+def test_guess_schedule_draft_extracts_entries_from_ocr_text():
+    text = """
+    Розклад занять
+    21.10
+    22.10
+    Кар'єрний розвиток
+    1п/1год
+    2п/1год
+    Паращук Світлана Зеновіївна
+    """
+
+    draft_type, payload = guess_draft_from_text(text, group_code_hint="162-25")
+
+    assert draft_type == "schedule"
+    assert payload["group_code"] == "162-25"
+    assert len(payload["entries"]) == 2
+    assert payload["entries"][0]["date"] == "2025-10-21"
+    assert payload["entries"][0]["pair_number"] == 1
+    assert payload["entries"][0]["subject_name"] == "Кар'єрний розвиток"
+    assert payload["entries"][1]["date"] == "2025-10-22"

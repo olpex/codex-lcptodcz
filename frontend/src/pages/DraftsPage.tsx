@@ -414,6 +414,16 @@ export function DraftsPage() {
     [statsHistory]
   );
 
+  const schedulePayloadReady = useMemo(() => {
+    if (draftType !== "schedule") return true;
+    try {
+      const parsed = JSON.parse(payloadJson || "{}") as EditablePayload;
+      return Boolean(parsed.group_code && Array.isArray(parsed.entries) && parsed.entries.length > 0);
+    } catch {
+      return false;
+    }
+  }, [draftType, payloadJson]);
+
   return (
     <div className="space-y-5">
       <Panel title="Імпорт зі скріншота">
@@ -684,9 +694,14 @@ export function DraftsPage() {
                 )}
                 {canEdit && (
                   <button
-                    disabled={selectedDraft.status === "approved"}
+                    disabled={selectedDraft.status === "approved" || !schedulePayloadReady}
                     className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-40"
                     onClick={approveDraft}
+                    title={
+                      schedulePayloadReady
+                        ? undefined
+                        : "Для підтвердження розкладу потрібні group_code та хоча б один запис у entries"
+                    }
                   >
                     Підтвердити
                   </button>

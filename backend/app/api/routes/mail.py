@@ -34,7 +34,7 @@ from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequ
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.mail_ingest import is_contract_sender
-from app.services.ocr import guess_draft_from_text, ocr_image_file
+from app.services.ocr import guess_draft_from_text, ocr_image_file, parse_schedule_ocr_text
 from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
@@ -676,7 +676,8 @@ def upload_ocr_image(
             ),
         )
 
-    guessed_type, payload = guess_draft_from_text(extracted_text)
+    group_code_hint = _extract_group_code_from_filename(file.filename or "")
+    guessed_type, payload = guess_draft_from_text(extracted_text, group_code_hint)
     final_type = guessed_type if draft_type == "auto" else draft_type
     if final_type != guessed_type:
         payload = {
@@ -685,13 +686,7 @@ def upload_ocr_image(
             "source": "ocr_upload",
         }
         if final_type == "schedule":
-            payload = {
-                "group_code": str(payload.get("group_code") or ""),
-                "group_name": str(payload.get("group_name") or ""),
-                "entries": payload.get("entries") if isinstance(payload.get("entries"), list) else [],
-                "raw_text": extracted_text[:12000],
-                "source": "ocr_upload",
-            }
+            payload = parse_schedule_ocr_text(extracted_text, group_code_hint)
         elif final_type == "order":
             payload = {
                 "order_number": str(payload.get("order_number") or "AUTO"),

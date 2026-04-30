@@ -79,16 +79,17 @@ def test_upload_ocr_image_uses_browser_extracted_text(client, auth_headers, monk
         headers=auth_headers,
         data={
             "draft_type": "schedule",
-            "extracted_text": "Розклад занять групи 162-25",
+            "extracted_text": "Розклад занять\n21.10\nКар'єрний розвиток\n1п/1год\nПаращук Світлана Зеновіївна",
         },
-        files={"file": ("schedule.png", BytesIO(b"fake image bytes"), "image/png")},
+        files={"file": ("162-25.png", BytesIO(b"fake image bytes"), "image/png")},
     )
 
     assert response.status_code == 201
     body = response.json()
     assert body["draft_type"] == "schedule"
-    assert body["extracted_text"] == "Розклад занять групи 162-25"
+    assert "Розклад занять" in body["extracted_text"]
     assert body["structured_payload"]["group_code"] == "162-25"
+    assert len(body["structured_payload"]["entries"]) == 1
 
 
 def test_approve_schedule_draft_creates_schedule_slots(client, auth_headers, db_session):

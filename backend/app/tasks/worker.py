@@ -18,7 +18,7 @@ from app.services.import_export import (
     try_import_trainees,
 )
 from app.services.mail_ingest import ingest_mailbox
-from app.services.ocr import guess_draft_from_text
+from app.services.ocr import extract_group_code_hint, guess_draft_from_text
 from app.services.schedule_import import import_schedule_docx
 
 logger = get_task_logger(__name__)
@@ -193,7 +193,9 @@ def process_ocr_task(self, ocr_result_id: int) -> dict:
         result = db.get(OCRResult, ocr_result_id)
         if not result:
             return {"error": "ocr_result_not_found"}
-        draft_type, payload = guess_draft_from_text(result.extracted_text or "")
+        document = db.get(Document, result.document_id) if result.document_id else None
+        group_code_hint = extract_group_code_hint(document.file_name if document else "")
+        draft_type, payload = guess_draft_from_text(result.extracted_text or "", group_code_hint)
         result.draft_type = draft_type
         result.structured_payload = payload
         db.add(result)
