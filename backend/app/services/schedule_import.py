@@ -236,6 +236,17 @@ def _parse_hours(value: str) -> float:
     return float(match.group(1).replace(",", "."))
 
 
+def _is_total_hours_row(text: str) -> bool:
+    low = _norm(text).lower()
+    return (
+        "загальний обсяг" in low
+        or "всього годин" in low
+        or "усього годин" in low
+        or ("всього" in low and "год" in low)
+        or ("усього" in low and "год" in low)
+    )
+
+
 def _parse_pairs_cell(cell_text: str) -> list[tuple[int, float]]:
     text = _norm(cell_text).lower()
     if not text:
@@ -446,7 +457,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                     previous_teacher_name = teacher_name
 
                 row_text = " ".join(_norm(cell.text) for cell in cells)
-                if "загальний обсяг" in row_text.lower():
+                if _is_total_hours_row(row_text):
                     current_total = _parse_hours(row_text)
                     if current_total > table_total_group_hours:
                         table_total_group_hours = current_total
@@ -493,7 +504,7 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
                     cells = row.cells
                     row_values = [_norm(cell.text) for cell in cells]
                     row_text = " ".join(row_values)
-                    if "загальний обсяг" in row_text.lower():
+                    if _is_total_hours_row(row_text):
                         current_total = _parse_hours(row_text)
                         if current_total > table_total_group_hours:
                             table_total_group_hours = current_total

@@ -270,6 +270,30 @@ def _build_schedule_docx_with_teacher(path: Path, group_code: str, teacher_name:
     doc.save(path)
 
 
+def _build_schedule_docx_with_vsoho_total_row(path: Path) -> None:
+    doc = DocxDocument()
+    doc.add_paragraph("1 пара - 9.30 – 11.05")
+    doc.add_paragraph("2 пара – 11.10 – 12.45")
+    doc.add_paragraph("за напрямом")
+    doc.add_paragraph("Технології комп'ютерної обробки інформації")
+    doc.add_paragraph("Група № 46-26")
+    doc.add_paragraph("з 11 березня 2026 року до 12 березня 2026 року")
+
+    table = doc.add_table(rows=4, cols=6)
+    for idx, value in enumerate(
+        ["№ з/п", "Назва предмета", "К-сть год.", "11.03", "12.03", "Прізвище, ім'я, по-батькові викладача"]
+    ):
+        table.cell(0, idx).text = value
+    for idx, value in enumerate(["1", "Тема", "4", "1,2п/4год", "", "Паращук О.Л."]):
+        table.cell(1, idx).text = value
+    for idx, value in enumerate(["", "ВСЬОГО ГОДИН:", "4", "4", "0", ""]):
+        table.cell(2, idx).text = value
+    for idx, value in enumerate(["", "", "", "", "", ""]):
+        table.cell(3, idx).text = value
+
+    doc.save(path)
+
+
 def test_parse_schedule_docx(tmp_path: Path):
     file_path = tmp_path / "schedule.docx"
     _build_schedule_docx(file_path)
@@ -296,6 +320,19 @@ def test_parse_schedule_docx_supports_short_year_and_teacher_carryover(tmp_path:
     assert payload["group_total_hours"] == 6
     assert payload["entries"]
     assert all(item["teacher_name"] == "Войтехівська Галина Михайлівна" for item in payload["entries"])
+
+
+def test_parse_schedule_docx_skips_vsoho_total_row(tmp_path: Path):
+    file_path = tmp_path / "schedule-vsoho-total-row.docx"
+    _build_schedule_docx_with_vsoho_total_row(file_path)
+
+    payload = parse_schedule_docx(str(file_path))[0]
+
+    assert payload["group_code"] == "46-26"
+    assert payload["group_total_hours"] == 4
+    assert len(payload["entries"]) == 2
+    assert sum(item["academic_hours"] for item in payload["entries"]) == 4
+    assert {item["subject_name"] for item in payload["entries"]} == {"Тема"}
 
 
 def test_import_schedule_docx_with_conflict_detection(db_session, tmp_path: Path):
