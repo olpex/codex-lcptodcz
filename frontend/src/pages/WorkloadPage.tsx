@@ -18,6 +18,18 @@ type WorkloadSnapshot = {
   remainingHours: number;
 };
 
+function getWorkloadRowClassName(row: Workload): string | undefined {
+  if (row.remaining_hours < 0) return "bg-rose-50";
+  if (row.annual_load_hours <= 0 || row.remaining_hours === 0) return "bg-amber-50";
+  return undefined;
+}
+
+function getRemainingHoursClass(row: Workload): string {
+  if (row.remaining_hours < 0) return "bg-rose-100 text-rose-700";
+  if (row.remaining_hours === 0) return "bg-amber-100 text-amber-800";
+  return "bg-emerald-100 text-emerald-700";
+}
+
 export function WorkloadPage() {
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -288,7 +300,11 @@ export function WorkloadPage() {
     {
       key: "remaining_hours",
       header: "Залишок годин",
-      render: (row) => row.remaining_hours,
+      render: (row) => (
+        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getRemainingHoursClass(row)}`}>
+          {row.remaining_hours}
+        </span>
+      ),
       sortAccessor: (row) => row.remaining_hours
     },
     ...(canEditAnnualLoad
@@ -429,6 +445,7 @@ export function WorkloadPage() {
           isLoading={isLoading}
           errorText={loadError}
           onRetry={() => load()}
+          rowClassName={getWorkloadRowClassName}
           emptyText="Дані педнавантаження відсутні"
           emptyActionLabel="Оновити навантаження"
           onEmptyAction={() => load()}

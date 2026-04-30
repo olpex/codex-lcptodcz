@@ -47,6 +47,12 @@ function formatDuplicateMatchReason(reason: string | null): string {
   return "—";
 }
 
+function getJobRowClassName(item: JobListItem): string | undefined {
+  if (item.job.status === "failed") return "bg-rose-50";
+  if (item.job.status === "queued" || item.job.status === "running") return "bg-amber-50";
+  return undefined;
+}
+
 export function JobCenterPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -761,6 +767,7 @@ export function JobCenterPage() {
           isLoading={isLoading}
           errorText={loadError}
           onRetry={() => loadJobs(true)}
+          rowClassName={getJobRowClassName}
           emptyText="Задачі не знайдено"
           emptyActionLabel="Оновити задачі"
           onEmptyAction={() => loadJobs(true)}

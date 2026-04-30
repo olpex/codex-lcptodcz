@@ -24,6 +24,18 @@ const DEFAULT_FORM: PerformancePayload = {
   employment_flag: false
 };
 
+function getPercentBadgeClass(value: number, warningThreshold: number, criticalThreshold: number): string {
+  if (value < criticalThreshold) return "bg-rose-100 text-rose-700";
+  if (value < warningThreshold) return "bg-amber-100 text-amber-800";
+  return "bg-emerald-100 text-emerald-700";
+}
+
+function getPerformanceRowClassName(item: Performance): string | undefined {
+  if (item.progress_pct < 60 || item.attendance_pct < 70) return "bg-rose-50";
+  if (item.progress_pct < 75 || item.attendance_pct < 85) return "bg-amber-50";
+  return undefined;
+}
+
 export function PerformancePage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -204,13 +216,21 @@ export function PerformancePage() {
       {
         key: "progress",
         header: "Прогрес",
-        render: (item) => `${item.progress_pct}%`,
+        render: (item) => (
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getPercentBadgeClass(item.progress_pct, 75, 60)}`}>
+            {item.progress_pct}%
+          </span>
+        ),
         sortAccessor: (item) => item.progress_pct
       },
       {
         key: "attendance",
         header: "Відвідування",
-        render: (item) => `${item.attendance_pct}%`,
+        render: (item) => (
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getPercentBadgeClass(item.attendance_pct, 85, 70)}`}>
+            {item.attendance_pct}%
+          </span>
+        ),
         sortAccessor: (item) => item.attendance_pct
       },
       {
@@ -379,6 +399,7 @@ export function PerformancePage() {
           isLoading={isLoading}
           errorText={loadError}
           onRetry={load}
+          rowClassName={getPerformanceRowClassName}
           emptyText="Записи успішності відсутні"
           emptyActionLabel="Оновити записи"
           onEmptyAction={load}

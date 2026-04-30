@@ -25,6 +25,18 @@ type DraftStatsSnapshot = {
 
 const STATS_HISTORY_LIMIT = 12;
 
+function getDraftRowClassName(draft: Draft): string | undefined {
+  if (draft.status === "rejected") return "bg-rose-50";
+  if (draft.status === "pending" || draft.confidence < 0.7) return "bg-amber-50";
+  return undefined;
+}
+
+function getDraftConfidenceClass(confidence: number): string {
+  if (confidence < 0.55) return "bg-rose-100 text-rose-700";
+  if (confidence < 0.7) return "bg-amber-100 text-amber-800";
+  return "bg-emerald-100 text-emerald-700";
+}
+
 export function DraftsPage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -125,7 +137,11 @@ export function DraftsPage() {
       {
         key: "confidence",
         header: "Довіра",
-        render: (draft) => `${(draft.confidence * 100).toFixed(0)}%`,
+        render: (draft) => (
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getDraftConfidenceClass(draft.confidence)}`}>
+            {(draft.confidence * 100).toFixed(0)}%
+          </span>
+        ),
         sortAccessor: (draft) => draft.confidence
       },
       {
@@ -337,6 +353,7 @@ export function DraftsPage() {
             isLoading={isLoading}
             errorText={loadError}
             onRetry={load}
+            rowClassName={getDraftRowClassName}
             emptyText="Чернетки відсутні"
             emptyActionLabel="Оновити чернетки"
             onEmptyAction={load}
