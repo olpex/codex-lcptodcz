@@ -366,10 +366,13 @@ class WorkloadResponse(BaseModel):
 class TeacherMergeRequest(BaseModel):
     target_teacher_id: int
     source_teacher_ids: list[int] = Field(min_length=1)
+    last_name: str | None = Field(default=None, min_length=1, max_length=120)
+    first_name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class TeacherMergeResponse(BaseModel):
     target_teacher_id: int
+    teacher_name: str
     merged_teacher_ids: list[int]
     reassigned_slots: int
     annual_load_hours: float

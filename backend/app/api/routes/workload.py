@@ -62,6 +62,13 @@ def merge_teachers(
     if len(sources) != len(source_ids):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Одного з викладачів для об'єднання не знайдено")
 
+    corrected_last_name = payload.last_name.strip() if payload.last_name is not None else None
+    corrected_first_name = payload.first_name.strip() if payload.first_name is not None else None
+    if payload.last_name is not None and not corrected_last_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Прізвище викладача не може бути порожнім")
+    if payload.first_name is not None and not corrected_first_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ім'я та по батькові викладача не можуть бути порожніми")
+
     reassigned_slots = (
         db.query(ScheduleSlot)
         .filter(ScheduleSlot.teacher_id.in_(source_ids))
@@ -70,6 +77,10 @@ def merge_teachers(
     target.annual_load_hours = float(target.annual_load_hours or 0) + sum(float(source.annual_load_hours or 0) for source in sources)
     if not target.hourly_rate:
         target.hourly_rate = max(float(source.hourly_rate or 0) for source in sources + [target])
+    if corrected_last_name is not None:
+        target.last_name = corrected_last_name
+    if corrected_first_name is not None:
+        target.first_name = corrected_first_name
     db.add(target)
 
     merged_names = [f"{source.last_name} {source.first_name}".strip() for source in sources]
@@ -90,10 +101,12 @@ def merge_teachers(
             "merged_teacher_names": merged_names,
             "reassigned_slots": reassigned_slots,
             "annual_load_hours": target.annual_load_hours,
+            "final_teacher_name": f"{target.last_name} {target.first_name}".strip(),
         },
     )
     return TeacherMergeResponse(
         target_teacher_id=target.id,
+        teacher_name=f"{target.last_name} {target.first_name}".strip(),
         merged_teacher_ids=source_ids,
         reassigned_slots=reassigned_slots,
         annual_load_hours=target.annual_load_hours,

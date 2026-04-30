@@ -32,15 +32,25 @@ def test_merge_teachers_reassigns_schedule_slots_and_annual_load(client, auth_he
     response = client.post(
         "/api/v1/teacher-workload/merge-teachers",
         headers=auth_headers,
-        json={"target_teacher_id": target_id, "source_teacher_ids": [duplicate_id]},
+        json={
+            "target_teacher_id": target_id,
+            "source_teacher_ids": [duplicate_id],
+            "last_name": "Слегура",
+            "first_name": "Андрій Сергійович",
+        },
     )
 
     assert response.status_code == 200
     body = response.json()
     assert body["target_teacher_id"] == target_id
+    assert body["teacher_name"] == "Слегура Андрій Сергійович"
     assert body["merged_teacher_ids"] == [duplicate_id]
     assert body["reassigned_slots"] == 1
     assert body["annual_load_hours"] == 200
     db_session.expire_all()
+    target_after = db_session.get(Teacher, target_id)
+    assert target_after is not None
+    assert target_after.last_name == "Слегура"
+    assert target_after.first_name == "Андрій Сергійович"
     assert db_session.get(Teacher, duplicate_id) is None
     assert db_session.query(ScheduleSlot).one().teacher_id == target_id

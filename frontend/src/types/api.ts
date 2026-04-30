@@ -124,6 +124,7 @@ export interface Workload {
 
 export interface TeacherMergeResult {
   target_teacher_id: number;
+  teacher_name: string;
   merged_teacher_ids: number[];
   reassigned_slots: number;
   annual_load_hours: number;

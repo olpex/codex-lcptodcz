@@ -30,6 +30,14 @@ function getRemainingHoursClass(row: Workload): string {
   return "bg-emerald-100 text-emerald-700";
 }
 
+function splitTeacherName(value: string): { lastName: string; firstName: string } {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  return {
+    lastName: parts[0] || "",
+    firstName: parts.slice(1).join(" ")
+  };
+}
+
 export function WorkloadPage() {
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -42,6 +50,8 @@ export function WorkloadPage() {
   const [deletingTeacher, setDeletingTeacher] = useState<Workload | null>(null);
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
   const [mergeTargetTeacherId, setMergeTargetTeacherId] = useState<number | null>(null);
+  const [mergeLastName, setMergeLastName] = useState("");
+  const [mergeFirstName, setMergeFirstName] = useState("");
   const [isMergingTeachers, setIsMergingTeachers] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -140,12 +150,19 @@ export function WorkloadPage() {
     [mergeTarget?.teacher_id, selectedRows]
   );
 
+  const setMergeTargetFromRow = (row: Workload | null) => {
+    setMergeTargetTeacherId(row?.teacher_id ?? null);
+    const nameParts = splitTeacherName(row?.teacher_name || "");
+    setMergeLastName(nameParts.lastName);
+    setMergeFirstName(nameParts.firstName);
+  };
+
   const openMergeDialog = () => {
     if (selectedRows.length < 2) {
       showError("Оберіть щонайменше двох викладачів для об'єднання");
       return;
     }
-    setMergeTargetTeacherId(selectedRows[0].teacher_id);
+    setMergeTargetFromRow(selectedRows[0]);
     setIsMergeDialogOpen(true);
   };
 
@@ -192,21 +209,29 @@ export function WorkloadPage() {
 
   const handleMergeTeachers = async () => {
     if (!mergeTarget || mergeSources.length === 0) return;
+    const lastName = mergeLastName.trim();
+    const firstName = mergeFirstName.trim();
+    if (!lastName || !firstName) {
+      showError("Вкажіть виправлене прізвище, ім'я та по батькові викладача");
+      return;
+    }
     setIsMergingTeachers(true);
     try {
       const result = await request<TeacherMergeResult>("/teacher-workload/merge-teachers", {
         method: "POST",
         body: JSON.stringify({
           target_teacher_id: mergeTarget.teacher_id,
-          source_teacher_ids: mergeSources.map((row) => row.teacher_id)
+          source_teacher_ids: mergeSources.map((row) => row.teacher_id),
+          last_name: lastName,
+          first_name: firstName
         })
       });
       showSuccess(
-        `Викладачів об'єднано: перенесено занять ${result.reassigned_slots}, річне навантаження ${result.annual_load_hours}`
+        `Викладачів об'єднано: ${result.teacher_name}, перенесено занять ${result.reassigned_slots}, річне навантаження ${result.annual_load_hours}`
       );
       setIsMergeDialogOpen(false);
       setSelectedTeacherIds([]);
-      setMergeTargetTeacherId(null);
+      setMergeTargetFromRow(null);
       await load();
     } catch (error) {
       showError((error as Error).message);
@@ -530,11 +555,13 @@ export function WorkloadPage() {
         confirmLabel="Об'єднати"
         cancelLabel="Скасувати"
         confirmVariant="primary"
-        confirmDisabled={!mergeTarget || mergeSources.length === 0 || isMergingTeachers}
+        confirmDisabled={
+          !mergeTarget || mergeSources.length === 0 || isMergingTeachers || !mergeLastName.trim() || !mergeFirstName.trim()
+        }
         onConfirm={handleMergeTeachers}
         onCancel={() => {
           setIsMergeDialogOpen(false);
-          setMergeTargetTeacherId(null);
+          setMergeTargetFromRow(null);
         }}
       >
         <div className="space-y-3">
@@ -545,7 +572,10 @@ export function WorkloadPage() {
             <select
               className="w-full rounded-lg border border-slate-300 px-3 py-2"
               value={mergeTarget?.teacher_id || ""}
-              onChange={(event) => setMergeTargetTeacherId(Number(event.target.value))}
+              onChange={(event) => {
+                const nextTeacherId = Number(event.target.value);
+                setMergeTargetFromRow(selectedRows.find((row) => row.teacher_id === nextTeacherId) || null);
+              }}
             >
               {selectedRows.map((row) => (
                 <option key={row.teacher_id} value={row.teacher_id}>
@@ -554,6 +584,28 @@ export function WorkloadPage() {
               ))}
             </select>
           </label>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Правильне прізвище
+              </span>
+              <input
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                value={mergeLastName}
+                onChange={(event) => setMergeLastName(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Правильне ім'я та по батькові
+              </span>
+              <input
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                value={mergeFirstName}
+                onChange={(event) => setMergeFirstName(event.target.value)}
+              />
+            </label>
+          </div>
           <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
             <p className="font-semibold text-ink">Будуть приєднані:</p>
             <ul className="mt-2 list-disc space-y-1 pl-5">
