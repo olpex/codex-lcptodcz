@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: "/groups", label: uiText.menu.groups, roles: ["admin", "methodist"] as const },
   { to: "/trainees", label: uiText.menu.trainees, roles: ["admin", "methodist"] as const },
   { to: "/orders", label: uiText.menu.orders, roles: ["admin", "methodist"] as const },
+  { to: "/search", label: uiText.menu.search, roles: ["admin", "methodist", "teacher"] as const },
   { to: "/schedule", label: uiText.menu.schedule, roles: ["admin", "methodist", "teacher"] as const },
   { to: "/workload", label: uiText.menu.workload, roles: ["admin", "methodist", "teacher"] as const },
   { to: "/performance", label: uiText.menu.performance, roles: ["admin", "methodist", "teacher"] as const },

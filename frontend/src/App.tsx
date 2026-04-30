@@ -39,6 +39,9 @@ const ProfilePage = lazy(() =>
 const SchedulePage = lazy(() =>
   import("./pages/SchedulePage").then((module) => ({ default: module.SchedulePage }))
 );
+const SearchPage = lazy(() =>
+  import("./pages/SearchPage").then((module) => ({ default: module.SearchPage }))
+);
 const TraineesPage = lazy(() =>
   import("./pages/TraineesPage").then((module) => ({ default: module.TraineesPage }))
 );
@@ -105,6 +108,14 @@ export default function App() {
             element={
               <RoleGuard allowedRoles={["admin", "methodist"]}>
                 <OrdersPage />
+              </RoleGuard>
+            }
+          />
+          <Route
+            path="search"
+            element={
+              <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+                <SearchPage />
               </RoleGuard>
             }
           />

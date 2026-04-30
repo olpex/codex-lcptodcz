@@ -7,6 +7,7 @@ export const uiText = {
     groups: "Групи",
     trainees: "Слухачі",
     orders: "Накази",
+    search: "Пошук",
     schedule: "Розклад",
     workload: "Навантаження",
     performance: "Успішність",
