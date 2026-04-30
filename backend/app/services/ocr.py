@@ -26,7 +26,8 @@ def ocr_image_file(file_path: str) -> str:
     try:
         with Image.open(path) as image:
             return pytesseract.image_to_string(image, lang=settings.ocr_language).strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Tesseract OCR failed for %s: %s", path, exc)
         return ""
 
 

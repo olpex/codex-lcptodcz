@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createWorker, OEM, PSM } from "tesseract.js";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { formatDraftStatus, formatMailStatus } from "../i18n/statuses";
 import { Panel } from "../components/Panel";
@@ -33,6 +34,64 @@ type DraftStatsSnapshot = {
 
 const STATS_HISTORY_LIMIT = 12;
 
+async function prepareImageForBrowserOcr(file: File): Promise<HTMLCanvasElement> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.max(2, Math.min(3, 2200 / Math.max(bitmap.width, 1)));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("Браузер не зміг підготувати зображення для OCR");
+  }
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const red = imageData.data[index];
+    const green = imageData.data[index + 1];
+    const blue = imageData.data[index + 2];
+    const gray = red * 0.299 + green * 0.587 + blue * 0.114;
+    const enhanced = gray > 215 ? 255 : Math.max(0, gray - 35);
+    imageData.data[index] = enhanced;
+    imageData.data[index + 1] = enhanced;
+    imageData.data[index + 2] = enhanced;
+    imageData.data[index + 3] = 255;
+  }
+  context.putImageData(imageData, 0, 0);
+  bitmap.close();
+  return canvas;
+}
+
+async function recognizeImageInBrowser(file: File, onProgress: (message: string) => void): Promise<string> {
+  onProgress("Готую зображення...");
+  const image = await prepareImageForBrowserOcr(file);
+  const worker = await createWorker(["ukr", "eng"], OEM.LSTM_ONLY, {
+    logger: (message) => {
+      if (!message.status) return;
+      const percent = Math.round((message.progress || 0) * 100);
+      onProgress(percent > 0 ? `${message.status}: ${percent}%` : message.status);
+    }
+  });
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      preserve_interword_spaces: "1",
+      user_defined_dpi: "300"
+    });
+    onProgress("Розпізнаю текст у браузері...");
+    const result = await worker.recognize(image);
+    return (result.data.text || "").trim();
+  } finally {
+    await worker.terminate();
+  }
+}
+
 function getDraftRowClassName(draft: Draft): string | undefined {
   if (draft.status === "rejected") return "bg-rose-50";
   if (draft.status === "pending" || draft.confidence < 0.7) return "bg-amber-50";
@@ -58,6 +117,7 @@ export function DraftsPage() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageDraftType, setImageDraftType] = useState("auto");
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<DraftStatsSnapshot[]>([]);
@@ -292,10 +352,19 @@ export function DraftsPage() {
       return;
     }
     setIsUploadingImage(true);
+    setOcrProgress("");
     try {
+      let browserText = "";
+      try {
+        browserText = await recognizeImageInBrowser(imageFile, setOcrProgress);
+      } catch (ocrError) {
+        console.warn("Browser OCR failed, falling back to server OCR", ocrError);
+        setOcrProgress("Браузерний OCR не спрацював, пробую серверний OCR...");
+      }
       const formData = new FormData();
       formData.append("file", imageFile);
       formData.append("draft_type", imageDraftType);
+      formData.append("extracted_text", browserText);
       const draft = await request<Draft>("/drafts/upload-image", {
         method: "POST",
         body: formData
@@ -308,6 +377,7 @@ export function DraftsPage() {
       showError((error as Error).message);
     } finally {
       setIsUploadingImage(false);
+      setOcrProgress("");
     }
   };
 
@@ -382,6 +452,7 @@ export function DraftsPage() {
             {isUploadingImage ? "Розпізнаю..." : "Розпізнати скріншот"}
           </button>
         </div>
+        {ocrProgress && <p className="mt-2 text-sm text-slate-600">{ocrProgress}</p>}
       </Panel>
 
       <Panel title="Вхідна кореспонденція">

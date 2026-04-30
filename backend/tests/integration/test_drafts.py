@@ -67,6 +67,30 @@ def test_upload_ocr_image_creates_editable_draft(client, auth_headers, monkeypat
     assert body["structured_payload"]["contract_number"] == "77"
 
 
+def test_upload_ocr_image_uses_browser_extracted_text(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        mail_routes,
+        "ocr_image_file",
+        lambda path: (_ for _ in ()).throw(AssertionError("server OCR should not be called")),
+    )
+
+    response = client.post(
+        "/api/v1/drafts/upload-image",
+        headers=auth_headers,
+        data={
+            "draft_type": "schedule",
+            "extracted_text": "Розклад занять групи 162-25",
+        },
+        files={"file": ("schedule.png", BytesIO(b"fake image bytes"), "image/png")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["draft_type"] == "schedule"
+    assert body["extracted_text"] == "Розклад занять групи 162-25"
+    assert body["structured_payload"]["group_code"] == "162-25"
+
+
 def test_approve_schedule_draft_creates_schedule_slots(client, auth_headers, db_session):
     document = Document(
         file_name="schedule.png",

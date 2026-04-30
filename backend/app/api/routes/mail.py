@@ -652,6 +652,7 @@ def upload_ocr_image(
     current_user: CurrentUser,
     file: UploadFile = File(...),
     draft_type: str = Form(default="auto"),
+    extracted_text: str = Form(default=""),
 ) -> DraftResponse:
     extension = file.filename.rsplit(".", 1)[1].lower() if file.filename and "." in file.filename else ""
     if extension not in ALLOWED_OCR_IMAGE_EXTENSIONS:
@@ -663,9 +664,17 @@ def upload_ocr_image(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний тип OCR-чернетки")
 
     path, sha256 = persist_upload(file)
-    extracted_text = ocr_image_file(path)
+    client_extracted_text = extracted_text.strip()
+    extracted_text = client_extracted_text or ocr_image_file(path)
     if not extracted_text.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не вдалося розпізнати текст на зображенні")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Не вдалося розпізнати текст на зображенні. "
+                "Спробуйте чіткіший скріншот або перевірте OCR: браузерний OCR не передав текст, "
+                "а серверний Tesseract недоступний чи не має української мови."
+            ),
+        )
 
     guessed_type, payload = guess_draft_from_text(extracted_text)
     final_type = guessed_type if draft_type == "auto" else draft_type
@@ -719,7 +728,7 @@ def upload_ocr_image(
         extracted_text=extracted_text,
         structured_payload=payload,
         draft_type=final_type,
-        confidence=0.5 if final_type == "schedule" else 0.65,
+        confidence=0.55 if final_type == "schedule" else 0.7,
         status=DraftStatus.PENDING,
     )
     db.add(draft)
@@ -732,7 +741,12 @@ def upload_ocr_image(
         action="draft.upload_image",
         entity_type="ocr_result",
         entity_id=str(draft.id),
-        details={"document_id": document.id, "file_name": document.file_name, "draft_type": final_type},
+        details={
+            "document_id": document.id,
+            "file_name": document.file_name,
+            "draft_type": final_type,
+            "ocr_source": "browser" if client_extracted_text else "server",
+        },
     )
     return DraftResponse.model_validate(draft)
 
