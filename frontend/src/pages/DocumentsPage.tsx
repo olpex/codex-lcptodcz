@@ -35,7 +35,7 @@ type DiagnosticsSnapshot = {
 };
 
 const DIAGNOSTICS_HISTORY_LIMIT = 12;
-const ALLOWED_REPORT_TYPES = new Set(["kpi", "trainees", "teacher_workload", "employment", "financial", "form_1pa"]);
+const ALLOWED_REPORT_TYPES = new Set(["kpi", "trainees", "groups", "teacher_workload", "employment", "financial", "form_1pa"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["xlsx", "pdf", "csv"]);
 
 export function DocumentsPage() {
@@ -367,6 +367,7 @@ export function DocumentsPage() {
               >
                 <option value="kpi">KPI</option>
                 <option value="trainees">Слухачі</option>
+                <option value="groups">Групи</option>
                 <option value="teacher_workload">Навантаження викладачів</option>
                 <option value="employment">Працевлаштування</option>
                 <option value="financial">Фінансовий звіт</option>

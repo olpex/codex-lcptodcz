@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ PDF_FONT_CANDIDATES = (
 )
 REPORT_TYPE_LABELS = {
     "trainees": "Слухачі",
+    "groups": "Групи",
     "teacher_workload": "Навантаження викладачів",
     "kpi": "Показники",
     "form_1pa": "Форма 1-ПА",
@@ -879,6 +881,66 @@ def collect_teacher_detailed_workload(
         
     return result
 
+
+def collect_group_export_rows(db: Session, branch_id: str) -> list[dict]:
+    groups = (
+        db.query(Group)
+        .filter(Group.branch_id == branch_id)
+        .order_by(Group.code.asc(), Group.name.asc())
+        .all()
+    )
+    rows = (
+        db.query(ScheduleSlot, Group, Teacher)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .join(Teacher, Teacher.id == ScheduleSlot.teacher_id)
+        .filter(Group.branch_id == branch_id)
+        .all()
+    )
+
+    group_hours: dict[int, float] = defaultdict(float)
+    teacher_hours: dict[int, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    teacher_names: dict[int, dict[int, str]] = defaultdict(dict)
+    for slot, group, teacher in rows:
+        if slot.academic_hours is not None:
+            hours = float(slot.academic_hours)
+        else:
+            hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
+        group_hours[group.id] += hours
+        teacher_hours[group.id][teacher.id] += hours
+        teacher_names[group.id][teacher.id] = f"{teacher.last_name} {teacher.first_name}".strip()
+
+    export_rows: list[dict] = []
+    for group in groups:
+        total_hours = round(group_hours[group.id], 2)
+        teachers = sorted(
+            teacher_hours[group.id].items(),
+            key=lambda item: teacher_names[group.id].get(item[0], "").casefold(),
+        )
+        if not teachers:
+            export_rows.append(
+                {
+                    "Номер групи": group.code,
+                    "Назва групи": group.name,
+                    "Кількість годин": total_hours,
+                    "Викладач": "",
+                    "Кількість годин викладача в групі": 0,
+                }
+            )
+            continue
+
+        for teacher_id, hours in teachers:
+            export_rows.append(
+                {
+                    "Номер групи": group.code,
+                    "Назва групи": group.name,
+                    "Кількість годин": total_hours,
+                    "Викладач": teacher_names[group.id].get(teacher_id, ""),
+                    "Кількість годин викладача в групі": round(hours, 2),
+                }
+            )
+    return export_rows
+
+
 def collect_teacher_workload_summary(
     db: Session,
     branch_id: str,
@@ -942,6 +1004,9 @@ def collect_report_rows(db: Session, report_type: str, branch_id: str, request_p
             }
             for trainee in trainees
         ]
+
+    if report_type == "groups":
+        return collect_group_export_rows(db, branch_id)
 
     if report_type == "teacher_workload":
         if request_payload and request_payload.get("teacher_ids"):

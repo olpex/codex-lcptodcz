@@ -7,6 +7,7 @@ from app.models import Group, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
 from app.services.import_export import (
     analyze_trainee_import_duplicates,
+    collect_group_export_rows,
     collect_teacher_workload_summary,
     parse_document_content,
     try_import_trainees,
@@ -91,6 +92,70 @@ def test_teacher_workload_summary_includes_all_active_teachers_with_negative_rem
     assert rows[0]["remaining_hours"] == 0
     assert rows[1]["remaining_hours"] == -2
     assert rows[2]["remaining_hours"] == 12
+
+
+def test_group_export_rows_include_existing_groups_and_teacher_hours(db_session):
+    scheduled_group = Group(branch_id="main", code="72-26", name="Група з розкладом", status="active")
+    empty_group = Group(branch_id="main", code="73-26", name="Група без розкладу", status="active")
+    first_teacher = Teacher(branch_id="main", first_name="Ірина Петрівна", last_name="Коваль", is_active=True)
+    second_teacher = Teacher(branch_id="main", first_name="Марія Іванівна", last_name="Бондар", is_active=True)
+    subject = Subject(branch_id="main", name="Предмет груп", hours_total=20)
+    room = Room(branch_id="main", name="Аудиторія груп", capacity=20)
+    db_session.add_all([scheduled_group, empty_group, first_teacher, second_teacher, subject, room])
+    db_session.flush()
+
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=scheduled_group.id,
+                teacher_id=first_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=2.0,
+                pair_number=1,
+            ),
+            ScheduleSlot(
+                group_id=scheduled_group.id,
+                teacher_id=second_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at + timedelta(days=1),
+                ends_at=starts_at + timedelta(days=1, minutes=95),
+                academic_hours=3.0,
+                pair_number=2,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    rows = collect_group_export_rows(db_session, "main")
+
+    assert rows == [
+        {
+            "Номер групи": "72-26",
+            "Назва групи": "Група з розкладом",
+            "Кількість годин": 5,
+            "Викладач": "Бондар Марія Іванівна",
+            "Кількість годин викладача в групі": 3,
+        },
+        {
+            "Номер групи": "72-26",
+            "Назва групи": "Група з розкладом",
+            "Кількість годин": 5,
+            "Викладач": "Коваль Ірина Петрівна",
+            "Кількість годин викладача в групі": 2,
+        },
+        {
+            "Номер групи": "73-26",
+            "Назва групи": "Група без розкладу",
+            "Кількість годин": 0,
+            "Викладач": "",
+            "Кількість годин викладача в групі": 0,
+        },
+    ]
 
 
 def _create_contract_like_workbook(file_path: Path) -> None:
