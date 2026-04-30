@@ -913,10 +913,7 @@ def collect_teacher_workload_summary(
     for teacher in teachers:
         total_hours = round(totals.get(teacher.id, 0.0), 2)
         annual_load = round(float(teacher.annual_load_hours or 0.0), 2)
-        # For report visibility include teachers who already teach or have planned annual load.
-        if total_hours <= 0 and annual_load <= 0:
-            continue
-        remaining = round(max(annual_load - total_hours, 0.0), 2)
+        remaining = round(annual_load - total_hours, 2)
         rows.append(
             {
                 "teacher_id": teacher.id,

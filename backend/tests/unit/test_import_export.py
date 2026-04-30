@@ -1,10 +1,16 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
 
-from app.models import Trainee
+from app.models import Group, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
-from app.services.import_export import analyze_trainee_import_duplicates, parse_document_content, try_import_trainees
+from app.services.import_export import (
+    analyze_trainee_import_duplicates,
+    collect_teacher_workload_summary,
+    parse_document_content,
+    try_import_trainees,
+)
 
 
 def test_parse_xlsx_and_import_trainees(tmp_path: Path, db_session):
@@ -22,6 +28,69 @@ def test_parse_xlsx_and_import_trainees(tmp_path: Path, db_session):
 
     result = try_import_trainees(db_session, parsed, "main")
     assert result["inserted"] == 2
+
+
+def test_teacher_workload_summary_includes_all_active_teachers_with_negative_remaining(db_session):
+    no_plan_with_hours = Teacher(
+        branch_id="main",
+        first_name="Петро Іванович",
+        last_name="Бойко",
+        annual_load_hours=0,
+        is_active=True,
+    )
+    no_plan_without_hours = Teacher(
+        branch_id="main",
+        first_name="Олена Петрівна",
+        last_name="Андрук",
+        annual_load_hours=0,
+        is_active=True,
+    )
+    planned_without_hours = Teacher(
+        branch_id="main",
+        first_name="Ірина Миколаївна",
+        last_name="Шевченко",
+        annual_load_hours=12,
+        is_active=True,
+    )
+    inactive_teacher = Teacher(
+        branch_id="main",
+        first_name="Ігор Петрович",
+        last_name="Ярема",
+        annual_load_hours=12,
+        is_active=False,
+    )
+    group = Group(branch_id="main", code="WG-001", name="Група навантаження", status="active")
+    subject = Subject(branch_id="main", name="Предмет навантаження", hours_total=20)
+    room = Room(branch_id="main", name="Аудиторія навантаження", capacity=20)
+    db_session.add_all([no_plan_with_hours, no_plan_without_hours, planned_without_hours, inactive_teacher, group, subject, room])
+    db_session.flush()
+
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add(
+        ScheduleSlot(
+            group_id=group.id,
+            teacher_id=no_plan_with_hours.id,
+            subject_id=subject.id,
+            room_id=room.id,
+            starts_at=starts_at,
+            ends_at=starts_at + timedelta(minutes=95),
+            academic_hours=2.0,
+            pair_number=1,
+        )
+    )
+    db_session.commit()
+
+    rows = collect_teacher_workload_summary(db_session, "main")
+
+    assert [row["teacher_name"] for row in rows] == [
+        "Андрук Олена Петрівна",
+        "Бойко Петро Іванович",
+        "Шевченко Ірина Миколаївна",
+    ]
+    assert [row["row_number"] for row in rows] == [1, 2, 3]
+    assert rows[0]["remaining_hours"] == 0
+    assert rows[1]["remaining_hours"] == -2
+    assert rows[2]["remaining_hours"] == 12
 
 
 def _create_contract_like_workbook(file_path: Path) -> None:

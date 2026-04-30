@@ -174,12 +174,9 @@ export function DashboardPage() {
   const workloadTotals = useMemo(() => summarizeWorkload(workload), [workload]);
   const workloadRows = useMemo(
     () =>
-      [...workload]
-        .sort((left, right) => {
-          if (right.remaining_hours !== left.remaining_hours) return right.remaining_hours - left.remaining_hours;
-          return left.teacher_name.localeCompare(right.teacher_name, "uk-UA", { sensitivity: "base" });
-        })
-        .slice(0, 6),
+      [...workload].sort((left, right) =>
+        left.teacher_name.localeCompare(right.teacher_name, "uk-UA", { sensitivity: "base" })
+      ),
     [workload]
   );
 
@@ -271,7 +268,16 @@ export function DashboardPage() {
                         <span className="min-w-0 truncate font-medium text-ink">{row.teacher_name}</span>
                         <span className="text-right text-slate-700">{formatHours(row.total_hours)}</span>
                         <span className="text-right text-slate-700">{formatHours(row.annual_load_hours)}</span>
-                        <span className={clsx("text-right font-semibold", row.remaining_hours <= 0 ? "text-emerald-700" : "text-amber-700")}>
+                        <span
+                          className={clsx(
+                            "text-right font-semibold",
+                            row.remaining_hours < 0
+                              ? "text-rose-700"
+                              : row.remaining_hours === 0
+                                ? "text-emerald-700"
+                                : "text-amber-700"
+                          )}
+                        >
                           {formatHours(row.remaining_hours)}
                         </span>
                       </div>
