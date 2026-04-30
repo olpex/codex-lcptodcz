@@ -4,7 +4,7 @@ from docx import Document as DocxDocument
 from openpyxl import Workbook
 
 from app.api.routes import documents as documents_route
-from app.models import Trainee
+from app.models import Document, ImportJob, Trainee
 
 
 def _docx_bytes(text: str) -> bytes:
@@ -155,6 +155,77 @@ def test_import_accepts_overwrite_mode_form_field(client, auth_headers, monkeypa
     assert response.status_code == 202
     payload = response.json()
     assert payload["status"] in {"running", "succeeded", "failed"}
+
+
+def test_batch_import_formats_endpoint(client, auth_headers):
+    response = client.get("/api/v1/documents/import/batch/formats", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert set(response.json()["supported_extensions"]) == {"xls", "xlsx", "csv", "docx"}
+
+
+def test_batch_import_creates_jobs_for_supported_folder_files(client, auth_headers, db_session, monkeypatch):
+    def _queued(job_id: int):
+        return None
+
+    monkeypatch.setattr(documents_route.process_import_job_task, "delay", _queued)
+
+    response = client.post(
+        "/api/v1/documents/import/batch",
+        headers=auth_headers,
+        data={
+            "update_existing_mode": "missing_only",
+            "relative_paths": ["folder/contracts.xlsx", "folder/schedule.docx", "folder/readme.txt"],
+        },
+        files=[
+            (
+                "files",
+                (
+                    "contracts.xlsx",
+                    _contracts_xlsx_bytes(),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ),
+            ),
+            (
+                "files",
+                (
+                    "schedule.docx",
+                    _schedule_docx_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ),
+            ),
+            ("files", ("readme.txt", b"ignore me", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["total_files"] == 3
+    assert payload["accepted_count"] == 2
+    assert payload["skipped_count"] == 1
+    assert payload["skipped_files"][0]["filename"] == "folder / readme.txt"
+    assert {job["status"] for job in payload["jobs"]} == {"queued"}
+
+    jobs = db_session.query(ImportJob).order_by(ImportJob.id).all()
+    assert len(jobs) == 2
+    assert all(job.result_payload["import_mode"] == "missing_only" for job in jobs)
+    assert all(job.request_payload["batch_id"] == payload["batch_id"] for job in jobs)
+
+    documents = db_session.query(Document).order_by(Document.id).all()
+    assert [document.source for document in documents] == ["batch_upload", "batch_upload"]
+    assert documents[0].file_name == "folder / contracts.xlsx"
+
+
+def test_batch_import_rejects_folder_without_supported_files(client, auth_headers):
+    response = client.post(
+        "/api/v1/documents/import/batch",
+        headers=auth_headers,
+        data={"relative_paths": ["folder/readme.txt"]},
+        files=[("files", ("readme.txt", b"ignore me", "text/plain"))],
+    )
+
+    assert response.status_code == 400
+    assert "не знайдено файлів" in response.json()["detail"]
 
 
 def test_export_works_when_queue_is_unavailable(client, auth_headers, monkeypatch):

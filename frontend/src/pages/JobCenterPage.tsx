@@ -10,7 +10,7 @@ import { formatImportSource, formatJobStatus, formatJobType } from "../i18n/stat
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ImportPreview, Job, JobListItem } from "../types/api";
+import type { BatchImportFormats, BatchImportResult, ImportPreview, Job, JobListItem } from "../types/api";
 
 type JobStatusPayload = {
   job_type: "import" | "export";
@@ -23,6 +23,8 @@ type ImportMode = "skip_existing" | "missing_only" | "overwrite";
 
 const REFRESH_INTERVAL_MS = 8000;
 const STATS_HISTORY_LIMIT = 12;
+const FALLBACK_BATCH_IMPORT_EXTENSIONS = ["xls", "xlsx", "csv", "docx"];
+const folderInputProps = { webkitdirectory: "", directory: "" } as Record<string, string>;
 
 type JobStatsSnapshot = {
   total: number;
@@ -53,6 +55,15 @@ function getJobRowClassName(item: JobListItem): string | undefined {
   return undefined;
 }
 
+function getFileExtension(fileName: string): string {
+  const parts = fileName.toLowerCase().split(".");
+  return parts.length < 2 ? "" : parts[parts.length - 1];
+}
+
+function getRelativeFilePath(file: File): string {
+  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+}
+
 export function JobCenterPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -66,10 +77,14 @@ export function JobCenterPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<JobStatsSnapshot[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [batchImportFiles, setBatchImportFiles] = useState<File[]>([]);
   const [importMode, setImportMode] = useState<ImportMode>("skip_existing");
   const [isImporting, setIsImporting] = useState(false);
+  const [isBatchImporting, setIsBatchImporting] = useState(false);
   const [isPreviewingImport, setIsPreviewingImport] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [batchImportResult, setBatchImportResult] = useState<BatchImportResult | null>(null);
+  const [supportedBatchExtensions, setSupportedBatchExtensions] = useState(FALLBACK_BATCH_IMPORT_EXTENSIONS);
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
@@ -113,6 +128,29 @@ export function JobCenterPage() {
     const fromPayload = item.job.result_payload?.output_document_id;
     return typeof fromPayload === "number" ? fromPayload : null;
   };
+
+  const supportedBatchExtensionSet = useMemo(
+    () => new Set(supportedBatchExtensions.map((extension) => extension.toLowerCase())),
+    [supportedBatchExtensions]
+  );
+  const batchAccept = useMemo(
+    () => supportedBatchExtensions.map((extension) => `.${extension}`).join(","),
+    [supportedBatchExtensions]
+  );
+
+  const batchImportSummary = useMemo(() => {
+    let supported = 0;
+    let unsupported = 0;
+    for (const file of batchImportFiles) {
+      if (supportedBatchExtensionSet.has(getFileExtension(file.name))) {
+        supported += 1;
+      } else {
+        unsupported += 1;
+      }
+    }
+    return { supported, unsupported, total: batchImportFiles.length };
+  }, [batchImportFiles, supportedBatchExtensionSet]);
+  const isImportBusy = isImporting || isPreviewingImport || isBatchImporting;
 
   const describeImportResult = (item: JobListItem): string => {
     if (item.job_type !== "import") return "—";
@@ -203,6 +241,46 @@ export function JobCenterPage() {
     }
   };
 
+  const uploadBatchImport = async () => {
+    if (batchImportFiles.length === 0) {
+      const message = "Оберіть папку з файлами XLSX, DOCX або CSV";
+      setImportNotice({ tone: "error", text: message });
+      showError(message);
+      return;
+    }
+    const formData = new FormData();
+    for (const file of batchImportFiles) {
+      formData.append("files", file, file.name);
+      formData.append("relative_paths", getRelativeFilePath(file));
+    }
+    formData.append("update_existing_mode", importMode);
+    setIsBatchImporting(true);
+    try {
+      const result = await request<BatchImportResult>("/documents/import/batch", {
+        method: "POST",
+        body: formData
+      });
+      setBatchImportResult(result);
+      setJobType("import");
+      setJobStatus("all");
+      setImportPreview(null);
+      const message = `Пакетний імпорт: створено задач ${result.accepted_count}, пропущено файлів ${result.skipped_count}`;
+      setImportNotice({ tone: result.skipped_count ? "info" : "success", text: message });
+      showSuccess(message);
+      const data = await request<JobListItem[]>("/jobs?limit=200&job_type=import");
+      setRows(data);
+      appendSnapshot(data);
+      setLoadError(null);
+    } catch (error) {
+      const message = (error as Error).message;
+      setBatchImportResult(null);
+      setImportNotice({ tone: "error", text: message });
+      showError(message);
+    } finally {
+      setIsBatchImporting(false);
+    }
+  };
+
   const loadJobs = async (showToast = false) => {
     setIsLoading(true);
     try {
@@ -226,6 +304,18 @@ export function JobCenterPage() {
     setStatsHistory([]);
     loadJobs();
   }, [jobType, jobStatus, dateFrom, dateTo]);
+
+  useEffect(() => {
+    request<BatchImportFormats>("/documents/import/batch/formats")
+      .then((payload) => {
+        if (payload.supported_extensions.length > 0) {
+          setSupportedBatchExtensions(payload.supported_extensions);
+        }
+      })
+      .catch(() => {
+        setSupportedBatchExtensions(FALLBACK_BATCH_IMPORT_EXTENSIONS);
+      });
+  }, []);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -513,7 +603,7 @@ export function JobCenterPage() {
                 setImportFile(event.target.files?.[0] || null);
                 setImportPreview(null);
               }}
-              disabled={isImporting || isPreviewingImport}
+              disabled={isImportBusy}
             />
           </FormField>
           <FormField label="Режим імпорту" helperText="Як обробляти наявних слухачів або розклад">
@@ -521,7 +611,7 @@ export function JobCenterPage() {
               className={formControlClass}
               value={importMode}
               onChange={(event) => setImportMode(event.target.value as ImportMode)}
-              disabled={isImporting || isPreviewingImport}
+              disabled={isImportBusy}
             >
               <option value="skip_existing">Пропустити наявні</option>
               <option value="missing_only">Додати/дозаповнити відсутнє</option>
@@ -533,7 +623,7 @@ export function JobCenterPage() {
               type="button"
               className="w-full rounded-lg border border-pine px-4 py-2 font-semibold text-pine disabled:opacity-50"
               onClick={previewImport}
-              disabled={isImporting || isPreviewingImport}
+              disabled={isImportBusy}
             >
               {isPreviewingImport ? "Перевіряємо..." : "2.3 Перевірити"}
             </button>
@@ -543,11 +633,65 @@ export function JobCenterPage() {
               type="button"
               className="w-full rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
               onClick={uploadImport}
-              disabled={isImporting || isPreviewingImport}
+              disabled={isImportBusy}
             >
               {isImporting ? "Завантажуємо..." : "2.1 Завантажити файл"}
             </button>
           </div>
+        </div>
+        <div className="mb-4 border-t border-slate-200 pt-4">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto] xl:items-end">
+            <FormField
+              label="Папка для пакетного імпорту"
+              helperText={`Файли ${supportedBatchExtensions.map((extension) => extension.toUpperCase()).join("/")}`}
+            >
+              <input
+                type="file"
+                multiple
+                className={formControlClass}
+                accept={batchAccept}
+                {...folderInputProps}
+                onChange={(event) => {
+                  setBatchImportFiles(Array.from(event.target.files || []));
+                  setBatchImportResult(null);
+                }}
+                disabled={isImportBusy}
+              />
+            </FormField>
+            <div className="text-sm text-slate-700">
+              <div className="font-semibold text-ink">Файлів: {batchImportSummary.total}</div>
+              <div>До імпорту: {batchImportSummary.supported}</div>
+              <div>Буде пропущено: {batchImportSummary.unsupported}</div>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
+              onClick={uploadBatchImport}
+              disabled={isImportBusy || batchImportFiles.length === 0}
+            >
+              {isBatchImporting ? "Створюємо задачі..." : "Пакетно імпортувати папку"}
+            </button>
+          </div>
+          {batchImportFiles.length > 0 && (
+            <div className="mt-3 max-h-32 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              {batchImportFiles.slice(0, 20).map((file) => (
+                <div key={getRelativeFilePath(file)}>{getRelativeFilePath(file)}</div>
+              ))}
+              {batchImportFiles.length > 20 && <div>Ще файлів: {batchImportFiles.length - 20}</div>}
+            </div>
+          )}
+          {batchImportResult && batchImportResult.skipped_files.length > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              {batchImportResult.skipped_files.slice(0, 5).map((item) => (
+                <div key={item.filename}>
+                  <span className="font-semibold">{item.filename}</span>: {item.reason}
+                </div>
+              ))}
+              {batchImportResult.skipped_files.length > 5 && (
+                <div>Ще пропущено: {batchImportResult.skipped_files.length - 5}</div>
+              )}
+            </div>
+          )}
         </div>
         {importNotice && <InlineNotice className="mb-4" tone={importNotice.tone} text={importNotice.text} />}
         {importPreview && (

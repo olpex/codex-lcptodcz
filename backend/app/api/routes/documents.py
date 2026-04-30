@@ -9,8 +9,17 @@ from celery.utils.log import get_task_logger
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName, ScheduleSlot
-from app.schemas.api import ExportRequest, ImportPreviewGroup, ImportPreviewResponse, JobResponse
+from app.schemas.api import (
+    BatchImportFormatsResponse,
+    BatchImportResponse,
+    BatchImportSkippedFile,
+    ExportRequest,
+    ImportPreviewGroup,
+    ImportPreviewResponse,
+    JobResponse,
+)
 from app.services.audit import write_audit
+from app.services.import_registry import get_batch_import_format, supported_batch_import_extensions
 from app.services.import_export import IMPORT_UPDATE_MODES, analyze_trainee_import_duplicates, parse_document_content
 from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, persist_upload
@@ -18,6 +27,7 @@ from app.tasks.worker import process_export_job_task, process_import_job_task
 
 router = APIRouter()
 logger = get_task_logger(__name__)
+MAX_BATCH_IMPORT_FILES = 100
 
 
 def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
@@ -60,6 +70,54 @@ def _write_upload_to_temp(file: UploadFile) -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         return tmp.name
+
+
+def _display_upload_name(file: UploadFile, relative_path: str | None = None) -> str:
+    raw_name = (relative_path or file.filename or "uploaded_file").replace("\\", "/").strip()
+    parts = [part for part in raw_name.split("/") if part and part not in {".", ".."}]
+    safe_name = " / ".join(parts) or file.filename or "uploaded_file"
+    return safe_name[-255:]
+
+
+def _create_import_job(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile,
+    *,
+    update_existing_mode: str,
+    idempotency_key: str,
+    source: str,
+    message: str,
+    request_payload: dict | None = None,
+    relative_path: str | None = None,
+) -> ImportJob:
+    doc_type = detect_document_type(file.filename)
+    path, sha256 = persist_upload(file)
+    document = Document(
+        file_name=_display_upload_name(file, relative_path),
+        file_path=path,
+        file_type=doc_type,
+        mime_type=file.content_type,
+        hash_sha256=sha256,
+        source=source,
+        created_by=current_user.id,
+        branch_id=current_user.branch_id,
+    )
+    db.add(document)
+    db.flush()
+
+    job = ImportJob(
+        branch_id=current_user.branch_id,
+        idempotency_key=idempotency_key,
+        document_id=document.id,
+        status=JobStatus.QUEUED,
+        message=message,
+        request_payload=request_payload,
+        result_payload={"import_mode": update_existing_mode},
+    )
+    db.add(job)
+    db.flush()
+    return job
 
 
 @router.post(
@@ -204,29 +262,15 @@ def import_document(
     if existing:
         return JobResponse.model_validate(existing)
 
-    path, sha256 = persist_upload(file)
-    document = Document(
-        file_name=file.filename or "uploaded_file",
-        file_path=path,
-        file_type=doc_type,
-        mime_type=file.content_type,
-        hash_sha256=sha256,
-        source="upload",
-        created_by=current_user.id,
-        branch_id=current_user.branch_id,
-    )
-    db.add(document)
-    db.flush()
-
-    job = ImportJob(
-        branch_id=current_user.branch_id,
+    job = _create_import_job(
+        db,
+        current_user,
+        file,
+        update_existing_mode=update_existing_mode,
         idempotency_key=idem_key,
-        document_id=document.id,
-        status=JobStatus.QUEUED,
+        source="upload",
         message="Заявку на імпорт створено",
-        result_payload={"import_mode": update_existing_mode},
     )
-    db.add(job)
     db.commit()
     db.refresh(job)
 
@@ -239,13 +283,125 @@ def import_document(
         entity_type="import_job",
         entity_id=str(job.id),
         details={
-            "document_id": document.id,
-            "file_name": document.file_name,
+            "document_id": job.document_id,
+            "file_name": job.document.file_name if job.document else file.filename,
             "dispatch_mode": dispatch_mode,
             "import_mode": update_existing_mode,
         },
     )
     return _with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode)
+
+
+@router.get(
+    "/import/batch/formats",
+    response_model=BatchImportFormatsResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def get_batch_import_formats() -> BatchImportFormatsResponse:
+    return BatchImportFormatsResponse(supported_extensions=supported_batch_import_extensions())
+
+
+@router.post(
+    "/import/batch",
+    response_model=BatchImportResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def import_document_batch(
+    db: DbSession,
+    current_user: CurrentUser,
+    files: list[UploadFile] = File(...),
+    update_existing_mode: str = Form(default="skip_existing"),
+    relative_paths: list[str] | None = Form(default=None),
+) -> BatchImportResponse:
+    if update_existing_mode not in IMPORT_UPDATE_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний режим імпорту")
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Оберіть папку або кілька файлів для імпорту")
+    if len(files) > MAX_BATCH_IMPORT_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"За один пакет можна імпортувати не більше {MAX_BATCH_IMPORT_FILES} файлів",
+        )
+
+    batch_id = uuid4().hex
+    paths = relative_paths or []
+    skipped_files: list[BatchImportSkippedFile] = []
+    queued_jobs: list[ImportJob] = []
+    supported_extensions = supported_batch_import_extensions()
+
+    for index, file in enumerate(files):
+        relative_path = paths[index] if index < len(paths) else None
+        display_name = _display_upload_name(file, relative_path)
+        import_format = get_batch_import_format(file.filename)
+        if not import_format:
+            skipped_files.append(
+                BatchImportSkippedFile(
+                    filename=display_name,
+                    reason=f"Непідтримуваний формат. Підтримуються: {', '.join(supported_extensions)}",
+                )
+            )
+            continue
+
+        job = _create_import_job(
+            db,
+            current_user,
+            file,
+            update_existing_mode=update_existing_mode,
+            idempotency_key=f"{current_user.branch_id}:batch-{batch_id}-{index}",
+            source="batch_upload",
+            message=f"Заявку на пакетний імпорт створено: {display_name}",
+            request_payload={
+                "batch_id": batch_id,
+                "batch_index": index,
+                "batch_total": len(files),
+                "relative_path": relative_path,
+                "import_kind": import_format.import_kind,
+                "import_mode": update_existing_mode,
+            },
+            relative_path=relative_path,
+        )
+        queued_jobs.append(job)
+
+    if not queued_jobs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"У вибраній папці не знайдено файлів підтримуваних форматів: {', '.join(supported_extensions)}",
+        )
+
+    db.commit()
+
+    job_responses: list[JobResponse] = []
+    dispatch_modes: dict[str, int] = {}
+    for job in queued_jobs:
+        dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "batch_import")
+        dispatch_modes[dispatch_mode] = dispatch_modes.get(dispatch_mode, 0) + 1
+        db.refresh(job)
+        job_responses.append(_with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode))
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="documents.import.batch_create_jobs",
+        entity_type="import_batch",
+        entity_id=batch_id,
+        details={
+            "accepted_count": len(queued_jobs),
+            "skipped_count": len(skipped_files),
+            "job_ids": [job.id for job in queued_jobs],
+            "dispatch_modes": dispatch_modes,
+            "import_mode": update_existing_mode,
+        },
+    )
+    return BatchImportResponse(
+        batch_id=batch_id,
+        total_files=len(files),
+        accepted_count=len(queued_jobs),
+        skipped_count=len(skipped_files),
+        supported_extensions=supported_extensions,
+        jobs=job_responses,
+        skipped_files=skipped_files,
+    )
 
 
 @router.post(

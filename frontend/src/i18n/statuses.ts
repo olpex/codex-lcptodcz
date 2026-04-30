@@ -7,6 +7,7 @@ export const JOB_TYPE_LABELS: Record<"import" | "export", string> = {
 
 export const IMPORT_SOURCE_LABELS: Record<string, string> = {
   upload: "Ручний",
+  batch_upload: "Пакетний",
   mail: "Пошта",
   mail_auto_contracts: "Пошта: Договори",
   mail_google_script: "Пошта: Google Script"

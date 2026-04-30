@@ -492,6 +492,25 @@ class JobResponse(ORMModel):
     updated_at: datetime
 
 
+class BatchImportSkippedFile(BaseModel):
+    filename: str
+    reason: str
+
+
+class BatchImportFormatsResponse(BaseModel):
+    supported_extensions: list[str]
+
+
+class BatchImportResponse(BaseModel):
+    batch_id: str
+    total_files: int
+    accepted_count: int
+    skipped_count: int
+    supported_extensions: list[str]
+    jobs: list[JobResponse]
+    skipped_files: list[BatchImportSkippedFile] = Field(default_factory=list)
+
+
 class JobStatusResponse(BaseModel):
     job_type: str
     job: JobResponse

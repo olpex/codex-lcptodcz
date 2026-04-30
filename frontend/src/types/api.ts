@@ -218,6 +218,25 @@ export interface ImportPreview {
   warnings: string[];
 }
 
+export interface BatchImportSkippedFile {
+  filename: string;
+  reason: string;
+}
+
+export interface BatchImportFormats {
+  supported_extensions: string[];
+}
+
+export interface BatchImportResult {
+  batch_id: string;
+  total_files: number;
+  accepted_count: number;
+  skipped_count: number;
+  supported_extensions: string[];
+  jobs: Job[];
+  skipped_files: BatchImportSkippedFile[];
+}
+
 export interface Draft {
   id: number;
   document_id: number;
