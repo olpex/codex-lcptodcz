@@ -48,6 +48,7 @@ export function DocumentsPage() {
   const [activeJobType, setActiveJobType] = useState<string | null>(null);
   const [activeJobStatus, setActiveJobStatus] = useState<string | null>(null);
   const [outputDocumentId, setOutputDocumentId] = useState<number | null>(null);
+  const [downloadedDocumentIds, setDownloadedDocumentIds] = useState<number[]>([]);
   const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -98,6 +99,31 @@ export function DocumentsPage() {
     }
     const value = (job.result_payload as Record<string, unknown>).output_document_id;
     return typeof value === "number" ? value : null;
+  };
+
+  const downloadDocument = async (documentId: number) => {
+    if (!accessToken) {
+      throw new Error("Потрібна авторизація");
+    }
+    const response = await fetch(`${API_URL}/documents/${documentId}/download`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!response.ok) {
+      throw new Error(`Не вдалося завантажити файл (${response.status})`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+    const fileName = fileNameMatch?.[1] || `report_${documentId}`;
+
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
   };
 
   const runImport = async (mode: ImportMode) => {
@@ -173,9 +199,17 @@ export function DocumentsPage() {
       setActiveJobId(job.id);
       setActiveJobType("export");
       setActiveJobStatus(job.status);
-      setOutputDocumentId(extractOutputDocumentId(job));
-      showSuccess(job.message || "Експорт запущено");
-      setNotice({ tone: "success", text: job.message || "Експорт запущено. Перевірте статус задачі нижче." });
+      const exportedDocumentId = extractOutputDocumentId(job);
+      setOutputDocumentId(exportedDocumentId);
+      if (job.status === "succeeded" && exportedDocumentId) {
+        await downloadDocument(exportedDocumentId);
+        setDownloadedDocumentIds((prev) => (prev.includes(exportedDocumentId) ? prev : [...prev, exportedDocumentId]));
+        showSuccess("Звіт сформовано і завантажено");
+        setNotice({ tone: "success", text: "Звіт сформовано і завантажено. Файл доступний у завантаженнях браузера." });
+      } else {
+        showSuccess(job.message || "Експорт запущено");
+        setNotice({ tone: "success", text: job.message || "Експорт запущено. Перевірте статус задачі нижче." });
+      }
     } catch (error) {
       const message = (error as Error).message;
       showError(message);
@@ -193,11 +227,23 @@ export function DocumentsPage() {
       upsertKnownJob(response.job.id, response.job_type, response.job.status);
       setActiveJobType(response.job_type);
       setActiveJobStatus(response.job.status);
-      setOutputDocumentId(extractOutputDocumentId(response.job));
+      const exportedDocumentId = extractOutputDocumentId(response.job);
+      setOutputDocumentId(exportedDocumentId);
       if (showToastMessage) {
         showSuccess(response.job.message || "Статус оновлено");
       }
-      setNotice({ tone: "info", text: response.job.message || "Статус задачі оновлено" });
+      if (response.job_type === "export" && response.job.status === "succeeded" && exportedDocumentId) {
+        if (!downloadedDocumentIds.includes(exportedDocumentId)) {
+          await downloadDocument(exportedDocumentId);
+          setDownloadedDocumentIds((prev) => (prev.includes(exportedDocumentId) ? prev : [...prev, exportedDocumentId]));
+          showSuccess("Звіт сформовано і завантажено");
+          setNotice({ tone: "success", text: "Експорт виконано. Файл завантажено у завантаження браузера." });
+        } else {
+          setNotice({ tone: "success", text: "Експорт виконано. Натисніть “Завантажити файл”, якщо потрібна ще одна копія." });
+        }
+      } else {
+        setNotice({ tone: "info", text: response.job.message || "Статус задачі оновлено" });
+      }
     } catch (error) {
       const message = (error as Error).message;
       showError(message);
@@ -226,27 +272,10 @@ export function DocumentsPage() {
     }
     setIsDownloading(true);
     try {
-      const response = await fetch(`${API_URL}/documents/${outputDocumentId}/download`, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      if (!response.ok) {
-        throw new Error(`Не вдалося завантажити файл (${response.status})`);
-      }
-      const blob = await response.blob();
-      const disposition = response.headers.get("content-disposition") || "";
-      const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
-      const fileName = fileNameMatch?.[1] || `report_${outputDocumentId}`;
-
-      const objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = fileName;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(objectUrl);
+      await downloadDocument(outputDocumentId);
+      setDownloadedDocumentIds((prev) => (prev.includes(outputDocumentId) ? prev : [...prev, outputDocumentId]));
       showSuccess("Файл завантажено");
-      setNotice({ tone: "success", text: "Файл експорту успішно завантажено" });
+      setNotice({ tone: "success", text: "Файл експорту завантажено. Шукайте його у завантаженнях браузера." });
     } catch (error) {
       const message = (error as Error).message;
       showError(message);
