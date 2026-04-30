@@ -14,3 +14,9 @@ def test_guess_trainee_card_draft_from_text():
     assert payload["first_name"] == "Іван"
     assert payload["last_name"] == "Петренко"
 
+
+def test_guess_schedule_draft_from_text():
+    draft_type, payload = guess_draft_from_text("Розклад занять групи 46-26")
+    assert draft_type == "schedule"
+    assert payload["group_code"] == "46-26"
+    assert payload["entries"] == []

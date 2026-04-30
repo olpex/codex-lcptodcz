@@ -13,6 +13,14 @@ type EditablePayload = {
   last_name?: string;
   status?: string;
   order_number?: string;
+  group_code?: string;
+  contract_number?: string;
+  birth_date?: string;
+  phone?: string;
+  email?: string;
+  entries?: unknown[];
+  raw_text?: string;
+  source?: string;
 };
 
 type DraftStatsSnapshot = {
@@ -46,6 +54,10 @@ export function DraftsPage() {
   const [draftType, setDraftType] = useState("trainee_card");
   const [confidence, setConfidence] = useState(0.75);
   const [payload, setPayload] = useState<EditablePayload>({});
+  const [payloadJson, setPayloadJson] = useState("{}");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageDraftType, setImageDraftType] = useState("auto");
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<DraftStatsSnapshot[]>([]);
@@ -173,11 +185,17 @@ export function DraftsPage() {
     setSelectedDraftId(draft.id);
     setDraftType(draft.draft_type || "trainee_card");
     setConfidence(Number.isFinite(draft.confidence) ? draft.confidence : 0.75);
+    setPayloadJson(JSON.stringify(draftPayload, null, 2));
     setPayload({
       first_name: typeof draftPayload.first_name === "string" ? draftPayload.first_name : "",
       last_name: typeof draftPayload.last_name === "string" ? draftPayload.last_name : "",
       status: typeof draftPayload.status === "string" ? draftPayload.status : "draft",
-      order_number: typeof draftPayload.order_number === "string" ? draftPayload.order_number : ""
+      order_number: typeof draftPayload.order_number === "string" ? draftPayload.order_number : "",
+      group_code: typeof draftPayload.group_code === "string" ? draftPayload.group_code : "",
+      contract_number: typeof draftPayload.contract_number === "string" ? draftPayload.contract_number : "",
+      birth_date: typeof draftPayload.birth_date === "string" ? draftPayload.birth_date : "",
+      phone: typeof draftPayload.phone === "string" ? draftPayload.phone : "",
+      email: typeof draftPayload.email === "string" ? draftPayload.email : ""
     });
   };
 
@@ -227,17 +245,31 @@ export function DraftsPage() {
   const saveDraft = async () => {
     if (!selectedDraftId) return;
     try {
-      const nextPayload: EditablePayload =
-        draftType === "order"
-          ? {
-              order_number: payload.order_number || `AUTO-${selectedDraftId}`,
-              status: payload.status || "draft"
-            }
-          : {
-              first_name: payload.first_name || "Невідомо",
-              last_name: payload.last_name || "Невідомо",
-              status: payload.status || "active"
-            };
+      let nextPayload: EditablePayload;
+      if (draftType === "schedule") {
+        try {
+          nextPayload = JSON.parse(payloadJson || "{}") as EditablePayload;
+        } catch {
+          showError("Структуровані дані розкладу мають бути коректним JSON");
+          return;
+        }
+      } else if (draftType === "order") {
+        nextPayload = {
+          order_number: payload.order_number || `AUTO-${selectedDraftId}`,
+          status: payload.status || "draft"
+        };
+      } else {
+        nextPayload = {
+          first_name: payload.first_name || "Невідомо",
+          last_name: payload.last_name || "Невідомо",
+          status: payload.status || "active",
+          group_code: payload.group_code || "",
+          contract_number: payload.contract_number || "",
+          birth_date: payload.birth_date || "",
+          phone: payload.phone || "",
+          email: payload.email || ""
+        };
+      }
 
       await request<Draft>(`/drafts/${selectedDraftId}`, {
         method: "PATCH",
@@ -251,6 +283,31 @@ export function DraftsPage() {
       await load();
     } catch (error) {
       showError((error as Error).message);
+    }
+  };
+
+  const uploadImageDraft = async () => {
+    if (!imageFile) {
+      showError("Оберіть скріншот або фото документа");
+      return;
+    }
+    setIsUploadingImage(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", imageFile);
+      formData.append("draft_type", imageDraftType);
+      const draft = await request<Draft>("/drafts/upload-image", {
+        method: "POST",
+        body: formData
+      });
+      showSuccess(`OCR-чернетку #${draft.id} створено`);
+      await load();
+      applyDraftToForm(draft);
+      setImageFile(null);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsUploadingImage(false);
     }
   };
 
@@ -289,6 +346,44 @@ export function DraftsPage() {
 
   return (
     <div className="space-y-5">
+      <Panel title="Імпорт зі скріншота">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_auto] lg:items-end">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Скріншот або фото документа
+            </span>
+            <input
+              disabled={!canEdit || isUploadingImage}
+              type="file"
+              accept="image/*"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              onChange={(event) => setImageFile(event.target.files?.[0] || null)}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Тип</span>
+            <select
+              disabled={!canEdit || isUploadingImage}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              value={imageDraftType}
+              onChange={(event) => setImageDraftType(event.target.value)}
+            >
+              <option value="auto">Автоматично</option>
+              <option value="schedule">Розклад</option>
+              <option value="trainee_card">Договір / слухач</option>
+              <option value="order">Наказ</option>
+            </select>
+          </label>
+          <button
+            disabled={!canEdit || isUploadingImage || !imageFile}
+            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-40"
+            onClick={uploadImageDraft}
+          >
+            {isUploadingImage ? "Розпізнаю..." : "Розпізнати скріншот"}
+          </button>
+        </div>
+      </Panel>
+
       <Panel title="Вхідна кореспонденція">
         <div className="mb-3 flex items-center gap-3">
           {canEdit && (
@@ -383,6 +478,7 @@ export function DraftsPage() {
                     onChange={(event) => setDraftType(event.target.value)}
                   >
                     <option value="trainee_card">Картка слухача</option>
+                    <option value="schedule">Розклад</option>
                     <option value="order">Наказ</option>
                   </select>
                 </label>
@@ -403,7 +499,19 @@ export function DraftsPage() {
                 </label>
               </div>
 
-              {draftType === "order" ? (
+              {draftType === "schedule" ? (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Структуровані дані розкладу
+                  </span>
+                  <textarea
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="min-h-64 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                    value={payloadJson}
+                    onChange={(event) => setPayloadJson(event.target.value)}
+                  />
+                </label>
+              ) : draftType === "order" ? (
                 <div className="grid gap-3 md:grid-cols-2">
                   <input
                     disabled={!canEdit || selectedDraft.status === "approved"}
@@ -442,6 +550,42 @@ export function DraftsPage() {
                     placeholder="Статус"
                     value={payload.status || ""}
                     onChange={(event) => setPayload((prev) => ({ ...prev, status: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Група"
+                    value={payload.group_code || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, group_code: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Номер договору"
+                    value={payload.contract_number || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, contract_number: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Дата народження"
+                    type="date"
+                    value={payload.birth_date || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, birth_date: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2"
+                    placeholder="Телефон"
+                    value={payload.phone || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, phone: event.target.value }))}
+                  />
+                  <input
+                    disabled={!canEdit || selectedDraft.status === "approved"}
+                    className="rounded-lg border border-slate-300 px-3 py-2 md:col-span-2"
+                    placeholder="Email"
+                    value={payload.email || ""}
+                    onChange={(event) => setPayload((prev) => ({ ...prev, email: event.target.value }))}
                   />
                 </div>
               )}

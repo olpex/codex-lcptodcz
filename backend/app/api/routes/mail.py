@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
+from app.core.crypto import cipher
 from app.models import (
     Document,
     DraftStatus,
+    GroupStatus,
     ImportJob,
     JobStatus,
     MailMessage,
@@ -21,17 +23,24 @@ from app.models import (
     Order,
     OrderType,
     RoleName,
+    Room,
+    ScheduleSlot,
+    Subject,
+    Teacher,
     Trainee,
+    Group,
 )
 from app.schemas.api import DraftApproveResponse, DraftResponse, DraftUpdateRequest, JobResponse, MailMessageResponse
 from app.services.audit import write_audit
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.mail_ingest import is_contract_sender
+from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, persist_upload, storage_path
 from app.tasks.worker import poll_mailbox_task, process_import_job_task, process_ocr_task
 
 router = APIRouter()
 GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+ALLOWED_OCR_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}
 
 
 def _extract_group_code_from_filename(filename: str) -> str | None:
@@ -70,6 +79,144 @@ def _run_import_inline_or_raise(import_job_id: int, db: DbSession) -> str:
         detail = exc_detail or job_detail or "невідома помилка"
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Імпорт не виконано: {detail}") from exc
     return "inline"
+
+
+def _parse_optional_date(value: object) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _split_teacher_name(full_name: str) -> tuple[str, str]:
+    parts = [part for part in full_name.strip().split() if part]
+    if not parts:
+        return "Викладач", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _get_or_create_teacher(db: DbSession, branch_id: str, teacher_name: str) -> Teacher:
+    last_name, first_name = _split_teacher_name(teacher_name or "Невідомий викладач")
+    teacher = (
+        db.query(Teacher)
+        .filter(Teacher.branch_id == branch_id, Teacher.last_name == last_name, Teacher.first_name == first_name)
+        .first()
+    )
+    if teacher:
+        return teacher
+    teacher = Teacher(branch_id=branch_id, last_name=last_name, first_name=first_name, hourly_rate=0, annual_load_hours=0, is_active=True)
+    db.add(teacher)
+    db.flush()
+    return teacher
+
+
+def _get_or_create_subject(db: DbSession, branch_id: str, subject_name: str) -> Subject:
+    name = (subject_name or "Заняття з OCR").strip() or "Заняття з OCR"
+    subject = db.query(Subject).filter(Subject.branch_id == branch_id, Subject.name == name).first()
+    if subject:
+        return subject
+    subject = Subject(branch_id=branch_id, name=name, hours_total=0)
+    db.add(subject)
+    db.flush()
+    return subject
+
+
+def _get_or_create_room(db: DbSession, branch_id: str, room_name: str) -> Room:
+    name = (room_name or "OCR").strip() or "OCR"
+    room = db.query(Room).filter(Room.branch_id == branch_id, Room.name == name).first()
+    if room:
+        return room
+    room = Room(branch_id=branch_id, name=name, capacity=20)
+    db.add(room)
+    db.flush()
+    return room
+
+
+def _create_schedule_from_payload(db: DbSession, current_user: CurrentUser, draft_id: int, payload: dict) -> dict:
+    group_code = str(payload.get("group_code") or "").strip()
+    entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+    if not group_code or not entries:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для підтвердження розкладу потрібні group_code та entries у структурованих даних OCR-чернетки",
+        )
+
+    group = db.query(Group).filter(Group.branch_id == current_user.branch_id, Group.code == group_code).first()
+    if not group:
+        group = Group(
+            branch_id=current_user.branch_id,
+            code=group_code,
+            name=str(payload.get("group_name") or f"Група {group_code}"),
+            capacity=25,
+            status=GroupStatus.ACTIVE,
+        )
+        db.add(group)
+        db.flush()
+
+    created_slots = 0
+    skipped_slots = 0
+    for raw_entry in entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry_date = _parse_optional_date(raw_entry.get("date") or raw_entry.get("starts_at"))
+        if not entry_date:
+            skipped_slots += 1
+            continue
+        try:
+            pair_number = int(raw_entry.get("pair_number") or 1)
+        except (TypeError, ValueError):
+            pair_number = 1
+        starts_at_raw = raw_entry.get("starts_at")
+        if starts_at_raw:
+            try:
+                starts_at = datetime.fromisoformat(str(starts_at_raw).replace("Z", "+00:00"))
+            except ValueError:
+                starts_at = datetime.combine(entry_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=9 + (pair_number - 1) * 2)
+        else:
+            starts_at = datetime.combine(entry_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=9 + (pair_number - 1) * 2)
+        ends_at = starts_at + timedelta(minutes=95)
+        try:
+            academic_hours = float(raw_entry.get("academic_hours") or 2)
+        except (TypeError, ValueError):
+            academic_hours = 2
+        teacher = _get_or_create_teacher(db, current_user.branch_id, str(raw_entry.get("teacher_name") or "Невідомий викладач"))
+        subject = _get_or_create_subject(db, current_user.branch_id, str(raw_entry.get("subject_name") or "Заняття з OCR"))
+        room = _get_or_create_room(db, current_user.branch_id, str(raw_entry.get("room_name") or "OCR"))
+        existing = (
+            db.query(ScheduleSlot)
+            .filter(
+                ScheduleSlot.group_id == group.id,
+                ScheduleSlot.starts_at == starts_at,
+                ScheduleSlot.pair_number == pair_number,
+                ScheduleSlot.teacher_id == teacher.id,
+                ScheduleSlot.subject_id == subject.id,
+            )
+            .first()
+        )
+        if existing:
+            skipped_slots += 1
+            continue
+        db.add(
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                pair_number=pair_number,
+                academic_hours=academic_hours,
+            )
+        )
+        created_slots += 1
+
+    if created_slots == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OCR-розклад не містить нових занять для створення")
+    return {"type": "schedule", "group_id": group.id, "created_slots": created_slots, "skipped_slots": skipped_slots, "draft_id": draft_id}
 
 
 @router.post(
@@ -495,6 +642,102 @@ def reprocess_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> 
 
 
 @router.post(
+    "/drafts/upload-image",
+    response_model=DraftResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def upload_ocr_image(
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+    draft_type: str = Form(default="auto"),
+) -> DraftResponse:
+    extension = file.filename.rsplit(".", 1)[1].lower() if file.filename and "." in file.filename else ""
+    if extension not in ALLOWED_OCR_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Підтримуються зображення PNG, JPG, WEBP, BMP, TIFF",
+        )
+    if draft_type not in {"auto", "trainee_card", "order", "schedule"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний тип OCR-чернетки")
+
+    path, sha256 = persist_upload(file)
+    extracted_text = ocr_image_file(path)
+    if not extracted_text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не вдалося розпізнати текст на зображенні")
+
+    guessed_type, payload = guess_draft_from_text(extracted_text)
+    final_type = guessed_type if draft_type == "auto" else draft_type
+    if final_type != guessed_type:
+        payload = {
+            **payload,
+            "raw_text": extracted_text[:12000],
+            "source": "ocr_upload",
+        }
+        if final_type == "schedule":
+            payload = {
+                "group_code": str(payload.get("group_code") or ""),
+                "group_name": str(payload.get("group_name") or ""),
+                "entries": payload.get("entries") if isinstance(payload.get("entries"), list) else [],
+                "raw_text": extracted_text[:12000],
+                "source": "ocr_upload",
+            }
+        elif final_type == "order":
+            payload = {
+                "order_number": str(payload.get("order_number") or "AUTO"),
+                "status": str(payload.get("status") or "draft"),
+                "raw_text": extracted_text[:12000],
+                "source": "ocr_upload",
+            }
+        else:
+            payload = {
+                "first_name": str(payload.get("first_name") or "Невідомо"),
+                "last_name": str(payload.get("last_name") or "Невідомо"),
+                "status": str(payload.get("status") or "active"),
+                "group_code": str(payload.get("group_code") or ""),
+                "contract_number": str(payload.get("contract_number") or ""),
+                "raw_text": extracted_text[:12000],
+                "source": "ocr_upload",
+            }
+
+    document = Document(
+        file_name=file.filename or "ocr_image",
+        file_path=path,
+        file_type=detect_document_type(file.filename),
+        mime_type=file.content_type,
+        hash_sha256=sha256,
+        source="ocr_upload",
+        created_by=current_user.id,
+        branch_id=current_user.branch_id,
+    )
+    db.add(document)
+    db.flush()
+    draft = OCRResult(
+        branch_id=current_user.branch_id,
+        document_id=document.id,
+        extracted_text=extracted_text,
+        structured_payload=payload,
+        draft_type=final_type,
+        confidence=0.5 if final_type == "schedule" else 0.65,
+        status=DraftStatus.PENDING,
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="draft.upload_image",
+        entity_type="ocr_result",
+        entity_id=str(draft.id),
+        details={"document_id": document.id, "file_name": document.file_name, "draft_type": final_type},
+    )
+    return DraftResponse.model_validate(draft)
+
+
+@router.post(
     "/drafts/{draft_id}/approve",
     response_model=DraftApproveResponse,
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
@@ -509,7 +752,9 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
 
     payload = draft.structured_payload or {}
     created_entity: dict | None = None
-    if draft.draft_type == "order":
+    if draft.draft_type == "schedule":
+        created_entity = _create_schedule_from_payload(db, current_user, draft.id, payload)
+    elif draft.draft_type == "order":
         order = Order(
             branch_id=current_user.branch_id,
             order_number=str(payload.get("order_number") or f"AUTO-{draft.id}"),
@@ -531,6 +776,12 @@ def approve_draft(draft_id: int, db: DbSession, current_user: CurrentUser) -> Dr
         )
         db.add(trainee)
         db.flush()
+        trainee.birth_date = _parse_optional_date(payload.get("birth_date"))
+        trainee.contract_number = str(payload.get("contract_number") or "") or None
+        trainee.group_code = str(payload.get("group_code") or "") or None
+        trainee.phone_encrypted = cipher.encrypt(str(payload.get("phone") or "") or None)
+        trainee.email_encrypted = cipher.encrypt(str(payload.get("email") or "") or None)
+        db.add(trainee)
         created_entity = {"type": "trainee", "id": trainee.id}
 
     draft.status = DraftStatus.APPROVED
