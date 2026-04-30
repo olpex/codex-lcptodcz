@@ -8,7 +8,7 @@ import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ActiveGroupBetweenDates, Group, ScheduleSlot, Trainee } from "../types/api";
+import type { ActiveGroupBetweenDates, Group, GroupAuditLog, ScheduleSlot, Trainee } from "../types/api";
 
 type GroupDetail = {
   activeTrainees: number;
@@ -24,6 +24,30 @@ type GroupDetail = {
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("uk-UA");
+}
+
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("uk-UA");
+}
+
+function formatAuditAction(action: string): string {
+  if (action === "group.create") return "Групу створено";
+  if (action === "group.update") return "Групу оновлено";
+  if (action === "group.delete") return "Групу видалено";
+  if (action === "group.enroll") return "Слухача зараховано";
+  if (action === "group.expel") return "Слухача відраховано";
+  return action;
+}
+
+function formatAuditDetails(details: Record<string, unknown> | null): string {
+  if (!details) return "";
+  const parts: string[] = [];
+  if (typeof details.trainee_id === "number") parts.push(`слухач #${details.trainee_id}`);
+  if (typeof details.reason === "string" && details.reason.trim()) parts.push(`причина: ${details.reason}`);
+  if (typeof details.deleted_trainees_count === "number") parts.push(`видалено слухачів: ${details.deleted_trainees_count}`);
+  if (typeof details.deleted_schedule_slots === "number") parts.push(`видалено занять: ${details.deleted_schedule_slots}`);
+  if (typeof details.cleared_trainee_group_codes === "number") parts.push(`очищено кодів групи: ${details.cleared_trainee_group_codes}`);
+  return parts.join(", ");
 }
 
 function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlots: ScheduleSlot[]): GroupDetail | null {
@@ -70,9 +94,12 @@ export function GroupsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
   const [selectedDetailGroupId, setSelectedDetailGroupId] = useState<number | null>(null);
+  const [groupAudit, setGroupAudit] = useState<GroupAuditLog[]>([]);
 
   // --- Стан видалення групи ---
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -264,6 +291,29 @@ export function GroupsPage() {
   useEffect(() => {
     loadGroups();
   }, []);
+
+  const loadGroupAudit = async (groupId: number) => {
+    setIsAuditLoading(true);
+    try {
+      const data = await request<GroupAuditLog[]>(`/groups/${groupId}/audit?limit=12`);
+      setGroupAudit(data);
+      setAuditError(null);
+    } catch (error) {
+      const message = (error as Error).message;
+      setGroupAudit([]);
+      setAuditError(message);
+    } finally {
+      setIsAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedDetailGroup) {
+      setGroupAudit([]);
+      return;
+    }
+    loadGroupAudit(selectedDetailGroup.id);
+  }, [selectedDetailGroup?.id]);
 
   usePageRefresh(loadGroups);
 
@@ -675,6 +725,50 @@ export function GroupsPage() {
                   {selectedGroupDetail.teachers.slice(0, 2).join(", ") || "Не знайдено"}
                   {selectedGroupDetail.teachers.length > 2 ? ` та ще ${selectedGroupDetail.teachers.length - 2}` : ""}
                 </p>
+              </div>
+            </div>
+            <div className="xl:col-span-2">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">1.2 Історія дій</p>
+                    <h4 className="mt-1 text-sm font-semibold text-ink">Останні зміни по групі</h4>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                    onClick={() => loadGroupAudit(selectedDetailGroup.id)}
+                    disabled={isAuditLoading}
+                  >
+                    {isAuditLoading ? "Оновлюємо..." : "Оновити історію"}
+                  </button>
+                </div>
+                {auditError && <p className="mt-3 text-sm text-rose-700">{auditError}</p>}
+                {!auditError && !isAuditLoading && groupAudit.length === 0 && (
+                  <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    Дій по цій групі ще не знайдено.
+                  </p>
+                )}
+                <div className="mt-3 space-y-2">
+                  {groupAudit.map((item) => {
+                    const details = formatAuditDetails(item.details);
+                    return (
+                      <article key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-ink">{formatAuditAction(item.action)}</p>
+                            {details && <p className="mt-1 text-xs text-slate-600">{details}</p>}
+                          </div>
+                          <p className="text-right text-xs text-slate-500">
+                            {formatDateTime(item.created_at)}
+                            <br />
+                            {item.actor_name || "Система"}
+                          </p>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

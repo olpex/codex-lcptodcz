@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee
+from app.models import AuditLog, Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee, User
 from app.schemas.api import (
     ActiveGroupBetweenDatesResponse,
     EnrollRequest,
     ExpelRequest,
+    GroupAuditLogResponse,
     GroupCreate,
     GroupResponse,
     GroupTeacherHoursResponse,
@@ -247,6 +249,52 @@ def get_group(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupR
     return GroupResponse.model_validate(group)
 
 
+@router.get("/{group_id}/audit", response_model=list[GroupAuditLogResponse])
+def list_group_audit(
+    group_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[GroupAuditLogResponse]:
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
+
+    membership_ids = [
+        str(item.id)
+        for item in db.query(GroupMembership.id).filter(GroupMembership.group_id == group_id).all()
+    ]
+    filters = [
+        (AuditLog.entity_type == "group") & (AuditLog.entity_id == str(group_id)),
+        (AuditLog.entity_type == "group_membership") & (AuditLog.details_json["group_id"].as_integer() == group_id),
+    ]
+    if membership_ids:
+        filters.append((AuditLog.entity_type == "group_membership") & (AuditLog.entity_id.in_(membership_ids)))
+
+    rows = (
+        db.query(AuditLog, User.full_name)
+        .outerjoin(User, User.id == AuditLog.actor_user_id)
+        .filter(or_(*filters))
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        GroupAuditLogResponse(
+            id=audit.id,
+            actor_user_id=audit.actor_user_id,
+            actor_name=actor_name,
+            action=audit.action,
+            entity_type=audit.entity_type,
+            entity_id=audit.entity_id,
+            details=audit.details_json,
+            created_at=audit.created_at,
+        )
+        for audit, actor_name in rows
+    ]
+
+
 @router.put(
     "/{group_id}",
     response_model=GroupResponse,
@@ -412,6 +460,7 @@ def enroll_trainee(
         action="group.enroll",
         entity_type="group_membership",
         entity_id=str(membership.id),
+        details={"group_id": group_id, "trainee_id": payload.trainee_id},
     )
     return MembershipResponse.model_validate(membership)
 
@@ -451,6 +500,6 @@ def expel_trainee(
         action="group.expel",
         entity_type="group_membership",
         entity_id=str(membership.id),
-        details={"reason": payload.reason},
+        details={"group_id": group_id, "trainee_id": trainee_id, "reason": payload.reason},
     )
     return MembershipResponse.model_validate(membership)

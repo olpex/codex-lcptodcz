@@ -211,6 +211,17 @@ class GroupResponse(ORMModel):
     created_at: datetime
 
 
+class GroupAuditLogResponse(BaseModel):
+    id: int
+    actor_user_id: int | None
+    actor_name: str | None = None
+    action: str
+    entity_type: str
+    entity_id: str
+    details: dict[str, Any] | None = None
+    created_at: datetime
+
+
 class GroupTeacherHoursResponse(BaseModel):
     teacher_id: int
     teacher_name: str

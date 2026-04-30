@@ -58,6 +58,17 @@ export interface Group {
   end_date: string | null;
 }
 
+export interface GroupAuditLog {
+  id: number;
+  actor_user_id: number | null;
+  actor_name: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface GroupTeacherHours {
   teacher_id: number;
   teacher_name: string;

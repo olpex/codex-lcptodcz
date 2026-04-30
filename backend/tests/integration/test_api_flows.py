@@ -62,6 +62,37 @@ def test_group_trainee_enrollment_flow(client, auth_headers):
     assert enroll_response.json()["status"] == "active"
 
 
+def test_group_audit_returns_group_actions(client, auth_headers):
+    trainee_response = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Олег", "last_name": "Петренко", "status": "active"},
+        headers=auth_headers,
+    )
+    assert trainee_response.status_code == 201
+    trainee_id = trainee_response.json()["id"]
+
+    group_response = client.post(
+        "/api/v1/groups",
+        json={"code": "AUD-001", "name": "Група з історією", "capacity": 25, "status": "planned"},
+        headers=auth_headers,
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    enroll_response = client.post(
+        f"/api/v1/groups/{group_id}/enroll",
+        json={"trainee_id": trainee_id},
+        headers=auth_headers,
+    )
+    assert enroll_response.status_code == 201
+
+    audit_response = client.get(f"/api/v1/groups/{group_id}/audit", headers=auth_headers)
+    assert audit_response.status_code == 200
+    actions = [item["action"] for item in audit_response.json()]
+    assert "group.create" in actions
+    assert "group.enroll" in actions
+
+
 def test_schedule_workload_and_kpi_flow(client, auth_headers):
     teacher_response = client.post(
         "/api/v1/teachers",
