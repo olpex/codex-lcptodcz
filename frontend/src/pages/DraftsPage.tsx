@@ -465,36 +465,6 @@ export function DraftsPage() {
         {ocrProgress && <p className="mt-2 text-sm text-slate-600">{ocrProgress}</p>}
       </Panel>
 
-      <Panel title="Вхідна кореспонденція">
-        <div className="mb-3 flex items-center gap-3">
-          {canEdit && (
-            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={pollNow}>
-              Опитати пошту зараз
-            </button>
-          )}
-          <button className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
-            Оновити
-          </button>
-        </div>
-        <DataTable
-          data={messages}
-          columns={mailColumns}
-          rowKey={(message) => message.id}
-          isLoading={isLoading}
-          errorText={loadError}
-          onRetry={load}
-          emptyText="Листи відсутні"
-          emptyActionLabel="Оновити листи"
-          onEmptyAction={load}
-          emptyActionDisabled={isLoading}
-          search={{
-            placeholder: "Пошук за відправником або темою",
-            getSearchText: (message) => `${message.sender} ${message.subject} ${message.status} ${formatMailStatus(message.status)}`
-          }}
-          initialPageSize={20}
-        />
-      </Panel>
-
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_1fr]">
         <Panel title="Чернетки OCR">
           <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -541,7 +511,7 @@ export function DraftsPage() {
           />
         </Panel>
 
-        <Panel title="Редактор чернетки">
+        <Panel title="Редактор чернеток">
           {!selectedDraft ? (
             <p className="text-sm text-slate-600">Оберіть чернетку зі списку.</p>
           ) : (
@@ -720,6 +690,36 @@ export function DraftsPage() {
           )}
         </Panel>
       </div>
+
+      <Panel title="Вхідна кореспонденція">
+        <div className="mb-3 flex items-center gap-3">
+          {canEdit && (
+            <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={pollNow}>
+              Опитати пошту зараз
+            </button>
+          )}
+          <button className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink" onClick={load}>
+            Оновити
+          </button>
+        </div>
+        <DataTable
+          data={messages}
+          columns={mailColumns}
+          rowKey={(message) => message.id}
+          isLoading={isLoading}
+          errorText={loadError}
+          onRetry={load}
+          emptyText="Листи відсутні"
+          emptyActionLabel="Оновити листи"
+          onEmptyAction={load}
+          emptyActionDisabled={isLoading}
+          search={{
+            placeholder: "Пошук за відправником або темою",
+            getSearchText: (message) => `${message.sender} ${message.subject} ${message.status} ${formatMailStatus(message.status)}`
+          }}
+          initialPageSize={20}
+        />
+      </Panel>
     </div>
   );
 }
