@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
@@ -48,6 +49,11 @@ type MonthGroupSummary = {
   name: string;
 };
 
+type TeacherWithWorkload = Teacher & {
+  displayName: string;
+  totalHours: number;
+};
+
 function shortName(name: string | undefined | null) {
   if (!name) return "—";
   const parts = name.trim().split(/\s+/);
@@ -68,6 +74,10 @@ function toSlotHours(slot: ScheduleSlot): number {
     return 0;
   }
   return (ends - starts) / 3_600_000;
+}
+
+function formatHours(value: number): string {
+  return value.toLocaleString("uk-UA", { maximumFractionDigits: 2 });
 }
 
 function monthKeyFromDate(value: string | undefined | null): string | null {
@@ -419,6 +429,8 @@ export function SchedulePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [teacherToDelete, setTeacherToDelete] = useState<TeacherWithWorkload | null>(null);
+  const [isDeletingTeacher, setIsDeletingTeacher] = useState(false);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
@@ -450,17 +462,9 @@ export function SchedulePage() {
         request<ScheduleSlot[]>("/schedule"),
         request<Teacher[]>("/teachers")
       ]);
-      
-      // Temporary cleanup for phantom/invalid teachers
-      const invalidTeachers = teachersData.filter(t => t.last_name === 'Сидоренко' || t.last_name === 'Коваль');
-      if (invalidTeachers.length > 0) {
-        await Promise.all(invalidTeachers.map(t => request(`/teachers/${t.id}`, { method: 'DELETE' }).catch(console.error)));
-      }
-      
-      const validTeachers = teachersData.filter(t => t.last_name !== 'Сидоренко' && t.last_name !== 'Коваль');
-      
+
       setSlots(data);
-      setTeachers(validTeachers);
+      setTeachers(teachersData);
       appendSnapshot(data);
       setLoadError(null);
     } catch (error) {
@@ -553,6 +557,28 @@ export function SchedulePage() {
       .filter((group) => group.slots.length > 0);
   }, [groupedSchedule, showConflictsOnly, conflictAnalysis.conflictSlotIds]);
 
+  const teachersWithWorkload = useMemo<TeacherWithWorkload[]>(() => {
+    const hoursByTeacherId = new Map<number, number>();
+    for (const slot of slots) {
+      hoursByTeacherId.set(slot.teacher_id, (hoursByTeacherId.get(slot.teacher_id) || 0) + toSlotHours(slot));
+    }
+
+    return teachers
+      .map((teacher) => {
+        const totalHours = Number((hoursByTeacherId.get(teacher.id) || 0).toFixed(2));
+        return {
+          ...teacher,
+          displayName: `${teacher.last_name} ${teacher.first_name}`.trim(),
+          totalHours
+        };
+      })
+      .sort((left, right) => {
+        if (left.totalHours <= 0 && right.totalHours > 0) return -1;
+        if (left.totalHours > 0 && right.totalHours <= 0) return 1;
+        return left.displayName.localeCompare(right.displayName, "uk-UA", { sensitivity: "base" });
+      });
+  }, [slots, teachers]);
+
   const seriesByKey = useMemo(
     () => ({
       totalLessons: statsHistory.map((item) => item.totalLessons),
@@ -628,6 +654,34 @@ export function SchedulePage() {
       setIsGenerating(false);
     }
   };
+
+  const closeDeleteTeacherDialog = () => {
+    if (isDeletingTeacher) return;
+    setTeacherToDelete(null);
+  };
+
+  const confirmDeleteTeacher = async () => {
+    if (!teacherToDelete || isDeletingTeacher) return;
+    setIsDeletingTeacher(true);
+    try {
+      await request(`/teachers/${teacherToDelete.id}`, { method: "DELETE" });
+      setTeachers((prev) => prev.filter((teacher) => teacher.id !== teacherToDelete.id));
+      setSlots((prev) => prev.filter((slot) => slot.teacher_id !== teacherToDelete.id));
+      showSuccess(`Викладача «${teacherToDelete.displayName}» видалено`);
+      setTeacherToDelete(null);
+      await fetchSchedule();
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeletingTeacher(false);
+    }
+  };
+
+  const deleteTeacherDescription = teacherToDelete
+    ? teacherToDelete.totalHours > 0
+      ? `Видалити викладача «${teacherToDelete.displayName}»? У нього зараз ${formatHours(teacherToDelete.totalHours)} год у розкладі. Видалення також прибере пов'язані заняття.`
+      : `Видалити викладача «${teacherToDelete.displayName}»? У нього зараз 0 год у розкладі.`
+    : "";
 
   return (
     <div className="space-y-5">
@@ -820,22 +874,46 @@ export function SchedulePage() {
             })}
           </div>
           
-          {canGenerate && teachers.length > 0 && (
+          {canGenerate && teachersWithWorkload.length > 0 && (
             <div className="w-full xl:w-64 flex-shrink-0">
               <div className="sticky top-[140px] rounded-xl border border-slate-200 bg-white p-3 shadow-sm max-h-[calc(100vh-160px)] overflow-y-auto">
                 <h4 className="font-semibold text-slate-800 mb-2">Викладачі</h4>
-                <p className="text-xs text-slate-500 mb-3">Перетягніть викладача на заняття для заміни.</p>
+                <p className="text-xs text-slate-500 mb-3">
+                  Перетягніть викладача на заняття для заміни. У дужках показано поточне навантаження.
+                </p>
                 <div className="space-y-1.5">
-                  {teachers.map(t => (
+                  {teachersWithWorkload.map(t => (
                     <div
                       key={t.id}
                       draggable
                       onDragStart={(e) => {
                         e.dataTransfer.setData('application/json', JSON.stringify({ type: 'teacher', teacherId: t.id }));
                       }}
-                      className="text-sm p-2 rounded border border-slate-200 bg-slate-50 cursor-grab hover:bg-slate-100"
+                      className={`rounded border p-2 text-sm hover:bg-slate-100 ${
+                        t.totalHours > 0
+                          ? "border-slate-200 bg-slate-50"
+                          : "border-amber-200 bg-amber-50/70"
+                      }`}
                     >
-                      {t.last_name} {t.first_name}
+                      <div className="cursor-grab">
+                        <p className="font-medium text-slate-800">
+                          {t.displayName}{" "}
+                          <span className={t.totalHours > 0 ? "font-semibold text-slate-600" : "font-semibold text-amber-700"}>
+                            ({formatHours(t.totalHours)} год)
+                          </span>
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="mt-2 rounded-md bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-200"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setTeacherToDelete(t);
+                        }}
+                      >
+                        Видалити
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -844,6 +922,19 @@ export function SchedulePage() {
           )}
         </div>
       </Panel>
+      {canGenerate && (
+        <ConfirmDialog
+          open={Boolean(teacherToDelete)}
+          title="Видалити викладача"
+          description={deleteTeacherDescription}
+          confirmLabel={isDeletingTeacher ? "Видаляємо..." : "Видалити"}
+          cancelLabel="Скасувати"
+          confirmVariant="danger"
+          confirmDisabled={isDeletingTeacher}
+          onConfirm={confirmDeleteTeacher}
+          onCancel={closeDeleteTeacherDialog}
+        />
+      )}
     </div>
   );
 }
