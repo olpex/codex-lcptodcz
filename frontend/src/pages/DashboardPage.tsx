@@ -276,7 +276,7 @@ export function DashboardPage() {
                     {" "}слухачів за {kpi.student_plan_year} рік
                   </p>
                   {canEditPlan && (
-                    <form className="mt-2 grid gap-2 sm:grid-cols-[5.5rem_1fr_auto]" onSubmit={saveStudentPlan}>
+                    <form className="mt-2 grid gap-2 sm:grid-cols-[5.5rem_1fr]" onSubmit={saveStudentPlan}>
                       <input
                         type="number"
                         min={2000}
@@ -303,7 +303,7 @@ export function DashboardPage() {
                       />
                       <button
                         type="submit"
-                        className="rounded border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+                        className="justify-self-end rounded border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50 sm:col-span-2"
                         disabled={isPlanSaving}
                       >
                         {isPlanSaving ? "..." : "Зберегти"}
