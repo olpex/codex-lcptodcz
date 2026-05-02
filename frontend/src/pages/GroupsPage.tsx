@@ -168,6 +168,7 @@ export function GroupsPage() {
   const [isAuditLoading, setIsAuditLoading] = useState(false);
   const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
   const [selectedDetailGroupId, setSelectedDetailGroupId] = useState<number | null>(null);
+  const [expandedTraineeTables, setExpandedTraineeTables] = useState<Record<number, boolean>>({});
   const [groupAudit, setGroupAudit] = useState<GroupAuditLog[]>([]);
 
   // --- Стан видалення групи ---
@@ -199,6 +200,7 @@ export function GroupsPage() {
     () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots),
     [scheduleSlots, selectedDetailGroup, trainees]
   );
+  const selectedTraineesExpanded = selectedDetailGroup ? Boolean(expandedTraineeTables[selectedDetailGroup.id]) : false;
 
   const columns = useMemo<DataTableColumn<Group>[]>(
     () => [
@@ -545,6 +547,14 @@ export function GroupsPage() {
     });
   };
 
+  const toggleSelectedGroupTrainees = () => {
+    if (!selectedDetailGroup) return;
+    setExpandedTraineeTables((prev) => ({
+      ...prev,
+      [selectedDetailGroup.id]: !prev[selectedDetailGroup.id]
+    }));
+  };
+
   const toggleAllGroups = () => {
     if (allGroupsSelected) {
       setSelectedGroupIds({});
@@ -805,52 +815,68 @@ export function GroupsPage() {
               </div>
             </div>
             <div className="xl:col-span-2">
-              <div className="rounded-lg border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
+              <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <button
+                  type="button"
+                  className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                  onClick={toggleSelectedGroupTrainees}
+                  aria-expanded={selectedTraineesExpanded}
+                  aria-controls={`group-trainees-${selectedDetailGroup.id}`}
+                >
+                  <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Слухачі з Excel</p>
-                    <h4 className="mt-1 text-sm font-semibold text-ink">Склад групи за договорами</h4>
+                    <h4 className="mt-1 text-sm font-semibold text-ink">Слухачі групи</h4>
+                    <p className="mt-1 text-xs text-slate-600">Склад групи за договорами</p>
                   </div>
-                  <div className="text-right text-sm text-slate-700">
-                    <p className="font-semibold text-ink">Активних: {selectedGroupDetail.activeTrainees}</p>
-                    <p className="text-xs">Архів: {selectedGroupDetail.archivedTrainees}</p>
+                  <div className="flex shrink-0 items-start gap-3 text-right text-sm text-slate-700">
+                    <div>
+                      <p className="font-semibold text-ink">Активних: {selectedGroupDetail.activeTrainees}</p>
+                      <p className="text-xs">Архів: {selectedGroupDetail.archivedTrainees}</p>
+                    </div>
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-pine text-lg font-bold leading-none text-white">
+                      {selectedTraineesExpanded ? "−" : "+"}
+                    </span>
                   </div>
-                </div>
-                {selectedGroupDetail.trainees.length > 0 ? (
-                  <div className="mt-3 overflow-x-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
-                        <tr>
-                          <th className="py-2 pr-3 font-semibold">№</th>
-                          <th className="py-2 pr-3 font-semibold">ПІБ</th>
-                          <th className="py-2 pr-3 font-semibold">Договір</th>
-                          <th className="py-2 pr-3 font-semibold">Дата нар.</th>
-                          <th className="py-2 pr-3 font-semibold">Телефон</th>
-                          <th className="py-2 pr-3 font-semibold">Центр</th>
-                          <th className="py-2 pr-3 font-semibold">Адреса</th>
-                          <th className="py-2 font-semibold">Статус</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {selectedGroupDetail.trainees.map((trainee, index) => (
-                          <tr key={trainee.traineeId}>
-                            <td className="py-2 pr-3 text-slate-600">{trainee.rowNumber ?? index + 1}</td>
-                            <td className="py-2 pr-3 font-semibold text-ink">{trainee.name || "—"}</td>
-                            <td className="py-2 pr-3 text-slate-700">{trainee.contractNumber || "—"}</td>
-                            <td className="py-2 pr-3 text-slate-700">{formatDate(trainee.birthDate)}</td>
-                            <td className="py-2 pr-3 text-slate-700">{trainee.phone || "—"}</td>
-                            <td className="py-2 pr-3 text-slate-700">{trainee.employmentCenter || "—"}</td>
-                            <td className="py-2 pr-3 text-slate-700">{trainee.address || "—"}</td>
-                            <td className="py-2 text-slate-700">{formatTraineeStatus(trainee.status)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                </button>
+                {selectedTraineesExpanded && (
+                  <div id={`group-trainees-${selectedDetailGroup.id}`} className="border-t border-slate-200 p-4">
+                    {selectedGroupDetail.trainees.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-left text-sm">
+                          <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                            <tr>
+                              <th className="py-2 pr-3 font-semibold">№</th>
+                              <th className="py-2 pr-3 font-semibold">ПІБ</th>
+                              <th className="py-2 pr-3 font-semibold">Договір</th>
+                              <th className="py-2 pr-3 font-semibold">Дата нар.</th>
+                              <th className="py-2 pr-3 font-semibold">Телефон</th>
+                              <th className="py-2 pr-3 font-semibold">Центр</th>
+                              <th className="py-2 pr-3 font-semibold">Адреса</th>
+                              <th className="py-2 font-semibold">Статус</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {selectedGroupDetail.trainees.map((trainee, index) => (
+                              <tr key={trainee.traineeId}>
+                                <td className="py-2 pr-3 text-slate-600">{trainee.rowNumber ?? index + 1}</td>
+                                <td className="py-2 pr-3 font-semibold text-ink">{trainee.name || "—"}</td>
+                                <td className="py-2 pr-3 text-slate-700">{trainee.contractNumber || "—"}</td>
+                                <td className="py-2 pr-3 text-slate-700">{formatDate(trainee.birthDate)}</td>
+                                <td className="py-2 pr-3 text-slate-700">{trainee.phone || "—"}</td>
+                                <td className="py-2 pr-3 text-slate-700">{trainee.employmentCenter || "—"}</td>
+                                <td className="py-2 pr-3 text-slate-700">{trainee.address || "—"}</td>
+                                <td className="py-2 text-slate-700">{formatTraineeStatus(trainee.status)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                        Слухачів за цією групою ще не знайдено.
+                      </p>
+                    )}
                   </div>
-                ) : (
-                  <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    Слухачів за цією групою ще не знайдено.
-                  </p>
                 )}
               </div>
             </div>

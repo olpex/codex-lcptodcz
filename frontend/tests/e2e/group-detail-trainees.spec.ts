@@ -149,6 +149,13 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
   await expect(detail.getByText("180-25 — Штучний інтелект")).toBeVisible();
   await expect(detail.getByText("Слухачі з Excel")).toBeVisible();
   await expect(detail.getByText("Активних: 2")).toBeVisible();
+  await expect(detail.getByText("Іваненко Іван Іванович")).not.toBeVisible();
+
+  const traineesToggle = detail.getByRole("button", { name: /Слухачі групи/ });
+  await expect(traineesToggle).toHaveAttribute("aria-expanded", "false");
+  await traineesToggle.click();
+
+  await expect(traineesToggle).toHaveAttribute("aria-expanded", "true");
   await expect(detail.getByText("Іваненко Іван Іванович")).toBeVisible();
   await expect(detail.getByText("180-25/001")).toBeVisible();
   await expect(detail.getByText("+380501112233")).toBeVisible();
