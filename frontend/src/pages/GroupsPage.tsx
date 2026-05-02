@@ -14,6 +14,7 @@ type GroupDetail = {
   activeTrainees: number;
   archivedTrainees: number;
   capacityUsedPct: number;
+  trainees: GroupDetailTrainee[];
   scheduleSlots: number;
   scheduleHours: number;
   scheduleDateFrom: string | null;
@@ -21,10 +22,28 @@ type GroupDetail = {
   teachers: GroupDetailTeacher[];
 };
 
+type GroupDetailTrainee = {
+  traineeId: number;
+  rowNumber: number | null;
+  name: string;
+  contractNumber: string | null;
+  phone: string | null;
+  birthDate: string | null;
+  employmentCenter: string | null;
+  address: string | null;
+  status: string;
+};
+
 type GroupDetailTeacher = {
   teacherId: number;
   name: string;
   hours: number;
+};
+
+const TRAINEE_STATUS_LABELS: Record<string, string> = {
+  active: "Активний",
+  completed: "Завершив",
+  expelled: "Відрахований"
 };
 
 function formatDate(value: string | null | undefined): string {
@@ -38,6 +57,14 @@ function formatDateTime(value: string): string {
 
 function formatHours(value: number): string {
   return value.toLocaleString("uk-UA", { maximumFractionDigits: 2 });
+}
+
+function formatTraineeStatus(value: string): string {
+  return TRAINEE_STATUS_LABELS[value] || value;
+}
+
+function buildTraineeName(trainee: Trainee): string {
+  return `${trainee.last_name} ${trainee.first_name}`.trim();
 }
 
 function formatAuditAction(action: string): string {
@@ -68,6 +95,25 @@ function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlot
   const activeTrainees = groupTrainees.filter((trainee) => !trainee.is_deleted).length;
   const archivedTrainees = groupTrainees.length - activeTrainees;
   const capacityUsedPct = group.capacity > 0 ? Math.round((activeTrainees / group.capacity) * 100) : 0;
+  const detailTrainees = groupTrainees
+    .filter((trainee) => !trainee.is_deleted)
+    .sort((left, right) => {
+      const rowLeft = left.source_row_number ?? Number.MAX_SAFE_INTEGER;
+      const rowRight = right.source_row_number ?? Number.MAX_SAFE_INTEGER;
+      if (rowLeft !== rowRight) return rowLeft - rowRight;
+      return buildTraineeName(left).localeCompare(buildTraineeName(right), "uk-UA", { sensitivity: "base" });
+    })
+    .map((trainee) => ({
+      traineeId: trainee.id,
+      rowNumber: trainee.source_row_number,
+      name: buildTraineeName(trainee),
+      contractNumber: trainee.contract_number,
+      phone: trainee.phone,
+      birthDate: trainee.birth_date,
+      employmentCenter: trainee.employment_center,
+      address: trainee.address,
+      status: trainee.status
+    }));
   const scheduleDates = groupSlots.map((slot) => slot.starts_at).filter(Boolean).sort();
   const teacherBuckets = new Map<number, GroupDetailTeacher>();
   groupSlots.forEach((slot) => {
@@ -89,6 +135,7 @@ function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlot
     activeTrainees,
     archivedTrainees,
     capacityUsedPct,
+    trainees: detailTrainees,
     scheduleSlots: groupSlots.length,
     scheduleHours: Number(groupSlots.reduce((sum, slot) => sum + (slot.academic_hours || 0), 0).toFixed(1)),
     scheduleDateFrom: scheduleDates[0] || null,
@@ -754,6 +801,56 @@ export function GroupsPage() {
                   </ul>
                 ) : (
                   <p className="mt-1 text-xs text-slate-600">Не знайдено</p>
+                )}
+              </div>
+            </div>
+            <div className="xl:col-span-2">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Слухачі з Excel</p>
+                    <h4 className="mt-1 text-sm font-semibold text-ink">Склад групи за договорами</h4>
+                  </div>
+                  <div className="text-right text-sm text-slate-700">
+                    <p className="font-semibold text-ink">Активних: {selectedGroupDetail.activeTrainees}</p>
+                    <p className="text-xs">Архів: {selectedGroupDetail.archivedTrainees}</p>
+                  </div>
+                </div>
+                {selectedGroupDetail.trainees.length > 0 ? (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-left text-sm">
+                      <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="py-2 pr-3 font-semibold">№</th>
+                          <th className="py-2 pr-3 font-semibold">ПІБ</th>
+                          <th className="py-2 pr-3 font-semibold">Договір</th>
+                          <th className="py-2 pr-3 font-semibold">Дата нар.</th>
+                          <th className="py-2 pr-3 font-semibold">Телефон</th>
+                          <th className="py-2 pr-3 font-semibold">Центр</th>
+                          <th className="py-2 pr-3 font-semibold">Адреса</th>
+                          <th className="py-2 font-semibold">Статус</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedGroupDetail.trainees.map((trainee, index) => (
+                          <tr key={trainee.traineeId}>
+                            <td className="py-2 pr-3 text-slate-600">{trainee.rowNumber ?? index + 1}</td>
+                            <td className="py-2 pr-3 font-semibold text-ink">{trainee.name || "—"}</td>
+                            <td className="py-2 pr-3 text-slate-700">{trainee.contractNumber || "—"}</td>
+                            <td className="py-2 pr-3 text-slate-700">{formatDate(trainee.birthDate)}</td>
+                            <td className="py-2 pr-3 text-slate-700">{trainee.phone || "—"}</td>
+                            <td className="py-2 pr-3 text-slate-700">{trainee.employmentCenter || "—"}</td>
+                            <td className="py-2 pr-3 text-slate-700">{trainee.address || "—"}</td>
+                            <td className="py-2 text-slate-700">{formatTraineeStatus(trainee.status)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    Слухачів за цією групою ще не знайдено.
+                  </p>
                 )}
               </div>
             </div>
