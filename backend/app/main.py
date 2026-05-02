@@ -103,6 +103,13 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+
+    @app.middleware("http")
+    async def add_noindex_header(_request, call_next):
+        response = await call_next(_request)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+        return response
+
     app.add_middleware(RBACContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
