@@ -89,3 +89,61 @@ for (const scenario of CASES) {
     }
   });
 }
+
+test("search is the last item in the desktop sidebar navigation", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Test admin",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/dashboard/kpi") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          active_groups: 1,
+          active_trainees: 10,
+          training_plan_progress_pct: 30,
+          forecast_graduation: 9,
+          forecast_employment: 7
+        })
+      });
+    }
+
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([])
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "access-admin",
+        refreshToken: "refresh-admin"
+      })
+    );
+  });
+
+  await page.goto("/");
+
+  const sidebar = page.getByRole("navigation", { name: "Головна навігація" });
+  await expect(sidebar.getByRole("link").last()).toHaveText("Пошук");
+});
