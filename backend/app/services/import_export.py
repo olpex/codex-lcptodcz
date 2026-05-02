@@ -209,15 +209,16 @@ def _make_unique_headers(raw_headers: list[Any]) -> list[str]:
 
 
 def _rows_from_xlsx(file_path: str) -> tuple[str | None, list[list[Any]]]:
-    workbook = load_workbook(file_path, data_only=True, read_only=True)
-    sheet_name = _pick_sheet_name(workbook.sheetnames)
-    if not sheet_name:
+    with Path(file_path).open("rb") as fh:
+        workbook = load_workbook(fh, data_only=True, read_only=True)
+        sheet_name = _pick_sheet_name(workbook.sheetnames)
+        if not sheet_name:
+            workbook.close()
+            return None, []
+        worksheet = workbook[sheet_name]
+        rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
         workbook.close()
-        return None, []
-    worksheet = workbook[sheet_name]
-    rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
-    workbook.close()
-    return sheet_name, rows
+        return sheet_name, rows
 
 
 def _rows_from_xls(file_path: str) -> tuple[str | None, list[list[Any]]]:
@@ -242,6 +243,11 @@ def _rows_from_xls(file_path: str) -> tuple[str | None, list[list[Any]]]:
     return sheet_name, rows
 
 
+def _looks_like_xlsx(file_path: str) -> bool:
+    with Path(file_path).open("rb") as fh:
+        return fh.read(4) == b"PK\x03\x04"
+
+
 def _tabular_preview(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     preview: list[dict[str, Any]] = []
     for row in data[:ROW_SAMPLE_LIMIT]:
@@ -252,7 +258,7 @@ def _tabular_preview(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _parse_tabular_content(file_path: str) -> dict[str, Any]:
     extension = Path(file_path).suffix.lower()
-    if extension == ".xls":
+    if extension == ".xls" and not _looks_like_xlsx(file_path):
         sheet_name, rows = _rows_from_xls(file_path)
     else:
         sheet_name, rows = _rows_from_xlsx(file_path)

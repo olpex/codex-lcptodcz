@@ -410,6 +410,31 @@ def test_gmail_api_webhook_accepts_excel_without_contract_keyword(client, monkey
     assert response.status_code == 202
 
 
+def test_gmail_api_webhook_imports_excel_inline_without_waiting_for_queue(client, db_session, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.process_import_job_task, "delay", lambda job_id: object())
+
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "180-25 Договори Штучний інтелект.xls",
+            "messageId": "<gmail-api-xlsx-inline-test@example.com>",
+            "attachmentKey": "<gmail-api-xlsx-inline-test@example.com>:1:180-25 Договори Штучний інтелект.xls",
+            "fileBase64": base64.urlsafe_b64encode(_contracts_xlsx_bytes()).decode("ascii"),
+            "subject": "Fwd:",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == JobStatus.SUCCEEDED.value
+    assert response.json()["result_payload"]["attachment_key"].endswith("180-25 Договори Штучний інтелект.xls")
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "73-26/001").first()
+    assert trainee is not None
+
+
 def test_gmail_api_webhook_reprocesses_excel_with_same_message_id(client, db_session, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

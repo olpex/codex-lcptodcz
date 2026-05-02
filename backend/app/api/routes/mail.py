@@ -279,6 +279,7 @@ class GmailApiContractWebhookRequest(BaseModel):
 
     filename: str = Field(min_length=1, max_length=512)
     messageId: str = Field(min_length=1, max_length=255)
+    attachmentKey: str | None = Field(default=None, max_length=512)
     fileBase64: str = Field(min_length=1, description="URL-safe Base64 даних файлу (формат Gmail API)")
     subject: str | None = Field(default=None, description="Тема листа")
 
@@ -299,6 +300,7 @@ def gmail_api_contracts_webhook(
 
     filename = body.filename.strip()
     safe_message_id = body.messageId.strip()[:255]
+    safe_attachment_key = (body.attachmentKey or f"{safe_message_id}:{filename}").strip()[:512]
 
     # Gmail API повертає URL-safe Base64 (символи - та _ замість + та /), відновлюємо стандартний padding
     b64_data = body.fileBase64.replace("-", "+").replace("_", "/")
@@ -331,7 +333,7 @@ def gmail_api_contracts_webhook(
 
     branch_id = settings.imap_branch_id or "main"
 
-    idem_digest = hashlib.sha1(f"{branch_id}:{safe_message_id}:{filename}".encode("utf-8")).hexdigest()[:24]
+    idem_digest = hashlib.sha1(f"{branch_id}:{safe_attachment_key}:{filename}".encode("utf-8")).hexdigest()[:24]
     idempotency_key = f"{branch_id}:mail-gmail-api:{idem_digest}"
 
     out_path: Path | None = None
@@ -392,6 +394,7 @@ def gmail_api_contracts_webhook(
         result_payload={
             "source": "mail_gmail_api",
             "message_id": safe_message_id,
+            "attachment_key": safe_attachment_key,
             "sender_name": sender_name,
             "sender_email": sender_email,
             "group_code_hint": group_code_hint,
@@ -403,10 +406,7 @@ def gmail_api_contracts_webhook(
     db.commit()
     db.refresh(job)
 
-    if doc_type.value == "docx":
-        dispatch_mode = _run_import_inline_or_raise(job.id, db)
-    else:
-        dispatch_mode = _dispatch_import_with_fallback(job.id)
+    dispatch_mode = _run_import_inline_or_raise(job.id, db)
     db.refresh(job)
     if dispatch_mode == "inline":
         suffix = f" {job.message}" if job.message else ""
@@ -531,10 +531,7 @@ def google_mail_contracts_webhook(
     db.commit()
     db.refresh(job)
 
-    if doc_type.value == "docx":
-        dispatch_mode = _run_import_inline_or_raise(job.id, db)
-    else:
-        dispatch_mode = _dispatch_import_with_fallback(job.id)
+    dispatch_mode = _run_import_inline_or_raise(job.id, db)
     db.refresh(job)
     if dispatch_mode == "inline":
         suffix = f" {job.message}" if job.message else ""
