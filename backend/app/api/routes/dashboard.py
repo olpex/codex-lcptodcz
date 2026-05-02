@@ -35,7 +35,9 @@ def get_kpi(db: DbSession, current_user: CurrentUser) -> DashboardKPIResponse:
     active_trainees = (
         db.query(GroupMembership)
         .join(Group, Group.id == GroupMembership.group_id)
+        .join(Trainee, Trainee.id == GroupMembership.trainee_id)
         .filter(GroupMembership.status == MembershipStatus.ACTIVE)
+        .filter(Trainee.is_deleted.is_(False))
         .filter(Group.branch_id == current_user.branch_id)
         .count()
     )

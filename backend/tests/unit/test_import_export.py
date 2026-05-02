@@ -276,6 +276,35 @@ def test_import_updates_existing_missing_fields_instead_of_skipping(tmp_path: Pa
     assert trainee.employment_center_encrypted is not None
 
 
+def test_import_restores_archived_existing_trainee(tmp_path: Path, db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Тетяна Анатоліївна",
+            last_name="Бортнік",
+            contract_number="1499",
+            status="active",
+            is_deleted=True,
+            deleted_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    file_path = tmp_path / "contracts_restore.xlsx"
+    _create_contract_like_workbook(file_path)
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    result = try_import_trainees(db_session, parsed, "main")
+    assert result["inserted"] == 0
+    assert result["updated_existing"] == 1
+    assert result["restored_deleted"] == 1
+
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "1499").one()
+    assert trainee.is_deleted is False
+    assert trainee.deleted_at is None
+    assert trainee.group_code == "73-26"
+
+
 def test_import_overwrite_mode_updates_existing_non_empty_fields(tmp_path: Path, db_session):
     db_session.add(
         Trainee(

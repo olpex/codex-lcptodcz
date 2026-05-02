@@ -723,6 +723,7 @@ def try_import_trainees(
     skipped_invalid = 0
     skipped_existing = 0
     memberships_created = 0
+    restored_deleted = 0
     inserted_ids: list[int] = []
 
     default_group_code = _normalize_text_value(parsed.get("default_group_code"))
@@ -771,6 +772,11 @@ def try_import_trainees(
                 continue
 
             changed = False
+            if existing.is_deleted:
+                existing.is_deleted = False
+                existing.deleted_at = None
+                restored_deleted += 1
+                changed = True
             changed = _set_plain_value(existing, "source_row_number", source_row_number, overwrite_existing) or changed
             changed = _set_plain_value(existing, "birth_date", birth_date, overwrite_existing) or changed
             changed = _set_plain_value(existing, "contract_number", contract_number, overwrite_existing) or changed
@@ -851,6 +857,7 @@ def try_import_trainees(
         "skipped_invalid": skipped_invalid,
         "skipped_existing": skipped_existing,
         "memberships_created": memberships_created,
+        "restored_deleted": restored_deleted,
         "already_loaded": skipped_existing > 0 and inserted == 0 and updated_existing == 0,
         "sheet_name": parsed.get("sheet_name"),
         "default_group_code": default_group_code or None,

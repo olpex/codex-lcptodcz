@@ -47,7 +47,7 @@ const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-02 attachment-queue-v7");
+  Logger.log("Версія скрипта: 2026-05-02 attachment-queue-v8");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -266,10 +266,11 @@ function logImportResult_(body, fileName) {
     return;
   }
   Logger.log(
-    "📊 Результат імпорту '%s': inserted=%s, updated=%s, memberships=%s, skipped_existing=%s, skipped_invalid=%s, sheet=%s, note=%s",
+    "📊 Результат імпорту '%s': inserted=%s, updated=%s, restored=%s, memberships=%s, skipped_existing=%s, skipped_invalid=%s, sheet=%s, note=%s",
     fileName,
     result.inserted || 0,
     result.updated_existing || 0,
+    result.restored_deleted || 0,
     result.memberships_created || 0,
     result.skipped_existing || 0,
     result.skipped_invalid || 0,

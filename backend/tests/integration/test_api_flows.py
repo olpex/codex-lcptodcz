@@ -9,6 +9,7 @@ from app.models import (
     GroupStatus,
     ImportJob,
     JobStatus,
+    MembershipStatus,
     OCRResult,
     Performance,
     Room,
@@ -125,6 +126,33 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
     assert "facility_load_pct" not in kpi_payload
+
+
+def test_dashboard_kpi_excludes_archived_trainees_from_active_count(client, auth_headers, db_session):
+    group = Group(branch_id="main", code="KPI-ARCH", name="KPI архів", status=GroupStatus.ACTIVE)
+    visible = Trainee(branch_id="main", first_name="Активний", last_name="Слухач", status="active")
+    archived = Trainee(
+        branch_id="main",
+        first_name="Архівний",
+        last_name="Слухач",
+        status="active",
+        is_deleted=True,
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([group, visible, archived])
+    db_session.flush()
+    db_session.add_all(
+        [
+            GroupMembership(group_id=group.id, trainee_id=visible.id, status=MembershipStatus.ACTIVE),
+            GroupMembership(group_id=group.id, trainee_id=archived.id, status=MembershipStatus.ACTIVE),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/kpi", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["active_trainees"] == 1
 
 
 def test_schedule_generation_does_not_require_auditoriums(client, auth_headers, db_session):
