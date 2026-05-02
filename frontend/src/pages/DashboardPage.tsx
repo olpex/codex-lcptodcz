@@ -114,6 +114,7 @@ export function DashboardPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const lastErrorMessageRef = useRef("");
   const planFormDirtyRef = useRef(false);
+  const latestKpiRequestRef = useRef(0);
 
   const canEditPlan = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -121,6 +122,8 @@ export function DashboardPage() {
   );
 
   const fetchKpi = async (isBackgroundRefresh = false) => {
+    const requestId = latestKpiRequestRef.current + 1;
+    latestKpiRequestRef.current = requestId;
     if (!isBackgroundRefresh) {
       setIsLoading(true);
     }
@@ -137,6 +140,9 @@ export function DashboardPage() {
         student_plan_target: data.student_plan_target ?? 0,
         student_plan_processed: data.student_plan_processed ?? data.active_trainees ?? 0
       };
+      if (requestId !== latestKpiRequestRef.current) {
+        return;
+      }
       setKpi(nextKpi);
       setAttention(attentionData);
       setWorkload(workloadData);
@@ -152,6 +158,9 @@ export function DashboardPage() {
       setLoadError(null);
       lastErrorMessageRef.current = "";
     } catch (error) {
+      if (requestId !== latestKpiRequestRef.current) {
+        return;
+      }
       const message = (error as Error).message;
       setLoadError(message);
       if (message !== lastErrorMessageRef.current) {
@@ -159,8 +168,10 @@ export function DashboardPage() {
         lastErrorMessageRef.current = message;
       }
     } finally {
-      setIsLoading(false);
-      setHasLoadedOnce(true);
+      if (requestId === latestKpiRequestRef.current) {
+        setIsLoading(false);
+        setHasLoadedOnce(true);
+      }
     }
   };
 
