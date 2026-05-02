@@ -469,6 +469,20 @@ def test_parse_schedule_docx_with_two_groups_in_table_headers(tmp_path: Path):
     assert codes == {"162-25", "47п-25"}
 
 
+def test_import_schedule_docx_sets_group_dates_from_schedule_table_dates(db_session, tmp_path: Path):
+    file_path = tmp_path / "schedule-table-dates-only.docx"
+    _build_schedule_docx_with_two_groups_in_table_headers(file_path)
+
+    import_schedule_docx(db_session, str(file_path), branch_id="main", actor_user_id=1)
+    db_session.commit()
+
+    groups = {group.code: group for group in db_session.query(Group).all()}
+    assert groups["162-25"].start_date.isoformat() == "2025-06-23"
+    assert groups["162-25"].end_date.isoformat() == "2025-06-24"
+    assert groups["47п-25"].start_date.isoformat() == "2025-06-23"
+    assert groups["47п-25"].end_date.isoformat() == "2025-06-24"
+
+
 def test_parse_schedule_docx_with_dot_separator_group_code(tmp_path: Path):
     file_path = tmp_path / "schedule-two-groups-dot-separator.docx"
     _build_schedule_docx_with_dot_separator_group_code(file_path)

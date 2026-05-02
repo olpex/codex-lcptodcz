@@ -94,6 +94,51 @@ def test_group_audit_returns_group_actions(client, auth_headers):
     assert "group.enroll" in actions
 
 
+def test_groups_api_falls_back_to_schedule_dates_when_group_dates_are_empty(client, auth_headers, db_session):
+    group = Group(branch_id="main", code="46-26", name="Група з розкладом", status=GroupStatus.ACTIVE)
+    teacher = Teacher(branch_id="main", first_name="Тест", last_name="Викладач", hourly_rate=0, is_active=True)
+    subject = Subject(branch_id="main", name="Предмет", hours_total=4)
+    room = Room(branch_id="main", name="Аудиторія", capacity=20)
+    db_session.add_all([group, teacher, subject, room])
+    db_session.flush()
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2026, 3, 11, 9, 30, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 3, 11, 11, 5, tzinfo=timezone.utc),
+                pair_number=1,
+                academic_hours=2,
+            ),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2026, 3, 12, 11, 10, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 3, 12, 12, 45, tzinfo=timezone.utc),
+                pair_number=2,
+                academic_hours=2,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    list_response = client.get("/api/v1/groups", headers=auth_headers)
+    assert list_response.status_code == 200
+    listed_group = next(item for item in list_response.json() if item["code"] == "46-26")
+    assert listed_group["start_date"] == "2026-03-11"
+    assert listed_group["end_date"] == "2026-03-12"
+
+    detail_response = client.get(f"/api/v1/groups/{group.id}", headers=auth_headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["start_date"] == "2026-03-11"
+    assert detail_response.json()["end_date"] == "2026-03-12"
+
+
 def test_schedule_workload_and_kpi_flow(client, auth_headers):
     teacher_response = client.post(
         "/api/v1/teachers",

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import AuditLog, Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee, User
@@ -26,10 +26,45 @@ from app.services.audit import write_audit
 router = APIRouter()
 
 
+def _schedule_date_ranges(db: DbSession, group_ids: list[int]) -> dict[int, tuple[date, date]]:
+    if not group_ids:
+        return {}
+    rows = (
+        db.query(
+            ScheduleSlot.group_id,
+            func.min(ScheduleSlot.starts_at),
+            func.max(ScheduleSlot.starts_at),
+        )
+        .filter(ScheduleSlot.group_id.in_(group_ids))
+        .group_by(ScheduleSlot.group_id)
+        .all()
+    )
+    return {
+        group_id: (min_starts_at.date(), max_starts_at.date())
+        for group_id, min_starts_at, max_starts_at in rows
+        if min_starts_at and max_starts_at
+    }
+
+
+def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]]) -> GroupResponse:
+    response = GroupResponse.model_validate(group)
+    schedule_range = schedule_ranges.get(group.id)
+    if not schedule_range:
+        return response
+    start_date, end_date = schedule_range
+    return response.model_copy(
+        update={
+            "start_date": response.start_date or start_date,
+            "end_date": response.end_date or end_date,
+        }
+    )
+
+
 @router.get("", response_model=list[GroupResponse])
 def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]:
     groups = apply_branch_scope(db.query(Group), Group, current_user.branch_id).order_by(Group.created_at.desc()).all()
-    return [GroupResponse.model_validate(group) for group in groups]
+    schedule_ranges = _schedule_date_ranges(db, [group.id for group in groups])
+    return [_group_response(group, schedule_ranges) for group in groups]
 
 
 def _validate_period(date_from: date | None, date_to: date | None) -> None:
@@ -246,7 +281,7 @@ def get_group(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupR
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
     ensure_same_branch(current_user, group, "Групу")
-    return GroupResponse.model_validate(group)
+    return _group_response(group, _schedule_date_ranges(db, [group.id]))
 
 
 @router.get("/{group_id}/audit", response_model=list[GroupAuditLogResponse])

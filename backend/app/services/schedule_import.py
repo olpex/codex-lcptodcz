@@ -198,6 +198,13 @@ def _parse_date_from_cell(value: str, default_year: int) -> date | None:
     return None
 
 
+def _infer_year_from_group_code(group_code: str) -> int | None:
+    match = re.search(r"[-/](\d{2})$", _norm(group_code))
+    if not match:
+        return None
+    return 2000 + int(match.group(1))
+
+
 def _find_header_column(headers: list[str], keywords: tuple[str, ...], excluded: tuple[str, ...] = ()) -> int | None:
     for index, header in enumerate(headers):
         low = header.lower()
@@ -424,7 +431,13 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
 
         header_row_index = -1
         date_columns: dict[int, date] = {}
-        year = (local_end_date or local_start_date or global_end_date or global_start_date or date.today()).year
+        year = (
+            local_end_date
+            or local_start_date
+            or global_end_date
+            or global_start_date
+            or date(_infer_year_from_group_code(local_group_code) or date.today().year, 1, 1)
+        ).year
         if not list_header_candidates:
             for row_index, row in enumerate(table.rows):
                 current_date_columns: dict[int, date] = {}
@@ -561,23 +574,29 @@ def parse_schedule_docx(file_path: str) -> list[dict]:
         if table_total_group_hours <= 0:
             table_total_group_hours = round(sum(item["academic_hours"] for item in table_entries), 2)
 
+        entry_dates = [date.fromisoformat(item["lesson_date"]) for item in table_entries]
+        table_start_date = local_start_date or min(entry_dates)
+        table_end_date = local_end_date or max(entry_dates)
+        table_start_date_iso = table_start_date.isoformat()
+        table_end_date_iso = table_end_date.isoformat()
+
         bucket = grouped_results.get(local_group_code)
         if not bucket:
             grouped_results[local_group_code] = {
                 "group_code": local_group_code,
                 "group_name": local_group_name,
-                "start_date": local_start_date.isoformat() if local_start_date else None,
-                "end_date": local_end_date.isoformat() if local_end_date else None,
+                "start_date": table_start_date_iso,
+                "end_date": table_end_date_iso,
                 "group_total_hours": table_total_group_hours,
                 "entries": table_entries,
             }
         else:
             bucket["entries"].extend(table_entries)
             bucket["group_total_hours"] = round(float(bucket["group_total_hours"]) + table_total_group_hours, 2)
-            if not bucket.get("start_date") and local_start_date:
-                bucket["start_date"] = local_start_date.isoformat()
-            if not bucket.get("end_date") and local_end_date:
-                bucket["end_date"] = local_end_date.isoformat()
+            if not bucket.get("start_date") or table_start_date_iso < bucket["start_date"]:
+                bucket["start_date"] = table_start_date_iso
+            if not bucket.get("end_date") or table_end_date_iso > bucket["end_date"]:
+                bucket["end_date"] = table_end_date_iso
             if local_group_name and (
                 not bucket.get("group_name") or bucket.get("group_name") == f"Група {local_group_code}"
             ):
