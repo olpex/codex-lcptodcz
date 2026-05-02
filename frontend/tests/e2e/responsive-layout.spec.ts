@@ -39,6 +39,9 @@ async function mockAuthorizedDashboard(page: Page) {
           active_groups: 2,
           active_trainees: 30,
           training_plan_progress_pct: 52,
+          student_plan_year: 2026,
+          student_plan_target: 100,
+          student_plan_processed: 52,
           forecast_graduation: 27,
           forecast_employment: 20
         })

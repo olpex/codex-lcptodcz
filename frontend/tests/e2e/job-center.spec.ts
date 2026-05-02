@@ -74,6 +74,9 @@ test("job center shows jobs and allows refresh", async ({ page }) => {
           active_groups: 1,
           active_trainees: 10,
           training_plan_progress_pct: 40,
+          student_plan_year: 2026,
+          student_plan_target: 100,
+          student_plan_processed: 40,
           forecast_graduation: 5,
           forecast_employment: 4
         })

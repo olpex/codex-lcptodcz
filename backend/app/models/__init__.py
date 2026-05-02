@@ -21,6 +21,7 @@ from app.models.entities import (
     RoleName,
     Room,
     ScheduleSlot,
+    StudentPlan,
     Subject,
     Teacher,
     Trainee,

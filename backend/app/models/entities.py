@@ -287,6 +287,20 @@ class Performance(Base):
     group: Mapped[Group] = relationship(back_populates="performances")
 
 
+class StudentPlan(Base):
+    __tablename__ = "student_plans"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "year", name="uq_student_plan_branch_year"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    target_trainees: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class Order(Base):
     __tablename__ = "orders"
 

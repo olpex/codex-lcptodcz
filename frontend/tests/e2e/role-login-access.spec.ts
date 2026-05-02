@@ -50,6 +50,9 @@ for (const scenario of CASES) {
             active_groups: 1,
             active_trainees: 10,
             training_plan_progress_pct: 30,
+            student_plan_year: 2026,
+            student_plan_target: 100,
+            student_plan_processed: 30,
             forecast_graduation: 9,
             forecast_employment: 7
           })
@@ -91,6 +94,7 @@ for (const scenario of CASES) {
 }
 
 test("search is the last item in the desktop sidebar navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -119,9 +123,20 @@ test("search is the last item in the desktop sidebar navigation", async ({ page 
           active_groups: 1,
           active_trainees: 10,
           training_plan_progress_pct: 30,
+          student_plan_year: 2026,
+          student_plan_target: 100,
+          student_plan_processed: 30,
           forecast_graduation: 9,
           forecast_employment: 7
         })
+      });
+    }
+
+    if (path.endsWith("/dashboard/attention") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ generated_at: "2026-05-02T12:00:00Z", total_count: 0, items: [] })
       });
     }
 

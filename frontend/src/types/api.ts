@@ -134,8 +134,18 @@ export interface KPI {
   active_groups: number;
   active_trainees: number;
   training_plan_progress_pct: number;
+  student_plan_year: number;
+  student_plan_target: number;
+  student_plan_processed: number;
   forecast_graduation: number;
   forecast_employment: number;
+}
+
+export interface StudentPlan {
+  year: number;
+  target_trainees: number;
+  processed_trainees: number;
+  progress_pct: number;
 }
 
 export interface AttentionItem {

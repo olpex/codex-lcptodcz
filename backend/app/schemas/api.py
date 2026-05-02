@@ -382,8 +382,23 @@ class DashboardKPIResponse(BaseModel):
     active_groups: int
     active_trainees: int
     training_plan_progress_pct: float
+    student_plan_year: int
+    student_plan_target: int
+    student_plan_processed: int
     forecast_graduation: int
     forecast_employment: int
+
+
+class StudentPlanUpdateRequest(BaseModel):
+    year: int = Field(ge=2000, le=2100)
+    target_trainees: int = Field(ge=0, le=100000)
+
+
+class StudentPlanResponse(BaseModel):
+    year: int
+    target_trainees: int
+    processed_trainees: int
+    progress_pct: float
 
 
 class DashboardAttentionItem(BaseModel):

@@ -200,6 +200,48 @@ def test_dashboard_kpi_excludes_archived_trainees_from_active_count(client, auth
     assert response.json()["active_trainees"] == 1
 
 
+def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_headers, db_session):
+    for index in range(24):
+        db_session.add(
+            Trainee(
+                branch_id="main",
+                first_name=f"Слухач{index}",
+                last_name="План",
+                status="active",
+                group_code="180-25",
+            )
+        )
+    db_session.add(Trainee(branch_id="main", first_name="Без", last_name="Групи", status="active"))
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Архів",
+            last_name="Не рахуємо",
+            status="active",
+            group_code="180-25",
+            is_deleted=True,
+            deleted_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    plan_response = client.put(
+        "/api/v1/dashboard/student-plan",
+        json={"year": 2026, "target_trainees": 100},
+        headers=auth_headers,
+    )
+    assert plan_response.status_code == 200
+    assert plan_response.json()["target_trainees"] == 100
+
+    response = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["student_plan_year"] == 2026
+    assert payload["student_plan_target"] == 100
+    assert payload["student_plan_processed"] == 24
+    assert payload["training_plan_progress_pct"] == 24
+
+
 def test_schedule_generation_does_not_require_auditoriums(client, auth_headers, db_session):
     db_session.query(Room).delete()
     db_session.add(Teacher(branch_id="main", first_name="Без", last_name="Аудиторій", hourly_rate=0, is_active=True))

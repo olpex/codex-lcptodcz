@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { InlineNotice } from "../components/InlineNotice";
 import { KpiBarChart } from "../components/KpiBarChart";
@@ -8,12 +8,15 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { AttentionSummary, KPI, Workload } from "../types/api";
+import type { AttentionSummary, KPI, StudentPlan, Workload } from "../types/api";
 
 const EMPTY_KPI: KPI = {
   active_groups: 0,
   active_trainees: 0,
   training_plan_progress_pct: 0,
+  student_plan_year: new Date().getFullYear(),
+  student_plan_target: 0,
+  student_plan_processed: 0,
   forecast_graduation: 0,
   forecast_employment: 0
 };
@@ -40,7 +43,7 @@ const KPI_CARDS = [
   },
   {
     key: "training_plan_progress_pct",
-    title: "Виконання плану",
+    title: "Виконання плану по слухачах",
     formatValue: (value: number) => `${value}%`,
     deltaSuffix: " п.п."
   }
@@ -97,16 +100,25 @@ function summarizeWorkload(rows: Workload[]): WorkloadTotals {
 }
 
 export function DashboardPage() {
-  const { request } = useAuth();
-  const { showError } = useToast();
+  const { request, user } = useAuth();
+  const { showError, showSuccess } = useToast();
   const [kpi, setKpi] = useState<KPI>(EMPTY_KPI);
   const [attention, setAttention] = useState<AttentionSummary>(EMPTY_ATTENTION);
   const [workload, setWorkload] = useState<Workload[]>([]);
   const [history, setHistory] = useState<KPI[]>([]);
+  const [planYear, setPlanYear] = useState(String(EMPTY_KPI.student_plan_year));
+  const [planTarget, setPlanTarget] = useState("");
+  const [isPlanSaving, setIsPlanSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const lastErrorMessageRef = useRef("");
+  const planFormDirtyRef = useRef(false);
+
+  const canEditPlan = useMemo(
+    () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
+    [user]
+  );
 
   const fetchKpi = async (isBackgroundRefresh = false) => {
     if (!isBackgroundRefresh) {
@@ -118,14 +130,25 @@ export function DashboardPage() {
         request<AttentionSummary>("/dashboard/attention"),
         request<Workload[]>("/teacher-workload")
       ]);
-      setKpi(data);
+      const nextKpi = {
+        ...EMPTY_KPI,
+        ...data,
+        student_plan_year: data.student_plan_year ?? EMPTY_KPI.student_plan_year,
+        student_plan_target: data.student_plan_target ?? 0,
+        student_plan_processed: data.student_plan_processed ?? data.active_trainees ?? 0
+      };
+      setKpi(nextKpi);
       setAttention(attentionData);
       setWorkload(workloadData);
       setHistory((prev) => {
-        const next = [...prev, data];
+        const next = [...prev, nextKpi];
         if (next.length <= HISTORY_LIMIT) return next;
         return next.slice(next.length - HISTORY_LIMIT);
       });
+      if (!planFormDirtyRef.current) {
+        setPlanYear(String(nextKpi.student_plan_year));
+        setPlanTarget(nextKpi.student_plan_target ? String(nextKpi.student_plan_target) : "");
+      }
       setLoadError(null);
       lastErrorMessageRef.current = "";
     } catch (error) {
@@ -146,6 +169,44 @@ export function DashboardPage() {
   }, []);
 
   usePageRefresh(() => fetchKpi(true), { intervalMs: 15_000 });
+
+  const saveStudentPlan = async (event: FormEvent) => {
+    event.preventDefault();
+    const year = Number(planYear);
+    const target = Number(planTarget);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      showError("Вкажіть коректний рік плану");
+      return;
+    }
+    if (!Number.isInteger(target) || target < 0) {
+      showError("Річна кількість слухачів має бути 0 або більше");
+      return;
+    }
+    setIsPlanSaving(true);
+    try {
+      const plan = await request<StudentPlan>("/dashboard/student-plan", {
+        method: "PUT",
+        body: JSON.stringify({ year, target_trainees: target })
+      });
+      const nextKpi = {
+        ...kpi,
+        training_plan_progress_pct: plan.progress_pct,
+        student_plan_year: plan.year,
+        student_plan_target: plan.target_trainees,
+        student_plan_processed: plan.processed_trainees
+      };
+      setKpi(nextKpi);
+      setHistory((prev) => [...prev.slice(-(HISTORY_LIMIT - 1)), nextKpi]);
+      setPlanYear(String(plan.year));
+      setPlanTarget(plan.target_trainees ? String(plan.target_trainees) : "");
+      planFormDirtyRef.current = false;
+      showSuccess("Річний план по слухачах збережено");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsPlanSaving(false);
+    }
+  };
 
   const chartData = [
     { name: "Групи", value: kpi.active_groups },
@@ -205,6 +266,52 @@ export function DashboardPage() {
               <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
                 <KpiSparkline values={series} label={`${card.title}: міні-графік зміни за останні оновлення`} />
               </div>
+              {card.key === "training_plan_progress_pct" && (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <p className="text-xs text-slate-600">
+                    Опрацьовано:{" "}
+                    <span className="font-semibold text-ink">{kpi.student_plan_processed}</span>
+                    {" "}з{" "}
+                    <span className="font-semibold text-ink">{kpi.student_plan_target || "—"}</span>
+                    {" "}слухачів за {kpi.student_plan_year} рік
+                  </p>
+                  {canEditPlan && (
+                    <form className="mt-2 grid gap-2 sm:grid-cols-[5.5rem_1fr_auto]" onSubmit={saveStudentPlan}>
+                      <input
+                        type="number"
+                        min={2000}
+                        max={2100}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs"
+                        aria-label="Рік плану по слухачах"
+                        value={planYear}
+                        onChange={(event) => {
+                          planFormDirtyRef.current = true;
+                          setPlanYear(event.target.value);
+                        }}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        className="rounded border border-slate-300 px-2 py-1 text-xs"
+                        aria-label="Річна планова кількість слухачів"
+                        placeholder="Річний план"
+                        value={planTarget}
+                        onChange={(event) => {
+                          planFormDirtyRef.current = true;
+                          setPlanTarget(event.target.value);
+                        }}
+                      />
+                      <button
+                        type="submit"
+                        className="rounded border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+                        disabled={isPlanSaving}
+                      >
+                        {isPlanSaving ? "..." : "Зберегти"}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
               <p className="mt-1 text-xs text-slate-500">Останні {Math.max(1, series.length)} оновлень</p>
             </Panel>
           );
