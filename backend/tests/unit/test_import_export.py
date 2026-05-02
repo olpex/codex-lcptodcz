@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app.models import Group, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
@@ -225,6 +225,28 @@ def test_import_uses_dodatok_sheet_group_context_and_populates_fields(tmp_path: 
     assert trainee.address_encrypted is not None
     assert trainee.passport_series_encrypted is not None
     assert trainee.phone_encrypted is not None
+
+
+def test_import_selects_first_sheet_when_it_contains_trainee_registry(tmp_path: Path, db_session):
+    file_path = tmp_path / "contracts_first_sheet.xlsx"
+    _create_contract_like_workbook(file_path)
+
+    workbook = Workbook()
+    first_sheet = workbook.active
+    first_sheet.title = "Перший аркуш"
+    for row in load_workbook(file_path).active.iter_rows(values_only=True):
+        first_sheet.append(list(row))
+    dodatok = workbook.create_sheet("Додаток")
+    dodatok.append(["Службовий аркуш без реєстру слухачів"])
+    workbook.save(file_path)
+
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+    assert parsed["sheet_name"] == "Перший аркуш"
+
+    result = try_import_trainees(db_session, parsed, "main")
+    assert result["inserted"] == 1
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "1499").first()
+    assert trainee is not None
 
 
 def test_import_updates_existing_missing_fields_instead_of_skipping(tmp_path: Path, db_session):

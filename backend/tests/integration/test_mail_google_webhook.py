@@ -31,6 +31,17 @@ def _contracts_xlsx_bytes() -> bytes:
     return stream.read()
 
 
+def _not_a_trainee_registry_xlsx_bytes() -> bytes:
+    stream = io.BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Службова таблиця без слухачів"])
+    sheet.append(["Немає ПІБ, договорів і даних реєстру"])
+    workbook.save(stream)
+    stream.seek(0)
+    return stream.read()
+
+
 def _schedule_docx_bytes(group_code: str = "167-25") -> bytes:
     stream = io.BytesIO()
     document = DocxDocument()
@@ -433,6 +444,27 @@ def test_gmail_api_webhook_imports_excel_inline_without_waiting_for_queue(client
     assert response.json()["result_payload"]["attachment_key"].endswith("180-25 Договори Штучний інтелект.xls")
     trainee = db_session.query(Trainee).filter(Trainee.contract_number == "73-26/001").first()
     assert trainee is not None
+
+
+def test_gmail_api_webhook_rejects_excel_when_no_trainees_were_imported(client, monkeypatch):
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+
+    response = client.post(
+        "/api/v1/mail/gmail-api-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        json={
+            "filename": "180-25 Договори Штучний інтелект.xls",
+            "messageId": "<gmail-api-xlsx-empty-import-test@example.com>",
+            "attachmentKey": "<gmail-api-xlsx-empty-import-test@example.com>:1:180-25 Договори Штучний інтелект.xls",
+            "fileBase64": base64.urlsafe_b64encode(_not_a_trainee_registry_xlsx_bytes()).decode("ascii"),
+            "subject": "Fwd:",
+        },
+    )
+
+    assert response.status_code == 500
+    assert "жодного слухача" in response.json()["detail"]
 
 
 def test_gmail_api_webhook_reprocesses_excel_with_same_message_id(client, db_session, monkeypatch):

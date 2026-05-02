@@ -47,7 +47,7 @@ const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-02 attachment-queue-v6");
+  Logger.log("Версія скрипта: 2026-05-02 attachment-queue-v7");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -255,7 +255,27 @@ function processOneAttachment_(target) {
   }
 
   Logger.log("✅ Успіх %s для '%s': job_id=%s, status=%s", code, target.fileName, body.id || "?", body.status || "?");
+  logImportResult_(body, target.fileName);
   return { ok: true };
+}
+
+function logImportResult_(body, fileName) {
+  const payload = body && body.result_payload ? body.result_payload : {};
+  const result = payload.import_result || {};
+  if (!result || Object.keys(result).length === 0) {
+    return;
+  }
+  Logger.log(
+    "📊 Результат імпорту '%s': inserted=%s, updated=%s, memberships=%s, skipped_existing=%s, skipped_invalid=%s, sheet=%s, note=%s",
+    fileName,
+    result.inserted || 0,
+    result.updated_existing || 0,
+    result.memberships_created || 0,
+    result.skipped_existing || 0,
+    result.skipped_invalid || 0,
+    result.sheet_name || "?",
+    result.note || ""
+  );
 }
 
 function getNextQueuedAttachmentTarget_() {

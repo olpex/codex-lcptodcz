@@ -68,6 +68,16 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:
             import_result = try_import_trainees(db, parsed, job.branch_id, update_existing_mode=import_mode)
+            touched_rows = (
+                int(import_result.get("inserted") or 0)
+                + int(import_result.get("updated_existing") or 0)
+                + int(import_result.get("memberships_created") or 0)
+                + int(import_result.get("skipped_existing") or 0)
+            )
+            if touched_rows <= 0:
+                note = str(import_result.get("note") or "").strip()
+                suffix = f" {note}" if note else ""
+                raise ValueError(f"Excel-файл оброблено, але не імпортовано жодного слухача.{suffix}")
         elif job.document.file_type.value == "docx":
             import_result = import_schedule_docx(
                 db,

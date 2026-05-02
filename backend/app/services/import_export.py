@@ -163,21 +163,11 @@ def _normalize_text_value(value: Any) -> str:
     return str(value).strip()
 
 
-def _pick_sheet_name(sheet_names: list[str]) -> str | None:
-    if not sheet_names:
-        return None
-    lowered = {name.lower(): name for name in sheet_names}
-    for preferred in PREFERRED_TRAINEE_SHEET_NAMES:
-        if preferred.lower() in lowered:
-            return lowered[preferred.lower()]
-    return sheet_names[0]
+def _header_cell_score(value: str) -> int:
+    return 1 if any(value == hint or hint in value for hint in TRAINEE_HEADER_HINTS) else 0
 
 
-def _row_is_empty(row: list[Any]) -> bool:
-    return all(_normalize_text_value(value) == "" for value in row)
-
-
-def _find_header_row_index(rows: list[list[Any]]) -> int:
+def _find_header_row_candidate(rows: list[list[Any]]) -> tuple[int, int]:
     best_index = 0
     best_score = -1
     for idx, row in enumerate(rows[:HEADER_SCAN_LIMIT]):
@@ -185,12 +175,43 @@ def _find_header_row_index(rows: list[list[Any]]) -> int:
         non_empty = [value for value in normalized if value]
         if not non_empty:
             continue
-        score = sum(1 for value in non_empty if value in TRAINEE_HEADER_HINTS)
+        score = sum(_header_cell_score(value) for value in non_empty)
         if score > best_score:
             best_score = score
             best_index = idx
             if score >= 2:
                 break
+    return best_index, best_score
+
+
+def _select_tabular_sheet(sheet_rows: list[tuple[str, list[list[Any]]]]) -> tuple[str | None, list[list[Any]]]:
+    if not sheet_rows:
+        return None, []
+
+    best_name, best_rows = sheet_rows[0]
+    best_score = -1
+    preferred_names = {name.lower() for name in PREFERRED_TRAINEE_SHEET_NAMES}
+
+    for sheet_name, rows in sheet_rows:
+        _header_idx, score = _find_header_row_candidate(rows)
+        if score > best_score:
+            best_name = sheet_name
+            best_rows = rows
+            best_score = score
+            continue
+        if score == best_score <= 0 and sheet_name.lower() in preferred_names:
+            best_name = sheet_name
+            best_rows = rows
+
+    return best_name, best_rows
+
+
+def _row_is_empty(row: list[Any]) -> bool:
+    return all(_normalize_text_value(value) == "" for value in row)
+
+
+def _find_header_row_index(rows: list[list[Any]]) -> int:
+    best_index, _best_score = _find_header_row_candidate(rows)
     return best_index
 
 
@@ -211,36 +232,36 @@ def _make_unique_headers(raw_headers: list[Any]) -> list[str]:
 def _rows_from_xlsx(file_path: str) -> tuple[str | None, list[list[Any]]]:
     with Path(file_path).open("rb") as fh:
         workbook = load_workbook(fh, data_only=True, read_only=True)
-        sheet_name = _pick_sheet_name(workbook.sheetnames)
-        if not sheet_name:
-            workbook.close()
-            return None, []
-        worksheet = workbook[sheet_name]
-        rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
+        sheet_rows: list[tuple[str, list[list[Any]]]] = []
+        for sheet_name in workbook.sheetnames:
+            worksheet = workbook[sheet_name]
+            rows = [list(row) for row in worksheet.iter_rows(values_only=True)]
+            sheet_rows.append((sheet_name, rows))
+        selected_name, rows = _select_tabular_sheet(sheet_rows)
         workbook.close()
-        return sheet_name, rows
+        return selected_name, rows
 
 
 def _rows_from_xls(file_path: str) -> tuple[str | None, list[list[Any]]]:
     workbook = xlrd.open_workbook(file_path)
-    sheet_name = _pick_sheet_name(workbook.sheet_names())
-    if not sheet_name:
-        return None, []
-    sheet = workbook.sheet_by_name(sheet_name)
-    rows: list[list[Any]] = []
-    for row_index in range(sheet.nrows):
-        row: list[Any] = []
-        for col_index in range(sheet.ncols):
-            cell = sheet.cell(row_index, col_index)
-            value: Any = cell.value
-            if cell.ctype == xlrd.XL_CELL_DATE:
-                try:
-                    value = xldate_as_datetime(cell.value, workbook.datemode)
-                except Exception:
-                    value = cell.value
-            row.append(value)
-        rows.append(row)
-    return sheet_name, rows
+    sheet_rows: list[tuple[str, list[list[Any]]]] = []
+    for sheet_name in workbook.sheet_names():
+        sheet = workbook.sheet_by_name(sheet_name)
+        rows: list[list[Any]] = []
+        for row_index in range(sheet.nrows):
+            row: list[Any] = []
+            for col_index in range(sheet.ncols):
+                cell = sheet.cell(row_index, col_index)
+                value: Any = cell.value
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    try:
+                        value = xldate_as_datetime(cell.value, workbook.datemode)
+                    except Exception:
+                        value = cell.value
+                row.append(value)
+            rows.append(row)
+        sheet_rows.append((sheet_name, rows))
+    return _select_tabular_sheet(sheet_rows)
 
 
 def _looks_like_xlsx(file_path: str) -> bool:
