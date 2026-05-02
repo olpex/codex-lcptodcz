@@ -249,11 +249,13 @@ export function GroupsPage() {
             {
               key: "actions" as const,
               header: "",
+              className: "whitespace-nowrap",
+              headerClassName: "w-[150px]",
               render: (group: Group) => (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-nowrap items-center gap-2">
                   <button
                     type="button"
-                    className="rounded-lg border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50"
+                    className="shrink-0 rounded-lg border border-pine px-3 py-1 text-xs font-semibold text-pine hover:bg-emerald-50"
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedDetailGroupId(group.id);
@@ -264,7 +266,7 @@ export function GroupsPage() {
                   <button
                     type="button"
                     id={`delete-group-${group.id}`}
-                    className="rounded-lg border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                    className="shrink-0 rounded-lg border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
                     onClick={(e) => {
                       e.stopPropagation();
                       openDeleteDialog(group);
