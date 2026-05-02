@@ -13,7 +13,6 @@ import type { AttentionSummary, KPI, Workload } from "../types/api";
 const EMPTY_KPI: KPI = {
   active_groups: 0,
   active_trainees: 0,
-  facility_load_pct: 0,
   training_plan_progress_pct: 0,
   forecast_graduation: 0,
   forecast_employment: 0
@@ -38,12 +37,6 @@ const KPI_CARDS = [
     title: "Активні слухачі",
     formatValue: (value: number) => String(value),
     deltaSuffix: ""
-  },
-  {
-    key: "facility_load_pct",
-    title: "Завантаженість бази",
-    formatValue: (value: number) => `${value}%`,
-    deltaSuffix: " п.п."
   },
   {
     key: "training_plan_progress_pct",
@@ -165,7 +158,6 @@ export function DashboardPage() {
     () => ({
       active_groups: history.map((item) => item.active_groups),
       active_trainees: history.map((item) => item.active_trainees),
-      facility_load_pct: history.map((item) => item.facility_load_pct),
       training_plan_progress_pct: history.map((item) => item.training_plan_progress_pct)
     }),
     [history]
@@ -185,7 +177,7 @@ export function DashboardPage() {
       {loadError && (
         <InlineNotice tone="error" text={loadError} actionLabel="Оновити KPI" onAction={() => fetchKpi()} />
       )}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {KPI_CARDS.map((card) => {
           const series = seriesByKey[card.key];
           const currentValue = series.length ? series[series.length - 1] : kpi[card.key];

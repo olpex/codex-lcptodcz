@@ -82,7 +82,6 @@ test("admin can run core MVP flow", async ({ page }) => {
         body: JSON.stringify({
           active_groups: state.groups.length,
           active_trainees: state.trainees.length,
-          facility_load_pct: 10,
           training_plan_progress_pct: 25,
           forecast_graduation: 2,
           forecast_employment: 1

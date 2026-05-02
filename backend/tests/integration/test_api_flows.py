@@ -124,6 +124,24 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     assert kpi_response.status_code == 200
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
+    assert "facility_load_pct" not in kpi_payload
+
+
+def test_schedule_generation_does_not_require_auditoriums(client, auth_headers, db_session):
+    db_session.query(Room).delete()
+    db_session.add(Teacher(branch_id="main", first_name="Без", last_name="Аудиторій", hourly_rate=0, is_active=True))
+    db_session.add(Group(branch_id="main", code="REMOTE-1", name="Дистанційна група", status=GroupStatus.ACTIVE))
+    db_session.add(Subject(branch_id="main", name="Дистанційний предмет", hours_total=12))
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/schedule/generate",
+        json={"start_date": date.today().isoformat(), "days": 1},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) >= 1
 
 
 def test_dashboard_attention_collects_actionable_items(client, auth_headers, db_session):

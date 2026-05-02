@@ -184,7 +184,6 @@ function detectOverlapsInIntervals(
 
 function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
   const teacherMap = new Map<string, ConflictInterval[]>();
-  const roomMap = new Map<string, ConflictInterval[]>();
 
   for (const slot of slots) {
     const start = new Date(slot.starts_at).getTime();
@@ -194,7 +193,6 @@ function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
     }
     const dateKey = slot.starts_at.slice(0, 10);
     const teacherKey = `${dateKey}:teacher:${slot.teacher_id}`;
-    const roomKey = `${dateKey}:room:${slot.room_id}`;
     const interval: ConflictInterval = { 
       slotId: slot.id, 
       start, 
@@ -205,16 +203,12 @@ function analyzeScheduleConflicts(slots: ScheduleSlot[]): ConflictAnalysis {
       groupId: slot.group_id
     };
     teacherMap.set(teacherKey, [...(teacherMap.get(teacherKey) || []), interval]);
-    roomMap.set(roomKey, [...(roomMap.get(roomKey) || []), interval]);
   }
 
   const conflictSlotIds = new Set<number>();
   const conflictSlotIdsByDate = new Map<string, Set<number>>();
   let overlapCount = 0;
   for (const intervals of teacherMap.values()) {
-    overlapCount += detectOverlapsInIntervals(intervals, conflictSlotIds, conflictSlotIdsByDate);
-  }
-  for (const intervals of roomMap.values()) {
     overlapCount += detectOverlapsInIntervals(intervals, conflictSlotIds, conflictSlotIdsByDate);
   }
 
@@ -279,14 +273,14 @@ const MonthCalendar = ({
     <div className="flex flex-col">
       {conflictGroups.size > 0 && (
         <div className="p-4 bg-red-50 border-b border-red-100">
-          <h4 className="text-red-800 font-semibold mb-2">⚠ Накладки (співпадіння часу, викладача чи аудиторії):</h4>
+          <h4 className="text-red-800 font-semibold mb-2">Накладки викладачів за часом:</h4>
           <ul className="text-sm text-red-700 space-y-2">
             {Array.from(conflictGroups.entries()).map(([key, cSlots]) => (
               <li key={key}>
                 <strong>{key}:</strong>
                 <ul className="list-disc pl-5 mt-1 text-red-600">
                   {cSlots.map(s => (
-                    <li key={s.id}>Група {s.group_code || s.group_id}, Викладач: {shortName(s.teacher_name)}, Ауд: {s.room_name || s.room_id || "—"}</li>
+                    <li key={s.id}>Група {s.group_code || s.group_id}, Викладач: {shortName(s.teacher_name)}</li>
                   ))}
                 </ul>
               </li>
@@ -735,7 +729,7 @@ export function SchedulePage() {
             { key: "totalHours", title: "Навчальні години", series: seriesByKey.totalHours, suffix: " год" },
             { key: "uniqueGroups", title: "Унікальні групи", series: seriesByKey.uniqueGroups, suffix: "" },
             { key: "uniqueTeachers", title: "Унікальні викладачі", series: seriesByKey.uniqueTeachers, suffix: "" },
-            { key: "conflicts", title: "Конфлікти (викл./ауд.)", series: seriesByKey.conflicts, suffix: "" }
+            { key: "conflicts", title: "Конфлікти викладачів", series: seriesByKey.conflicts, suffix: "" }
           ].map((item) => {
             const current = item.series.length ? item.series[item.series.length - 1] : 0;
             const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;

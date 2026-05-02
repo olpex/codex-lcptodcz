@@ -56,6 +56,14 @@ async function mockAuthorizedSchedule(page: Page, slots: MockScheduleSlot[]) {
       });
     }
 
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([])
+      });
+    }
+
     return route.fulfill({
       status: 404,
       contentType: "application/json",
@@ -122,14 +130,14 @@ test("schedule filter shows only conflicting lessons", async ({ page }) => {
   await expect(page.getByText("Виявлено конфлікти у розкладі")).toBeVisible();
 
   await page.getByRole("button", { name: "Розгорнути все" }).click();
-  await expect(page.getByText("B-202 (Без конфліктів)")).toBeVisible();
-  await expect(page.locator("table tbody tr")).toHaveCount(3);
+  await expect(page.getByText("B-202").first()).toBeVisible();
+  await expect(page.getByText("Петров П.")).toBeVisible();
 
   await page.getByLabel("Лише конфлікти").check();
-  await expect(page.getByText("A-101 (Конфліктна група)")).toHaveCount(2);
-  await expect(page.getByText("B-202 (Без конфліктів)")).toHaveCount(0);
-  await expect(page.locator("table tbody tr")).toHaveCount(2);
-  await expect(page.locator("span", { hasText: "Конфлікт" })).toHaveCount(2);
+  await expect(page.getByText("A-101").first()).toBeVisible();
+  await expect(page.getByText("B-202")).toHaveCount(0);
+  await expect(page.getByText("Петров П.")).toHaveCount(0);
+  await expect(page.getByText("Конфліктних: 2")).toBeVisible();
 });
 
 test("schedule filter shows empty state when conflicts are absent", async ({ page }) => {
@@ -175,4 +183,48 @@ test("schedule filter shows empty state when conflicts are absent", async ({ pag
   await page.getByLabel("Лише конфлікти").check();
   await expect(page.getByText("Конфліктних занять не знайдено.")).toBeVisible();
   await expect(page.locator("table")).toHaveCount(0);
+});
+
+test("same time in the same auditorium is not treated as a conflict", async ({ page }) => {
+  const slots: MockScheduleSlot[] = [
+    {
+      id: 21,
+      group_id: 5,
+      teacher_id: 11,
+      subject_id: 15,
+      room_id: 999,
+      starts_at: "2026-07-01T09:00:00Z",
+      ends_at: "2026-07-01T11:00:00Z",
+      pair_number: 1,
+      academic_hours: 2,
+      group_code: "ONLINE-1",
+      group_name: "Дистанційна перша",
+      teacher_name: "Шевченко С.С.",
+      subject_name: "Онлайн-курс",
+      room_name: "Zoom"
+    },
+    {
+      id: 22,
+      group_id: 6,
+      teacher_id: 12,
+      subject_id: 16,
+      room_id: 999,
+      starts_at: "2026-07-01T09:00:00Z",
+      ends_at: "2026-07-01T11:00:00Z",
+      pair_number: 1,
+      academic_hours: 2,
+      group_code: "ONLINE-2",
+      group_name: "Дистанційна друга",
+      teacher_name: "Франко І.Я.",
+      subject_name: "Онлайн-практикум",
+      room_name: "Zoom"
+    }
+  ];
+
+  await mockAuthorizedSchedule(page, slots);
+  await page.goto("/schedule");
+
+  await expect(page.getByText("Виявлено конфлікти у розкладі")).toHaveCount(0);
+  await expect(page.getByText("Конфлікти (викл./ауд.)")).toHaveCount(0);
+  await expect(page.getByText("Конфлікти викладачів")).toBeVisible();
 });

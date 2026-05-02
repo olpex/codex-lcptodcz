@@ -49,7 +49,6 @@ for (const scenario of CASES) {
           body: JSON.stringify({
             active_groups: 1,
             active_trainees: 10,
-            facility_load_pct: 20,
             training_plan_progress_pct: 30,
             forecast_graduation: 9,
             forecast_employment: 7

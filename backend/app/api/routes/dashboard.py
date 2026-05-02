@@ -17,7 +17,6 @@ from app.models import (
     MembershipStatus,
     OCRResult,
     Performance,
-    Room,
     ScheduleSlot,
     Trainee,
 )
@@ -41,16 +40,6 @@ def get_kpi(db: DbSession, current_user: CurrentUser) -> DashboardKPIResponse:
         .count()
     )
 
-    rooms_count = max(db.query(Room).filter(Room.branch_id == current_user.branch_id).count(), 1)
-    slots_count = (
-        db.query(ScheduleSlot)
-        .join(Group, Group.id == ScheduleSlot.group_id)
-        .filter(Group.branch_id == current_user.branch_id)
-        .count()
-    )
-    max_slots_month = rooms_count * 22 * 4
-    facility_load_pct = round(min((slots_count / max_slots_month) * 100, 100), 2)
-
     performance_rows = (
         db.query(Performance)
         .join(Group, Group.id == Performance.group_id)
@@ -73,7 +62,6 @@ def get_kpi(db: DbSession, current_user: CurrentUser) -> DashboardKPIResponse:
     return DashboardKPIResponse(
         active_groups=active_groups,
         active_trainees=active_trainees,
-        facility_load_pct=facility_load_pct,
         training_plan_progress_pct=training_plan_progress_pct,
         forecast_graduation=forecast_graduation,
         forecast_employment=forecast_employment,

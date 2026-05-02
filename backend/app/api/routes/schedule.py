@@ -10,6 +10,16 @@ from app.services.audit import write_audit
 router = APIRouter()
 
 
+def _get_or_create_schedule_placeholder_room(db: DbSession, branch_id: str) -> Room:
+    room = db.query(Room).filter(Room.branch_id == branch_id).order_by(Room.id.asc()).first()
+    if room:
+        return room
+    room = Room(branch_id=branch_id, name="Службова аудиторія", capacity=1)
+    db.add(room)
+    db.flush()
+    return room
+
+
 def _to_schedule_responses(db: DbSession, slots: list[ScheduleSlot]) -> list[ScheduleSlotResponse]:
     if not slots:
         return []
@@ -72,13 +82,13 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
         .order_by(Teacher.id.asc())
         .all()
     )
-    rooms = apply_branch_scope(db.query(Room), Room, current_user.branch_id).order_by(Room.id.asc()).all()
     subjects = apply_branch_scope(db.query(Subject), Subject, current_user.branch_id).order_by(Subject.id.asc()).all()
-    if not groups or not teachers or not rooms or not subjects:
+    if not groups or not teachers or not subjects:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Недостатньо даних для генерації (групи/викладачі/аудиторії/предмети)",
+            detail="Недостатньо даних для генерації (групи/викладачі/предмети)",
         )
+    placeholder_room = _get_or_create_schedule_placeholder_room(db, current_user.branch_id)
 
     window_start = datetime.combine(payload.start_date, time.min, tzinfo=timezone.utc)
     window_end = datetime.combine(payload.start_date + timedelta(days=payload.days), time.max, tzinfo=timezone.utc)
@@ -94,7 +104,6 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
     )
 
     teacher_busy = {(slot.teacher_id, slot.starts_at) for slot in existing_slots}
-    room_busy = {(slot.room_id, slot.starts_at) for slot in existing_slots}
     teacher_hours: dict[int, float] = {teacher.id: 0.0 for teacher in teachers}
     for slot in existing_slots:
         teacher_hours[slot.teacher_id] = teacher_hours.get(slot.teacher_id, 0.0) + max(
@@ -115,16 +124,15 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
 
                 ordered_teachers = sorted(teachers, key=lambda teacher: (teacher_hours.get(teacher.id, 0.0), teacher.id))
                 teacher = next((candidate for candidate in ordered_teachers if (candidate.id, slot_start) not in teacher_busy), None)
-                room = next((candidate for candidate in rooms if (candidate.id, slot_start) not in room_busy), None)
 
-                if not teacher or not room:
+                if not teacher:
                     continue
 
                 slot = ScheduleSlot(
                     group_id=group.id,
                     teacher_id=teacher.id,
                     subject_id=subject.id,
-                    room_id=room.id,
+                    room_id=placeholder_room.id,
                     starts_at=slot_start,
                     ends_at=slot_end,
                     pair_number=pair_number,
@@ -134,7 +142,6 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
                 db.add(slot)
                 created.append(slot)
                 teacher_busy.add((teacher.id, slot_start))
-                room_busy.add((room.id, slot_start))
                 teacher_hours[teacher.id] = teacher_hours.get(teacher.id, 0.0) + 2.0
                 assigned = True
                 break

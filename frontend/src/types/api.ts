@@ -133,7 +133,6 @@ export interface TeacherMergeResult {
 export interface KPI {
   active_groups: number;
   active_trainees: number;
-  facility_load_pct: number;
   training_plan_progress_pct: number;
   forecast_graduation: number;
   forecast_employment: number;

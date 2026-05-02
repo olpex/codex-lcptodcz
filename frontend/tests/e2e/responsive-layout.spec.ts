@@ -38,7 +38,6 @@ async function mockAuthorizedDashboard(page: Page) {
         body: JSON.stringify({
           active_groups: 2,
           active_trainees: 30,
-          facility_load_pct: 40,
           training_plan_progress_pct: 52,
           forecast_graduation: 27,
           forecast_employment: 20
@@ -61,7 +60,8 @@ test.describe("responsive dashboard", () => {
     await page.goto("/");
     await expect(page.getByText("СУПТЦ")).toBeVisible();
     await expect(page.getByText("Активні групи")).toBeVisible();
-    await expect(page.getByText("Навантаження")).toBeVisible();
+    await expect(page.getByText("Завантаженість бази")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Навантаження" })).toBeVisible();
   });
 
   test("tablet viewport", async ({ page }) => {
@@ -70,6 +70,6 @@ test.describe("responsive dashboard", () => {
     await page.goto("/");
     await expect(page.getByText("СУПТЦ")).toBeVisible();
     await expect(page.getByText("Активні слухачі")).toBeVisible();
-    await expect(page.getByText("Розклад")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Розклад" })).toBeVisible();
   });
 });

@@ -8,7 +8,7 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
-from app.models import Role, RoleName, Room, Subject, User
+from app.models import Role, RoleName, Subject, User
 from app.services.storage import storage_path
 
 
@@ -84,13 +84,6 @@ def seed_reference_data(db: Session) -> None:
             [
                 Subject(name="Охорона праці", hours_total=40),
                 Subject(name="Професійні компетентності", hours_total=120),
-            ]
-        )
-    if not db.query(Room).first():
-        db.add_all(
-            [
-                Room(name="Аудиторія 101", capacity=30),
-                Room(name="Лабораторія 1", capacity=20),
             ]
         )
     db.commit()

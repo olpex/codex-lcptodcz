@@ -73,7 +73,6 @@ test("job center shows jobs and allows refresh", async ({ page }) => {
         body: JSON.stringify({
           active_groups: 1,
           active_trainees: 10,
-          facility_load_pct: 30,
           training_plan_progress_pct: 40,
           forecast_graduation: 5,
           forecast_employment: 4

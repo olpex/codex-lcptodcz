@@ -155,9 +155,9 @@ export function SearchPage() {
       id: `schedule-${slot.id}`,
       section: "Розклад",
       title: `${slot.group_code || "Група"} — ${slot.subject_name || "Заняття"}`,
-      description: `${formatDateTime(slot.starts_at)}. Викладач: ${slot.teacher_name || "—"}. Аудиторія: ${slot.room_name || "—"}`,
+      description: `${formatDateTime(slot.starts_at)}. Викладач: ${slot.teacher_name || "—"}`,
       href: "/schedule",
-      tokens: `${slot.group_code || ""} ${slot.group_name || ""} ${slot.subject_name || ""} ${slot.teacher_name || ""} ${slot.room_name || ""} ${slot.starts_at}`
+      tokens: `${slot.group_code || ""} ${slot.group_name || ""} ${slot.subject_name || ""} ${slot.teacher_name || ""} ${slot.starts_at}`
     }));
 
     const workloadResults = workload.map((row) => ({

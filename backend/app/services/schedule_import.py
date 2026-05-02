@@ -902,10 +902,6 @@ def import_schedule_docx(
                     conflict_messages.append(
                         f"група {group.code} {conflict_date} пара {candidate['pair_number']}"
                     )
-                if existing.room_id == candidate["room_id"]:
-                    conflict_messages.append(
-                        f"аудиторія {room.name} {conflict_date} пара {candidate['pair_number']}"
-                    )
             for previous in candidates[:index]:
                 if not _overlaps(candidate["starts_at"], candidate["ends_at"], previous["starts_at"], previous["ends_at"]):
                     continue
