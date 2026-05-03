@@ -120,6 +120,67 @@ def test_journal_monitor_exports_csv(client, auth_headers, db_session, monkeypat
     assert "180-25" in export_response.text
 
 
+def test_journal_monitor_export_respects_filters(client, auth_headers, db_session, monkeypatch):
+    complete_group = Group(branch_id="main", code="180-25", name="Штучний інтелект", status=GroupStatus.ACTIVE)
+    schedule_group = Group(branch_id="main", code="167-25", name="Трудові відносини", status=GroupStatus.ACTIVE)
+    db_session.add_all([complete_group, schedule_group])
+    db_session.flush()
+    _seed_schedule(db_session, complete_group, "180-filter")
+    _seed_schedule(db_session, schedule_group, "167-filter")
+    db_session.add(Trainee(branch_id="main", first_name="Іван", last_name="Повний", status="active", group_code="180-25"))
+    db_session.add(Trainee(branch_id="main", first_name="Олена", last_name="Слухачі", status="active", group_code="162-25"))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-180",
+                "name": "180-25 Штучний інтелект",
+                "url": "https://drive.google.com/drive/folders/drive-180",
+                "modified_time": None,
+            },
+            {
+                "id": "drive-167",
+                "name": "167-25 Організація трудових відносин",
+                "url": "https://drive.google.com/drive/folders/drive-167",
+                "modified_time": None,
+            },
+            {
+                "id": "drive-162",
+                "name": "162-25 Штучний інтелект",
+                "url": "https://drive.google.com/drive/folders/drive-162",
+                "modified_time": None,
+            },
+            {
+                "id": "drive-999",
+                "name": "999-25 Не опрацьовано",
+                "url": "https://drive.google.com/drive/folders/drive-999",
+                "modified_time": None,
+            },
+        ],
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    export_response = client.get(
+        f"/api/v1/journal-monitors/{section_id}/export?format=csv&status=schedule_only&has_schedule=true&has_trainees=false&q=відносин",
+        headers=auth_headers,
+    )
+
+    assert export_response.status_code == 200
+    assert "167-25" in export_response.text
+    assert "180-25" not in export_response.text
+    assert "162-25" not in export_response.text
+    assert "999-25" not in export_response.text
+
+
 def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "")
     monkeypatch.setattr(

@@ -163,6 +163,9 @@ export function JournalMonitorsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [journalSearch, setJournalSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [scheduleFilter, setScheduleFilter] = useState("");
+  const [traineesFilter, setTraineesFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -182,12 +185,21 @@ export function JournalMonitorsPage() {
           return groupCode.includes(query) || journalName.includes(query);
         })
       : rows;
-    if (!sortKey) return filtered;
-    return [...filtered].sort((left, right) => {
+    const statusFiltered = statusFilter
+      ? filtered.filter((row) => row.processing_status === statusFilter)
+      : filtered;
+    const scheduleFiltered = scheduleFilter
+      ? statusFiltered.filter((row) => row.has_schedule === (scheduleFilter === "true"))
+      : statusFiltered;
+    const traineesFiltered = traineesFilter
+      ? scheduleFiltered.filter((row) => row.has_trainees === (traineesFilter === "true"))
+      : scheduleFiltered;
+    if (!sortKey) return traineesFiltered;
+    return [...traineesFiltered].sort((left, right) => {
       const result = compareJournalRows(left, right, sortKey);
       return sortDirection === "asc" ? result : -result;
     });
-  }, [journalSearch, rows, sortDirection, sortKey]);
+  }, [journalSearch, rows, scheduleFilter, sortDirection, sortKey, statusFilter, traineesFilter]);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -291,7 +303,12 @@ export function JournalMonitorsPage() {
   const exportSection = async (format: (typeof EXPORT_FORMATS)[number]) => {
     if (!selectedId || !accessToken) return;
     try {
-      const response = await fetch(`${API_URL}/journal-monitors/${selectedId}/export?format=${format}`, {
+      const params = new URLSearchParams({ format });
+      if (journalSearch.trim()) params.set("q", journalSearch.trim());
+      if (statusFilter) params.set("status", statusFilter);
+      if (scheduleFilter) params.set("has_schedule", scheduleFilter);
+      if (traineesFilter) params.set("has_trainees", traineesFilter);
+      const response = await fetch(`${API_URL}/journal-monitors/${selectedId}/export?${params.toString()}`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       if (!response.ok) {
@@ -512,15 +529,59 @@ export function JournalMonitorsPage() {
           {entriesExpanded && (
             <div id="journal-monitor-entries" className="border-t border-slate-200">
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Пошук журналів
-                  <input
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
-                    value={journalSearch}
-                    onChange={(event) => setJournalSearch(event.target.value)}
-                    placeholder="Пошук за номером або назвою журналу"
-                  />
-                </label>
+                <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Пошук журналів
+                    <input
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
+                      value={journalSearch}
+                      onChange={(event) => setJournalSearch(event.target.value)}
+                      placeholder="Пошук за номером або назвою журналу"
+                    />
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Статус
+                    <select
+                      aria-label="Фільтр за статусом журналів"
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
+                      value={statusFilter}
+                      onChange={(event) => setStatusFilter(event.target.value)}
+                    >
+                      <option value="">Усі статуси</option>
+                      <option value="complete">Розклад і слухачі</option>
+                      <option value="schedule_only">Тільки розклад</option>
+                      <option value="trainees_only">Тільки слухачі</option>
+                      <option value="not_processed">Не опрацьовано</option>
+                      <option value="unknown_code">Без номера групи</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Розклад
+                    <select
+                      aria-label="Фільтр за розкладом журналів"
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
+                      value={scheduleFilter}
+                      onChange={(event) => setScheduleFilter(event.target.value)}
+                    >
+                      <option value="">Усі</option>
+                      <option value="true">Є розклад</option>
+                      <option value="false">Немає розкладу</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Слухачі
+                    <select
+                      aria-label="Фільтр за слухачами журналів"
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
+                      value={traineesFilter}
+                      onChange={(event) => setTraineesFilter(event.target.value)}
+                    >
+                      <option value="">Усі</option>
+                      <option value="true">Є слухачі</option>
+                      <option value="false">Немає слухачів</option>
+                    </select>
+                  </label>
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="min-w-[58rem] w-full text-left text-sm xl:min-w-full">

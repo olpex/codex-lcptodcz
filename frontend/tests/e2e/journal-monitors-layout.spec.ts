@@ -95,7 +95,10 @@ const archiveSection = {
   entries: []
 };
 
-async function loginAndMockJournals(page: Page, options: { sections?: unknown[] } = {}) {
+async function loginAndMockJournals(
+  page: Page,
+  options: { sections?: unknown[]; onExport?: (url: URL) => void } = {}
+) {
   await page.addInitScript(() => {
     localStorage.setItem(
       "suptc_auth",
@@ -133,6 +136,16 @@ async function loginAndMockJournals(page: Page, options: { sections?: unknown[] 
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(sections)
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/1/export") && method === "GET") {
+      options.onExport?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "text/csv",
+        headers: { "content-disposition": "attachment; filename=journal-monitor.csv" },
+        body: "Номер групи\n2-26\n"
       });
     }
 
@@ -175,7 +188,7 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByRole("heading", { name: "Тільки слухачі" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Не опрацьовано" })).toBeVisible();
   await page.getByRole("button", { name: /Список журналів/ }).click();
-  await expect(page.locator("#journal-monitor-entries").getByText("Не опрацьовано", { exact: true })).toBeVisible();
+  await expect(page.getByRole("table").getByText("Не опрацьовано", { exact: true })).toBeVisible();
 });
 
 test("journal monitor section can be deleted from the project", async ({ page }) => {
@@ -238,4 +251,27 @@ test("journal monitor entries can be searched and sorted", async ({ page }) => {
 
   await page.getByPlaceholder("Пошук за номером або назвою журналу").fill("100");
   await expect.poll(visibleGroupCodes).toEqual(["100-26"]);
+});
+
+test("journal monitor export uses current filters", async ({ page }) => {
+  let exportUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    onExport: (url) => {
+      exportUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+  await page.getByPlaceholder("Пошук за номером або назвою журналу").fill("бета");
+  await page.getByLabel("Фільтр за статусом журналів").selectOption("trainees_only");
+  await page.getByLabel("Фільтр за розкладом журналів").selectOption("false");
+  await page.getByLabel("Фільтр за слухачами журналів").selectOption("true");
+  await page.getByRole("button", { name: "csv" }).click();
+
+  await expect.poll(() => exportUrl?.searchParams.get("format")).toBe("csv");
+  expect(exportUrl?.searchParams.get("q")).toBe("бета");
+  expect(exportUrl?.searchParams.get("status")).toBe("trainees_only");
+  expect(exportUrl?.searchParams.get("has_schedule")).toBe("false");
+  expect(exportUrl?.searchParams.get("has_trainees")).toBe("true");
 });

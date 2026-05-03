@@ -354,8 +354,12 @@ def sync_journal_monitor_section(
     return section
 
 
-def collect_export_rows(section: JournalMonitorSection) -> list[dict[str, Any]]:
-    entries = sorted(section.entries, key=lambda item: ((item.group_code or "~~~~").casefold(), item.journal_name.casefold()))
+def collect_export_rows(
+    section: JournalMonitorSection,
+    entries: list[JournalMonitorEntry] | None = None,
+) -> list[dict[str, Any]]:
+    source_entries = list(section.entries) if entries is None else entries
+    sorted_entries = sorted(source_entries, key=lambda item: ((item.group_code or "~~~~").casefold(), item.journal_name.casefold()))
     return [
         {
             "Розділ": section.name,
@@ -370,7 +374,7 @@ def collect_export_rows(section: JournalMonitorSection) -> list[dict[str, Any]]:
             "Посилання Drive": entry.drive_url or "",
             "Остання синхронізація": section.last_synced_at.isoformat() if section.last_synced_at else "",
         }
-        for entry in entries
+        for entry in sorted_entries
     ]
 
 
@@ -384,11 +388,52 @@ def format_processing_status(value: str) -> str:
     }.get(value, value)
 
 
-def save_journal_monitor_export(section: JournalMonitorSection, export_format: str) -> tuple[str, str, str]:
+def filter_journal_monitor_entries(
+    entries: list[JournalMonitorEntry],
+    *,
+    query: str | None = None,
+    status: str | None = None,
+    has_schedule: bool | None = None,
+    has_trainees: bool | None = None,
+) -> list[JournalMonitorEntry]:
+    normalized_query = (query or "").strip().casefold()
+    filtered = entries
+    if normalized_query:
+        filtered = [
+            entry
+            for entry in filtered
+            if normalized_query in (entry.group_code or "").casefold()
+            or normalized_query in (entry.journal_name or "").casefold()
+        ]
+    if status:
+        filtered = [entry for entry in filtered if entry.processing_status == status]
+    if has_schedule is not None:
+        filtered = [entry for entry in filtered if entry.has_schedule is has_schedule]
+    if has_trainees is not None:
+        filtered = [entry for entry in filtered if entry.has_trainees is has_trainees]
+    return filtered
+
+
+def save_journal_monitor_export(
+    section: JournalMonitorSection,
+    export_format: str,
+    *,
+    query: str | None = None,
+    status: str | None = None,
+    has_schedule: bool | None = None,
+    has_trainees: bool | None = None,
+) -> tuple[str, str, str]:
     if export_format not in EXPORT_FORMATS:
         raise ValueError("Підтримуються формати xlsx, pdf, docx, csv")
 
-    rows = collect_export_rows(section)
+    source_entries = filter_journal_monitor_entries(
+        list(section.entries),
+        query=query,
+        status=status,
+        has_schedule=has_schedule,
+        has_trainees=has_trainees,
+    )
+    rows = collect_export_rows(section, source_entries)
     safe_name = re.sub(r"[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ_-]+", "_", section.name).strip("_") or "journals"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 

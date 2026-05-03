@@ -165,9 +165,24 @@ def export_section(
     db: DbSession,
     current_user: CurrentUser,
     format: str = Query(default="xlsx", pattern="^(xlsx|pdf|docx|csv)$"),
+    q: str | None = Query(default=None),
+    processing_status: str | None = Query(
+        default=None,
+        alias="status",
+        pattern="^(complete|schedule_only|trainees_only|not_processed|unknown_code)$",
+    ),
+    has_schedule: bool | None = Query(default=None),
+    has_trainees: bool | None = Query(default=None),
 ) -> FileResponse:
     section = _get_section_or_404(db, current_user, section_id)
     if format not in EXPORT_FORMATS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються формати xlsx, pdf, docx, csv")
-    path, filename, media_type = save_journal_monitor_export(section, format)
+    path, filename, media_type = save_journal_monitor_export(
+        section,
+        format,
+        query=q,
+        status=processing_status,
+        has_schedule=has_schedule,
+        has_trainees=has_trainees,
+    )
     return FileResponse(path=path, filename=filename, media_type=media_type)
