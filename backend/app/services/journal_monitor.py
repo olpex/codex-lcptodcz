@@ -85,8 +85,8 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
-def _decode_service_account_json() -> dict[str, Any]:
-    raw_value = settings.google_drive_service_account_json.strip()
+def _decode_service_account_json(raw_json: str | None = None) -> dict[str, Any]:
+    raw_value = (raw_json if raw_json is not None else settings.google_drive_service_account_json).strip()
     if not raw_value:
         raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
 
@@ -107,13 +107,18 @@ def _decode_service_account_json() -> dict[str, Any]:
     return payload
 
 
-def _get_service_account_access_token() -> str:
+def _get_service_account_access_token(raw_json: str | None = None) -> str:
     now = time.time()
+    cache_key = raw_json or "__settings__"
     cached_token = _service_account_token_cache.get("access_token")
-    if cached_token and float(_service_account_token_cache.get("expires_at") or 0) > now + 60:
+    if (
+        cached_token
+        and _service_account_token_cache.get("cache_key") == cache_key
+        and float(_service_account_token_cache.get("expires_at") or 0) > now + 60
+    ):
         return str(cached_token)
 
-    account = _decode_service_account_json()
+    account = _decode_service_account_json(raw_json)
     token_uri = account.get("token_uri") or GOOGLE_TOKEN_URI
     issued_at = int(now)
     claims = {
@@ -142,12 +147,14 @@ def _get_service_account_access_token() -> str:
     if not access_token:
         raise RuntimeError("Google OAuth не повернув access_token для service account")
     _service_account_token_cache["access_token"] = access_token
+    _service_account_token_cache["cache_key"] = cache_key
     _service_account_token_cache["expires_at"] = now + int(payload.get("expires_in") or 3600)
     return str(access_token)
 
 
-def list_drive_child_folders(folder_id: str) -> list[dict[str, Any]]:
-    use_service_account = bool(settings.google_drive_service_account_json.strip())
+def list_drive_child_folders(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
+    effective_service_account_json = service_account_json or settings.google_drive_service_account_json
+    use_service_account = bool(effective_service_account_json.strip())
     if not use_service_account and not settings.google_drive_api_key:
         raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
 
@@ -155,7 +162,7 @@ def list_drive_child_folders(folder_id: str) -> list[dict[str, Any]]:
     fields = "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)"
     page_token = ""
     folders: list[dict[str, Any]] = []
-    access_token = _get_service_account_access_token() if use_service_account else None
+    access_token = _get_service_account_access_token(effective_service_account_json) if use_service_account else None
     while True:
         url = (
             "https://www.googleapis.com/drive/v3/files"
@@ -209,6 +216,7 @@ def section_to_response_payload(section: JournalMonitorSection, include_entries:
         "folder_url": section.folder_url,
         "folder_id": section.folder_id,
         "is_active": section.is_active,
+        "has_service_account_credentials": bool(section.service_account_json_encrypted),
         "last_synced_at": section.last_synced_at,
         "last_sync_status": section.last_sync_status,
         "last_sync_message": section.last_sync_message,
@@ -289,7 +297,10 @@ def sync_journal_monitor_section(
     folder_lister=list_drive_child_folders,
 ) -> JournalMonitorSection:
     now = datetime.now(timezone.utc)
-    folders = folder_lister(section.folder_id)
+    from app.core.crypto import cipher
+
+    section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
+    folders = folder_lister(section.folder_id, service_account_json=section_service_account_json)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     seen_drive_ids: set[str] = set()
 

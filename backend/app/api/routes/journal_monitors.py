@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
+from app.core.crypto import cipher
 from app.models import JournalMonitorSection, RoleName
 from app.schemas.api import (
     JournalMonitorDetailResponse,
@@ -62,6 +63,7 @@ def create_section(
         name=payload.name.strip(),
         folder_url=payload.folder_url.strip(),
         folder_id=folder_id,
+        service_account_json_encrypted=cipher.encrypt(payload.service_account_json.strip()) if payload.service_account_json else None,
     )
     db.add(section)
     try:
@@ -109,6 +111,10 @@ def update_section(
         section.folder_url = payload.folder_url.strip()
         section.last_sync_status = "never"
         section.last_sync_message = None
+    if payload.clear_service_account_json:
+        section.service_account_json_encrypted = None
+    if payload.service_account_json is not None:
+        section.service_account_json_encrypted = cipher.encrypt(payload.service_account_json.strip())
     if payload.is_active is not None:
         section.is_active = payload.is_active
     try:

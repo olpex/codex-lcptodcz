@@ -35,7 +35,7 @@ def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, a
     db_session.add(Trainee(branch_id="main", first_name="Олена", last_name="ТількиСлухачі", status="active", group_code="162-25"))
     db_session.commit()
 
-    def fake_drive_folders(_folder_id: str):
+    def fake_drive_folders(_folder_id: str, service_account_json: str | None = None):
         return [
             {
                 "id": "drive-180",
@@ -95,7 +95,7 @@ def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, a
 def test_journal_monitor_exports_csv(client, auth_headers, db_session, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
-        lambda _folder_id: [
+        lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-180",
                 "name": "180-25 Журнал",
@@ -127,7 +127,7 @@ def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
         "google_drive_service_account_json",
         '{"client_email":"drive-reader@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nKEY\\n-----END PRIVATE KEY-----\\n","token_uri":"https://oauth2.googleapis.com/token"}',
     )
-    monkeypatch.setattr(journal_monitor, "_get_service_account_access_token", lambda: "service-token")
+    monkeypatch.setattr(journal_monitor, "_get_service_account_access_token", lambda _raw_json=None: "service-token")
 
     captured: dict[str, object] = {}
 
@@ -179,3 +179,41 @@ def test_journal_monitor_sync_without_credentials_explains_service_account_setup
     detail = sync_response.json()["detail"]
     assert "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON" in detail
     assert "suptc-drive-journal-monitor" in detail
+
+
+def test_journal_monitor_can_store_section_service_account_json(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "")
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_service_account_json", "")
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали з ключем", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+    section_id = create_response.json()["id"]
+
+    patch_response = client.patch(
+        f"/api/v1/journal-monitors/{section_id}",
+        json={
+            "service_account_json": '{"client_email":"drive-reader@example.iam.gserviceaccount.com","private_key":"key"}'
+        },
+        headers=auth_headers,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["has_service_account_credentials"] is True
+    assert "service_account_json" not in patch_response.json()
+
+    captured: dict[str, object] = {}
+
+    def fake_lister(folder_id: str, service_account_json: str | None = None):
+        captured["folder_id"] = folder_id
+        captured["service_account_json"] = service_account_json
+        return []
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", fake_lister)
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert sync_response.status_code == 200
+    assert captured["folder_id"] == "root-folder"
+    assert "drive-reader@example.iam.gserviceaccount.com" in str(captured["service_account_json"])

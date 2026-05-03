@@ -312,6 +312,7 @@ class JournalMonitorSection(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     folder_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     folder_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    service_account_json_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_status: Mapped[str] = mapped_column(String(50), default="never", nullable=False)

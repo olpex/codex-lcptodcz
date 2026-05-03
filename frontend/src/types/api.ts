@@ -195,6 +195,7 @@ export interface JournalMonitorSection {
   folder_url: string;
   folder_id: string;
   is_active: boolean;
+  has_service_account_credentials: boolean;
   last_synced_at: string | null;
   last_sync_status: string;
   last_sync_message: string | null;

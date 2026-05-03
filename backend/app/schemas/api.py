@@ -404,11 +404,14 @@ class StudentPlanResponse(BaseModel):
 class JournalMonitorSectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     folder_url: str = Field(min_length=1, max_length=1000)
+    service_account_json: str | None = Field(default=None, min_length=1)
 
 
 class JournalMonitorSectionUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     folder_url: str | None = Field(default=None, min_length=1, max_length=1000)
+    service_account_json: str | None = Field(default=None, min_length=1)
+    clear_service_account_json: bool = False
     is_active: bool | None = None
 
 
@@ -444,6 +447,7 @@ class JournalMonitorSectionResponse(BaseModel):
     folder_url: str
     folder_id: str
     is_active: bool
+    has_service_account_credentials: bool = False
     last_synced_at: datetime | None = None
     last_sync_status: str
     last_sync_message: str | None = None
