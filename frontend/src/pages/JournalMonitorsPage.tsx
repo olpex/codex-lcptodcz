@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { API_URL } from "../api/client";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
 import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
@@ -26,6 +27,37 @@ const STATUS_CLASSES: Record<string, string> = {
   unknown_code: "bg-slate-100 text-slate-700"
 };
 
+const PROGRESS_CARDS = [
+  {
+    key: "complete",
+    title: "Розклад і слухачі",
+    caption: "Є обидві частини",
+    barClass: "bg-emerald-600",
+    valueClass: "text-emerald-700"
+  },
+  {
+    key: "schedule_only",
+    title: "Тільки розклад",
+    caption: "Списку слухачів ще немає",
+    barClass: "bg-sky-600",
+    valueClass: "text-sky-700"
+  },
+  {
+    key: "trainees_only",
+    title: "Тільки слухачі",
+    caption: "Розкладу ще немає",
+    barClass: "bg-amber-500",
+    valueClass: "text-amber-700"
+  },
+  {
+    key: "not_processed",
+    title: "Не опрацьовано",
+    caption: "Немає розкладу і слухачів",
+    barClass: "bg-rose-600",
+    valueClass: "text-rose-700"
+  }
+] as const;
+
 function formatDateTime(value: string | null): string {
   if (!value) return "Ще не оновлювався";
   return new Date(value).toLocaleString("uk-UA", {
@@ -39,6 +71,11 @@ function formatDateTime(value: string | null): string {
 
 function formatStatus(value: string): string {
   return STATUS_LABELS[value] || value;
+}
+
+function formatPercent(count = 0, total = 0): string {
+  if (total <= 0) return "0%";
+  return `${Math.round((count / total) * 100)}%`;
 }
 
 function getFileName(response: Response, fallback: string): string {
@@ -60,6 +97,8 @@ export function JournalMonitorsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -68,6 +107,7 @@ export function JournalMonitorsPage() {
     [sections, selectedId]
   );
   const rows = detail?.entries || [];
+  const totalFolders = detail?.stats.total ?? 0;
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -193,6 +233,30 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const deleteSelectedSection = async () => {
+    if (!selectedId) return;
+    setIsDeleting(true);
+    try {
+      const deletedName = detail?.name || selectedSection?.name || "розділ";
+      await request<void>(`/journal-monitors/${selectedId}`, { method: "DELETE" });
+      const remaining = sections.filter((section) => section.id !== selectedId);
+      setSections(remaining);
+      const nextSelectedId = remaining[0]?.id ?? null;
+      setSelectedId(nextSelectedId);
+      if (nextSelectedId) {
+        await loadDetail(nextSelectedId);
+      } else {
+        setDetail(null);
+      }
+      setDeleteDialogOpen(false);
+      showSuccess(`Розділ «${deletedName}» видалено`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const renderBoolean = (value: boolean) => (
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
@@ -261,6 +325,31 @@ export function JournalMonitorsPage() {
           )}
         </div>
 
+        <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {PROGRESS_CARDS.map((card) => {
+            const value = detail?.stats[card.key] ?? 0;
+            const percent = formatPercent(value, totalFolders);
+            return (
+              <div key={card.key} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-ink">{card.title}</h3>
+                    <p className="mt-1 text-xs text-slate-500">{card.caption}</p>
+                  </div>
+                  <p className={clsx("font-heading text-2xl font-bold", card.valueClass)}>{percent}</p>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+                  <div className={clsx("h-full rounded-full", card.barClass)} style={{ width: percent }} />
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  {value} з {totalFolders} папок
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-3 lg:grid-cols-5">
             <span>Усього: <b className="text-ink">{detail?.stats.total ?? 0}</b></span>
@@ -289,6 +378,14 @@ export function JournalMonitorsPage() {
                 {format === "xlsx" ? "xls" : format}
               </button>
             ))}
+            <button
+              type="button"
+              className="rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+              onClick={() => setDeleteDialogOpen(true)}
+              disabled={!selectedId || isDeleting}
+            >
+              Видалити розділ
+            </button>
           </div>
         </div>
 
@@ -373,6 +470,16 @@ export function JournalMonitorsPage() {
           )}
         </div>
       </section>
+
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        title="Видалити розділ журналів"
+        description={`Видалити «${detail?.name || selectedSection?.name || "цей розділ"}» з проєкту? Записи моніторингу цього розділу буде прибрано з бази, але папки на Google Drive не зміняться.`}
+        confirmLabel={isDeleting ? "Видаляємо..." : "Видалити"}
+        confirmDisabled={isDeleting}
+        onConfirm={deleteSelectedSection}
+        onCancel={() => setDeleteDialogOpen(false)}
+      />
     </div>
   );
 }
