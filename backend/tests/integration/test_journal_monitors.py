@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.models import Group, GroupStatus, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.services import journal_monitor
 
 
 def _seed_schedule(db_session, group: Group, suffix: str) -> None:
@@ -117,3 +118,42 @@ def test_journal_monitor_exports_csv(client, auth_headers, db_session, monkeypat
     assert export_response.headers["content-type"].startswith("text/csv")
     assert "Номер групи" in export_response.text
     assert "180-25" in export_response.text
+
+
+def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "")
+    monkeypatch.setattr(
+        journal_monitor.settings,
+        "google_drive_service_account_json",
+        '{"client_email":"drive-reader@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nKEY\\n-----END PRIVATE KEY-----\\n","token_uri":"https://oauth2.googleapis.com/token"}',
+    )
+    monkeypatch.setattr(journal_monitor, "_get_service_account_access_token", lambda: "service-token")
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'{"files":[{"id":"folder-1","name":"180-25 Journal","webViewLink":"https://drive/folder-1",'
+                b'"modifiedTime":"2026-05-01T10:00:00Z"}]}'
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(journal_monitor, "urlopen", fake_urlopen)
+
+    folders = journal_monitor.list_drive_child_folders("root-folder")
+
+    assert folders[0]["id"] == "folder-1"
+    assert "key=" not in str(captured["url"])
+    assert captured["authorization"] == "Bearer service-token"

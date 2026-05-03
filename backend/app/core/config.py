@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini")
     openai_ocr_enabled: bool = Field(default=False)
     google_drive_api_key: str = Field(default="")
+    google_drive_service_account_json: str = Field(default="")
 
     cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
 

@@ -1,13 +1,17 @@
 import csv
+import base64
+import json
 import re
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote, urlparse, parse_qs
-from urllib.request import urlopen
+from urllib.parse import quote, unquote, urlencode, urlparse, parse_qs
+from urllib.request import Request, urlopen
 
 from docx import Document as DocxDocument
+from jose import jwt
 from openpyxl import Workbook
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -17,8 +21,11 @@ from app.models import Group, JournalMonitorEntry, JournalMonitorSection, Schedu
 from app.services.import_export import save_report_file
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-–—]\s*[0-9]{2,4})")
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
+_service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
 def normalize_group_code(value: str | None) -> str:
@@ -72,27 +79,98 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def _decode_service_account_json() -> dict[str, Any]:
+    raw_value = settings.google_drive_service_account_json.strip()
+    if not raw_value:
+        raise RuntimeError(
+            "Для приватної Google Drive папки задайте GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON "
+            "або використайте GOOGLE_DRIVE_API_KEY для публічної папки"
+        )
+
+    try:
+        if raw_value.startswith("{"):
+            payload = json.loads(raw_value)
+        else:
+            try:
+                payload = json.loads(base64.b64decode(raw_value).decode("utf-8"))
+            except Exception:
+                with Path(raw_value).open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+    except Exception as exc:
+        raise RuntimeError("GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON має бути JSON, base64(JSON) або шляхом до JSON-файлу") from exc
+
+    if not payload.get("client_email") or not payload.get("private_key"):
+        raise RuntimeError("JSON service account має містити client_email і private_key")
+    return payload
+
+
+def _get_service_account_access_token() -> str:
+    now = time.time()
+    cached_token = _service_account_token_cache.get("access_token")
+    if cached_token and float(_service_account_token_cache.get("expires_at") or 0) > now + 60:
+        return str(cached_token)
+
+    account = _decode_service_account_json()
+    token_uri = account.get("token_uri") or GOOGLE_TOKEN_URI
+    issued_at = int(now)
+    claims = {
+        "iss": account["client_email"],
+        "scope": GOOGLE_DRIVE_READONLY_SCOPE,
+        "aud": token_uri,
+        "iat": issued_at,
+        "exp": issued_at + 3600,
+    }
+    assertion = jwt.encode(claims, account["private_key"], algorithm="RS256")
+    body = urlencode(
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        }
+    ).encode("utf-8")
+    request = Request(
+        token_uri,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise RuntimeError("Google OAuth не повернув access_token для service account")
+    _service_account_token_cache["access_token"] = access_token
+    _service_account_token_cache["expires_at"] = now + int(payload.get("expires_in") or 3600)
+    return str(access_token)
+
+
 def list_drive_child_folders(folder_id: str) -> list[dict[str, Any]]:
-    if not settings.google_drive_api_key:
-        raise RuntimeError("Для онлайн-моніторингу Google Drive задайте GOOGLE_DRIVE_API_KEY")
+    use_service_account = bool(settings.google_drive_service_account_json.strip())
+    if not use_service_account and not settings.google_drive_api_key:
+        raise RuntimeError(
+            "Для онлайн-моніторингу Google Drive задайте GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON "
+            "або GOOGLE_DRIVE_API_KEY для публічної папки"
+        )
 
     query = f"'{folder_id}' in parents and mimeType = '{GOOGLE_DRIVE_FOLDER_MIME}' and trashed = false"
     fields = "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)"
     page_token = ""
     folders: list[dict[str, Any]] = []
+    access_token = _get_service_account_access_token() if use_service_account else None
     while True:
         url = (
             "https://www.googleapis.com/drive/v3/files"
             f"?q={quote(query)}"
             f"&fields={quote(fields)}"
             "&pageSize=1000"
-            f"&key={quote(settings.google_drive_api_key)}"
         )
+        if not use_service_account:
+            url += f"&key={quote(settings.google_drive_api_key)}"
         if page_token:
             url += f"&pageToken={quote(page_token)}"
-        with urlopen(url, timeout=20) as response:
-            import json
-
+        request_or_url: str | Request = url
+        if access_token:
+            request_or_url = Request(url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+        with urlopen(request_or_url, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
         for item in payload.get("files", []):
             folders.append(
