@@ -157,3 +157,25 @@ def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     assert folders[0]["id"] == "folder-1"
     assert "key=" not in str(captured["url"])
     assert captured["authorization"] == "Bearer service-token"
+
+
+def test_journal_monitor_sync_without_credentials_explains_service_account_setup(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "")
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_service_account_json", "")
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали без ключа", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+
+    sync_response = client.post(
+        f"/api/v1/journal-monitors/{create_response.json()['id']}/sync",
+        headers=auth_headers,
+    )
+
+    assert sync_response.status_code == 502
+    detail = sync_response.json()["detail"]
+    assert "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON" in detail
+    assert "suptc-drive-journal-monitor" in detail

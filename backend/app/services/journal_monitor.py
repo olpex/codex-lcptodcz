@@ -23,6 +23,12 @@ from app.services.import_export import save_report_file
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+SERVICE_ACCOUNT_SETUP_MESSAGE = (
+    "Для приватної Google Drive папки залиште в доступі папки email service account "
+    "suptc-drive-journal-monitor@gen-lang-client-0242013668.iam.gserviceaccount.com "
+    "і задайте на backend змінну GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON з JSON-ключем цього service account. "
+    "GOOGLE_DRIVE_API_KEY потрібен тільки для публічних папок."
+)
 GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-–—]\s*[0-9]{2,4})")
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
@@ -82,10 +88,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 def _decode_service_account_json() -> dict[str, Any]:
     raw_value = settings.google_drive_service_account_json.strip()
     if not raw_value:
-        raise RuntimeError(
-            "Для приватної Google Drive папки задайте GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON "
-            "або використайте GOOGLE_DRIVE_API_KEY для публічної папки"
-        )
+        raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
 
     try:
         if raw_value.startswith("{"):
@@ -146,10 +149,7 @@ def _get_service_account_access_token() -> str:
 def list_drive_child_folders(folder_id: str) -> list[dict[str, Any]]:
     use_service_account = bool(settings.google_drive_service_account_json.strip())
     if not use_service_account and not settings.google_drive_api_key:
-        raise RuntimeError(
-            "Для онлайн-моніторингу Google Drive задайте GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON "
-            "або GOOGLE_DRIVE_API_KEY для публічної папки"
-        )
+        raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
 
     query = f"'{folder_id}' in parents and mimeType = '{GOOGLE_DRIVE_FOLDER_MIME}' and trashed = false"
     fields = "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)"

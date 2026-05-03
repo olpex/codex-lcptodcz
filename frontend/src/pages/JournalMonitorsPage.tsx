@@ -198,7 +198,7 @@ export function JournalMonitorsPage() {
 
   return (
     <div className="space-y-5">
-      {errorText && <InlineNotice tone="error" text={errorText} actionLabel="Спробувати ще раз" onAction={() => syncSelected()} />}
+      {errorText && <InlineNotice tone="error" text={errorText} actionLabel="Спробувати ще раз" onAction={() => syncSelected(false)} />}
 
       <Panel title="Моніторинг журналів Google Drive">
         <form className="grid gap-3 lg:grid-cols-[14rem_1fr_auto]" onSubmit={createSection}>

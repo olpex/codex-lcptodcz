@@ -41,8 +41,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
       setNextId((currentId) => {
         const id = currentId;
-        setToasts((prev) => [...prev, { id, type, message }]);
-        window.setTimeout(() => dismiss(id), durationMs);
+        setToasts((prev) => {
+          if (prev.some((item) => item.type === type && item.message === message)) {
+            return prev;
+          }
+          window.setTimeout(() => dismiss(id), durationMs);
+          return [...prev, { id, type, message }];
+        });
         return currentId + 1;
       });
     },
