@@ -13,7 +13,8 @@ export const uiText = {
     performance: "Успішність",
     documents: "Документи",
     jobs: "Центр імпорту",
-    drafts: "Чернетки OCR"
+    drafts: "Чернетки OCR",
+    journals: "Журнали"
   },
   actions: {
     login: "Увійти",

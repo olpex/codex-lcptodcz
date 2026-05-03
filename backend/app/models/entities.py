@@ -301,6 +301,57 @@ class StudentPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class JournalMonitorSection(Base):
+    __tablename__ = "journal_monitor_sections"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "name", name="uq_journal_monitor_branch_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    folder_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    folder_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_status: Mapped[str] = mapped_column(String(50), default="never", nullable=False)
+    last_sync_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    entries: Mapped[list["JournalMonitorEntry"]] = relationship(
+        back_populates="section",
+        cascade="all, delete-orphan",
+    )
+
+
+class JournalMonitorEntry(Base):
+    __tablename__ = "journal_monitor_entries"
+    __table_args__ = (
+        UniqueConstraint("section_id", "drive_file_id", name="uq_journal_monitor_entry_drive_file"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("journal_monitor_sections.id"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    journal_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    group_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    matched_group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), nullable=True, index=True)
+    has_group: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_schedule: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_trainees: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    schedule_lessons: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    trainee_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processing_status: Mapped[str] = mapped_column(String(50), default="not_processed", nullable=False, index=True)
+    drive_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    section: Mapped[JournalMonitorSection] = relationship(back_populates="entries")
+    matched_group: Mapped[Group | None] = relationship()
+
+
 class Order(Base):
     __tablename__ = "orders"
 

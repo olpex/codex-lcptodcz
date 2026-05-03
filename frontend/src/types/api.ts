@@ -163,6 +163,45 @@ export interface AttentionSummary {
   items: AttentionItem[];
 }
 
+export interface JournalMonitorStats {
+  total: number;
+  complete: number;
+  schedule_only: number;
+  trainees_only: number;
+  not_processed: number;
+  unknown_code: number;
+}
+
+export interface JournalMonitorEntry {
+  id: number;
+  drive_file_id: string;
+  drive_url: string | null;
+  journal_name: string;
+  group_code: string | null;
+  matched_group_id: number | null;
+  has_group: boolean;
+  has_schedule: boolean;
+  has_trainees: boolean;
+  schedule_lessons: number;
+  trainee_count: number;
+  processing_status: string;
+  drive_modified_at: string | null;
+  last_seen_at: string;
+}
+
+export interface JournalMonitorSection {
+  id: number;
+  name: string;
+  folder_url: string;
+  folder_id: string;
+  is_active: boolean;
+  last_synced_at: string | null;
+  last_sync_status: string;
+  last_sync_message: string | null;
+  stats: JournalMonitorStats;
+  entries?: JournalMonitorEntry[];
+}
+
 export interface Job {
   id: number;
   status: "queued" | "running" | "succeeded" | "failed";

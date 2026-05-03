@@ -24,6 +24,9 @@ const GroupsPage = lazy(() =>
 const JobCenterPage = lazy(() =>
   import("./pages/JobCenterPage").then((module) => ({ default: module.JobCenterPage }))
 );
+const JournalMonitorsPage = lazy(() =>
+  import("./pages/JournalMonitorsPage").then((module) => ({ default: module.JournalMonitorsPage }))
+);
 const LoginPage = lazy(() =>
   import("./pages/LoginPage").then((module) => ({ default: module.LoginPage }))
 );
@@ -148,6 +151,14 @@ export default function App() {
             element={
               <RoleGuard allowedRoles={["admin", "methodist"]}>
                 <JobCenterPage />
+              </RoleGuard>
+            }
+          />
+          <Route
+            path="journals"
+            element={
+              <RoleGuard allowedRoles={["admin", "methodist"]}>
+                <JournalMonitorsPage />
               </RoleGuard>
             }
           />

@@ -8,6 +8,8 @@ from app.models.entities import (
     GroupMembership,
     GroupStatus,
     ImportJob,
+    JournalMonitorEntry,
+    JournalMonitorSection,
     JobStatus,
     MembershipStatus,
     MailMessage,

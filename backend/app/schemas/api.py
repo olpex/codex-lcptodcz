@@ -401,6 +401,59 @@ class StudentPlanResponse(BaseModel):
     progress_pct: float
 
 
+class JournalMonitorSectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    folder_url: str = Field(min_length=1, max_length=1000)
+
+
+class JournalMonitorSectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    folder_url: str | None = Field(default=None, min_length=1, max_length=1000)
+    is_active: bool | None = None
+
+
+class JournalMonitorStats(BaseModel):
+    total: int = 0
+    complete: int = 0
+    schedule_only: int = 0
+    trainees_only: int = 0
+    not_processed: int = 0
+    unknown_code: int = 0
+
+
+class JournalMonitorEntryResponse(BaseModel):
+    id: int
+    drive_file_id: str
+    drive_url: str | None = None
+    journal_name: str
+    group_code: str | None = None
+    matched_group_id: int | None = None
+    has_group: bool
+    has_schedule: bool
+    has_trainees: bool
+    schedule_lessons: int
+    trainee_count: int
+    processing_status: str
+    drive_modified_at: datetime | None = None
+    last_seen_at: datetime
+
+
+class JournalMonitorSectionResponse(BaseModel):
+    id: int
+    name: str
+    folder_url: str
+    folder_id: str
+    is_active: bool
+    last_synced_at: datetime | None = None
+    last_sync_status: str
+    last_sync_message: str | None = None
+    stats: JournalMonitorStats
+
+
+class JournalMonitorDetailResponse(JournalMonitorSectionResponse):
+    entries: list[JournalMonitorEntryResponse] = Field(default_factory=list)
+
+
 class DashboardAttentionItem(BaseModel):
     key: str
     title: str

@@ -5,6 +5,7 @@ from app.api.routes import (
     dashboard,
     documents,
     groups,
+    journal_monitors,
     jobs,
     mail,
     orders,
@@ -25,6 +26,7 @@ api_router.include_router(performance.router, prefix="/performance", tags=["perf
 api_router.include_router(schedule.router, prefix="/schedule", tags=["schedule"])
 api_router.include_router(workload.router, prefix="/teacher-workload", tags=["teacher-workload"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(journal_monitors.router, prefix="/journal-monitors", tags=["journal-monitors"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(mail.router, tags=["mail"])
