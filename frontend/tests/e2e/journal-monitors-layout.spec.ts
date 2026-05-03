@@ -20,7 +20,7 @@ const section = {
       section_id: 1,
       drive_folder_id: "drive-1",
       drive_url: "https://drive.google.com/drive/folders/drive-1",
-      journal_name: "1-26 Організація трудових відносин в умовах воєнного стану",
+      journal_name: "1-26 Альфа",
       group_code: "1-26",
       processing_status: "not_processed",
       has_schedule: false,
@@ -29,6 +29,51 @@ const section = {
       schedule_hours: 0,
       trainee_count: 0,
       matched_group_id: null
+    },
+    {
+      id: 2,
+      section_id: 1,
+      drive_folder_id: "drive-100",
+      drive_url: "https://drive.google.com/drive/folders/drive-100",
+      journal_name: "100-26 Якість навчання",
+      group_code: "100-26",
+      processing_status: "schedule_only",
+      has_schedule: true,
+      has_trainees: false,
+      schedule_lessons: 8,
+      schedule_hours: 16,
+      trainee_count: 0,
+      matched_group_id: 100
+    },
+    {
+      id: 3,
+      section_id: 1,
+      drive_folder_id: "drive-2",
+      drive_url: "https://drive.google.com/drive/folders/drive-2",
+      journal_name: "2-26 Бета",
+      group_code: "2-26",
+      processing_status: "trainees_only",
+      has_schedule: false,
+      has_trainees: true,
+      schedule_lessons: 0,
+      schedule_hours: 0,
+      trainee_count: 24,
+      matched_group_id: 2
+    },
+    {
+      id: 4,
+      section_id: 1,
+      drive_folder_id: "drive-10p",
+      drive_url: "https://drive.google.com/drive/folders/drive-10p",
+      journal_name: "10п-26 Трактори",
+      group_code: "10п-26",
+      processing_status: "complete",
+      has_schedule: true,
+      has_trainees: true,
+      schedule_lessons: 12,
+      schedule_hours: 24,
+      trainee_count: 22,
+      matched_group_id: 10
     }
   ]
 };
@@ -158,4 +203,39 @@ test("journal monitor section can be deleted from the project", async ({ page })
 
   await expect.poll(() => deletedSectionId).toBe(2);
   await expect(page.getByRole("heading", { name: "Журнали 2025" })).toHaveCount(0);
+});
+
+test("journal monitor entries can be searched and sorted", async ({ page }) => {
+  await loginAndMockJournals(page);
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+
+  const visibleGroupCodes = () =>
+    page.locator("#journal-monitor-entries tbody tr").evaluateAll((rows) =>
+      rows
+        .map((row) => row.querySelector("td")?.textContent?.trim() || "")
+        .filter((value) => value && value !== "Даних ще немає. Натисніть «Оновити» після створення розділу.")
+    );
+
+  await page.getByRole("button", { name: /Група/ }).click();
+  await expect.poll(visibleGroupCodes).toEqual(["1-26", "2-26", "10п-26", "100-26"]);
+
+  await page.getByRole("button", { name: /Папка журналу/ }).click();
+  await expect.poll(visibleGroupCodes).toEqual(["1-26", "2-26", "10п-26", "100-26"]);
+
+  await page.getByRole("button", { name: /Статус/ }).click();
+  await expect.poll(visibleGroupCodes).toEqual(["10п-26", "100-26", "2-26", "1-26"]);
+
+  await page.getByRole("button", { name: /Розклад/ }).click();
+  await expect.poll(visibleGroupCodes).toEqual(["100-26", "10п-26", "1-26", "2-26"]);
+
+  await page.getByRole("button", { name: /Слухачі/ }).click();
+  await expect.poll(visibleGroupCodes).toEqual(["2-26", "10п-26", "1-26", "100-26"]);
+
+  await page.getByPlaceholder("Пошук за номером або назвою журналу").fill("бета");
+  await expect.poll(visibleGroupCodes).toEqual(["2-26"]);
+
+  await page.getByPlaceholder("Пошук за номером або назвою журналу").fill("100");
+  await expect.poll(visibleGroupCodes).toEqual(["100-26"]);
 });

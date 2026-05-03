@@ -58,6 +58,17 @@ const PROGRESS_CARDS = [
   }
 ] as const;
 
+type SortKey = "group" | "journal" | "status" | "schedule" | "trainees";
+type SortDirection = "asc" | "desc";
+
+const STATUS_SORT_ORDER: Record<string, number> = {
+  complete: 1,
+  schedule_only: 2,
+  trainees_only: 3,
+  not_processed: 4,
+  unknown_code: 5
+};
+
 function formatDateTime(value: string | null): string {
   if (!value) return "Ще не оновлювався";
   return new Date(value).toLocaleString("uk-UA", {
@@ -76,6 +87,57 @@ function formatStatus(value: string): string {
 function formatPercent(count = 0, total = 0): string {
   if (total <= 0) return "0%";
   return `${Math.round((count / total) * 100)}%`;
+}
+
+function normalizeSearchValue(value: string | null | undefined): string {
+  return (value || "").toLocaleLowerCase("uk-UA").trim();
+}
+
+function getGroupSortParts(code: string | null): { number: number; suffix: string; year: number; raw: string } {
+  const raw = code || "";
+  const match = raw.match(/^\s*(\d+)\s*([^\d\s-]*)\s*-\s*(\d+)/i);
+  if (!match) {
+    return { number: Number.MAX_SAFE_INTEGER, suffix: "", year: Number.MAX_SAFE_INTEGER, raw };
+  }
+  return {
+    number: Number(match[1]),
+    suffix: match[2] || "",
+    year: Number(match[3]),
+    raw
+  };
+}
+
+function getJournalNameSortValue(name: string): string {
+  return name.replace(/^\s*\d+\s*[^\d\s-]*\s*-\s*\d+\s*[-—–:]?\s*/i, "").trim() || name;
+}
+
+function compareGroupCodes(left: string | null, right: string | null): number {
+  const a = getGroupSortParts(left);
+  const b = getGroupSortParts(right);
+  if (a.number !== b.number) return a.number - b.number;
+  const suffixCompare = a.suffix.localeCompare(b.suffix, "uk-UA", { sensitivity: "base" });
+  if (suffixCompare !== 0) return suffixCompare;
+  if (a.year !== b.year) return a.year - b.year;
+  return a.raw.localeCompare(b.raw, "uk-UA", { sensitivity: "base", numeric: true });
+}
+
+function compareJournalRows(left: JournalMonitorEntry, right: JournalMonitorEntry, sortKey: SortKey): number {
+  if (sortKey === "group") {
+    return compareGroupCodes(left.group_code, right.group_code);
+  }
+  if (sortKey === "journal") {
+    return getJournalNameSortValue(left.journal_name).localeCompare(getJournalNameSortValue(right.journal_name), "uk-UA", {
+      sensitivity: "base",
+      numeric: true
+    });
+  }
+  if (sortKey === "status") {
+    return (STATUS_SORT_ORDER[left.processing_status] ?? 99) - (STATUS_SORT_ORDER[right.processing_status] ?? 99);
+  }
+  if (sortKey === "schedule") {
+    return Number(right.has_schedule) - Number(left.has_schedule);
+  }
+  return Number(right.has_trainees) - Number(left.has_trainees);
 }
 
 function getFileName(response: Response, fallback: string): string {
@@ -100,6 +162,9 @@ export function JournalMonitorsPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
+  const [journalSearch, setJournalSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const selectedSection = useMemo(
@@ -108,6 +173,21 @@ export function JournalMonitorsPage() {
   );
   const rows = detail?.entries || [];
   const totalFolders = detail?.stats.total ?? 0;
+  const visibleRows = useMemo(() => {
+    const query = normalizeSearchValue(journalSearch);
+    const filtered = query
+      ? rows.filter((row) => {
+          const groupCode = normalizeSearchValue(row.group_code);
+          const journalName = normalizeSearchValue(row.journal_name);
+          return groupCode.includes(query) || journalName.includes(query);
+        })
+      : rows;
+    if (!sortKey) return filtered;
+    return [...filtered].sort((left, right) => {
+      const result = compareJournalRows(left, right, sortKey);
+      return sortDirection === "asc" ? result : -result;
+    });
+  }, [journalSearch, rows, sortDirection, sortKey]);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -261,6 +341,27 @@ export function JournalMonitorsPage() {
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
 
+  const changeSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection("asc");
+  };
+
+  const renderSortButton = (key: SortKey, label: string) => (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 font-semibold uppercase tracking-wide text-slate-500 hover:text-pine"
+      onClick={() => changeSort(key)}
+      aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+    >
+      {label}
+      <span aria-hidden="true">{sortKey === key ? (sortDirection === "asc" ? "▲" : "▼") : "↕"}</span>
+    </button>
+  );
+
   return (
     <div className="space-y-5">
       {errorText && <InlineNotice tone="error" text={errorText} actionLabel="Спробувати ще раз" onAction={() => syncSelected(false)} />}
@@ -400,7 +501,7 @@ export function JournalMonitorsPage() {
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-ink">Список журналів</p>
               <p className="text-xs text-slate-600">
-                Папок: {rows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
+                Папок: {rows.length} | Показано: {visibleRows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
               </p>
             </div>
             <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
@@ -410,22 +511,33 @@ export function JournalMonitorsPage() {
 
           {entriesExpanded && (
             <div id="journal-monitor-entries" className="border-t border-slate-200">
+              <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Пошук журналів
+                  <input
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink"
+                    value={journalSearch}
+                    onChange={(event) => setJournalSearch(event.target.value)}
+                    placeholder="Пошук за номером або назвою журналу"
+                  />
+                </label>
+              </div>
               <div className="overflow-x-auto">
                 <table className="min-w-[58rem] w-full text-left text-sm xl:min-w-full">
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
-                      <th className="px-3 py-2">Група</th>
-                      <th className="px-3 py-2">Папка журналу</th>
-                      <th className="px-3 py-2 whitespace-nowrap">Статус</th>
-                      <th className="px-3 py-2">Розклад</th>
-                      <th className="px-3 py-2">Слухачі</th>
+                      <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
+                      <th className="px-3 py-2">{renderSortButton("journal", "Папка журналу")}</th>
+                      <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
+                      <th className="px-3 py-2">{renderSortButton("schedule", "Розклад")}</th>
+                      <th className="px-3 py-2">{renderSortButton("trainees", "Слухачі")}</th>
                       <th className="px-3 py-2">Занять</th>
                       <th className="px-3 py-2">Осіб</th>
                       <th className="px-3 py-2">Drive</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
-                    {rows.map((row: JournalMonitorEntry) => (
+                    {visibleRows.map((row: JournalMonitorEntry) => (
                       <tr key={row.id}>
                         <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
                         <td className="px-3 py-2">{row.journal_name}</td>
@@ -453,6 +565,13 @@ export function JournalMonitorsPage() {
                       <tr>
                         <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
                           Даних ще немає. Натисніть «Оновити» після створення розділу.
+                        </td>
+                      </tr>
+                    )}
+                    {!isLoading && rows.length > 0 && visibleRows.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                          За цим пошуком журналів не знайдено.
                         </td>
                       </tr>
                     )}
