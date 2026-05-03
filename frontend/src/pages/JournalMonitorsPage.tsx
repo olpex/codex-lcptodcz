@@ -60,6 +60,7 @@ export function JournalMonitorsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const selectedSection = useMemo(
@@ -296,61 +297,85 @@ export function JournalMonitorsPage() {
             Остання синхронізація: {formatDateTime(detail?.last_synced_at ?? null)}
           </p>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-[58rem] w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Група</th>
-                  <th className="px-3 py-2">Папка журналу</th>
-                  <th className="px-3 py-2">Статус</th>
-                  <th className="px-3 py-2">Розклад</th>
-                  <th className="px-3 py-2">Слухачі</th>
-                  <th className="px-3 py-2">Занять</th>
-                  <th className="px-3 py-2">Осіб</th>
-                  <th className="px-3 py-2">Drive</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {rows.map((row: JournalMonitorEntry) => (
-                  <tr key={row.id}>
-                    <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
-                    <td className="px-3 py-2">{row.journal_name}</td>
-                    <td className="px-3 py-2">
-                      <span className={clsx("rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
-                        {formatStatus(row.processing_status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
-                    <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
-                    <td className="px-3 py-2">{row.schedule_lessons}</td>
-                    <td className="px-3 py-2">{row.trainee_count}</td>
-                    <td className="px-3 py-2">
-                      {row.drive_url ? (
-                        <a className="font-semibold text-pine underline" href={row.drive_url} target="_blank" rel="noreferrer">
-                          Відкрити
-                        </a>
-                      ) : (
-                        "—"
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <button
+              type="button"
+              className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+              onClick={() => setEntriesExpanded((value) => !value)}
+              aria-expanded={entriesExpanded}
+              aria-controls="journal-monitor-entries"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-ink">Список журналів</p>
+                <p className="text-xs text-slate-600">
+                  Папок: {rows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
+                </p>
+              </div>
+              <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
+                {entriesExpanded ? "−" : "+"}
+              </span>
+            </button>
+
+            {entriesExpanded && (
+              <div id="journal-monitor-entries" className="border-t border-slate-200">
+                <div className="overflow-x-auto">
+                  <table className="min-w-[58rem] w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Група</th>
+                        <th className="px-3 py-2">Папка журналу</th>
+                        <th className="px-3 py-2">Статус</th>
+                        <th className="px-3 py-2">Розклад</th>
+                        <th className="px-3 py-2">Слухачі</th>
+                        <th className="px-3 py-2">Занять</th>
+                        <th className="px-3 py-2">Осіб</th>
+                        <th className="px-3 py-2">Drive</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {rows.map((row: JournalMonitorEntry) => (
+                        <tr key={row.id}>
+                          <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
+                          <td className="px-3 py-2">{row.journal_name}</td>
+                          <td className="px-3 py-2">
+                            <span className={clsx("rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
+                              {formatStatus(row.processing_status)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
+                          <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
+                          <td className="px-3 py-2">{row.schedule_lessons}</td>
+                          <td className="px-3 py-2">{row.trainee_count}</td>
+                          <td className="px-3 py-2">
+                            {row.drive_url ? (
+                              <a className="font-semibold text-pine underline" href={row.drive_url} target="_blank" rel="noreferrer">
+                                Відкрити
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {!isLoading && rows.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                            Даних ще немає. Натисніть «Оновити» після створення розділу.
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                  </tr>
-                ))}
-                {!isLoading && rows.length === 0 && (
-                  <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                      Даних ще немає. Натисніть «Оновити» після створення розділу.
-                    </td>
-                  </tr>
-                )}
-                {isLoading && (
-                  <tr>
-                    <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                      Завантаження...
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                      {isLoading && (
+                        <tr>
+                          <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                            Завантаження...
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </Panel>
       </div>
