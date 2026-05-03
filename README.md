@@ -78,11 +78,11 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 ### Моніторинг журналів Google Drive
 
-Розділ `Журнали` порівнює підпапки з Google Drive з групами, розкладом і слухачами в системі. Для приватної або чужої папки створіть Google service account, надайте його email доступом `Viewer` до Drive-папки й вставте JSON-ключ у розділі `Журнали`.
+Розділ `Журнали` порівнює підпапки з Google Drive з групами, розкладом і слухачами в системі. Для приватної або чужої папки створіть Google service account, надайте його email доступом `Viewer` до Drive-папки й задайте JSON-ключ service account на backend.
 
 Також підтримуються змінні backend:
 
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` — вміст JSON-ключа service account, `base64(JSON)` або шлях до JSON-файлу, якщо ключ треба задати глобально;
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` — вміст JSON-ключа service account, `base64(JSON)` або шлях до JSON-файлу;
 - `GOOGLE_DRIVE_API_KEY` — запасний варіант тільки для папок, відкритих як `Anyone with the link`.
 
 У самому розділі можна створювати окремі конфігурації на кожен рік, наприклад `Журнали 2026`, і вказувати URL відповідної Drive-папки.

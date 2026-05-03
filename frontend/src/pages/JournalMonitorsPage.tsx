@@ -57,11 +57,8 @@ export function JournalMonitorsPage() {
   const [detail, setDetail] = useState<JournalMonitorSection | null>(null);
   const [name, setName] = useState(`Журнали ${new Date().getFullYear()}`);
   const [folderUrl, setFolderUrl] = useState("");
-  const [serviceAccountJson, setServiceAccountJson] = useState("");
-  const [sectionCredentialJson, setSectionCredentialJson] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSavingCredentials, setIsSavingCredentials] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -147,15 +144,10 @@ export function JournalMonitorsPage() {
     try {
       const section = await request<JournalMonitorSection>("/journal-monitors", {
         method: "POST",
-        body: JSON.stringify({
-          name,
-          folder_url: folderUrl,
-          service_account_json: serviceAccountJson.trim() || undefined
-        })
+        body: JSON.stringify({ name, folder_url: folderUrl })
       });
       setSelectedId(section.id);
       setFolderUrl("");
-      setServiceAccountJson("");
       await loadSections();
       showInfo("Розділ створено. Запускаю першу синхронізацію.");
       await request<JournalMonitorSection>(`/journal-monitors/${section.id}/sync`, { method: "POST" })
@@ -200,25 +192,6 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const saveSectionCredentials = async () => {
-    if (!selectedId || !sectionCredentialJson.trim()) return;
-    setIsSavingCredentials(true);
-    try {
-      const section = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ service_account_json: sectionCredentialJson })
-      });
-      setDetail((prev) => (prev ? { ...prev, has_service_account_credentials: section.has_service_account_credentials } : prev));
-      setSections((prev) => prev.map((item) => (item.id === section.id ? section : item)));
-      setSectionCredentialJson("");
-      showSuccess("JSON-ключ service account збережено");
-    } catch (error) {
-      showError((error as Error).message);
-    } finally {
-      setIsSavingCredentials(false);
-    }
-  };
-
   const renderBoolean = (value: boolean) => (
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
@@ -247,15 +220,6 @@ export function JournalMonitorsPage() {
               onChange={(event) => setFolderUrl(event.target.value)}
               placeholder="https://drive.google.com/drive/folders/..."
               required
-            />
-          </label>
-          <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
-            JSON-ключ service account
-            <textarea
-              className="mt-1 min-h-24 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
-              value={serviceAccountJson}
-              onChange={(event) => setServiceAccountJson(event.target.value)}
-              placeholder='{"type":"service_account","project_id":"...","private_key":"...","client_email":"suptc-drive-journal-monitor@..."}'
             />
           </label>
           <button
@@ -289,9 +253,6 @@ export function JournalMonitorsPage() {
                   <span className="block font-semibold text-ink">{section.name}</span>
                   <span className="mt-1 block text-xs text-slate-500">
                     {section.stats.total} папок, оновлено: {formatDateTime(section.last_synced_at)}
-                  </span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    Ключ Drive: {section.has_service_account_credentials ? "збережено" : "не внесено"}
                   </span>
                 </button>
               ))}
@@ -334,37 +295,6 @@ export function JournalMonitorsPage() {
           <p className="mb-3 text-xs text-slate-500">
             Остання синхронізація: {formatDateTime(detail?.last_synced_at ?? null)}
           </p>
-
-          {selectedId && (
-            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <label className="text-sm font-semibold text-slate-700">
-                JSON-ключ service account для цього розділу
-                <textarea
-                  className="mt-1 min-h-24 w-full rounded border border-slate-300 bg-white px-3 py-2 font-mono text-xs"
-                  value={sectionCredentialJson}
-                  onChange={(event) => setSectionCredentialJson(event.target.value)}
-                  placeholder={
-                    detail?.has_service_account_credentials
-                      ? "Ключ уже збережено. Вставте новий JSON тільки якщо треба замінити."
-                      : "Вставте JSON-файл service account, який ви завантажили з Google Cloud."
-                  }
-                />
-              </label>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-slate-500">
-                  Поточний стан: {detail?.has_service_account_credentials ? "ключ збережено" : "ключ ще не внесено"}
-                </span>
-                <button
-                  type="button"
-                  className="rounded-lg border border-pine px-3 py-2 text-xs font-semibold text-pine disabled:opacity-50"
-                  onClick={saveSectionCredentials}
-                  disabled={!sectionCredentialJson.trim() || isSavingCredentials}
-                >
-                  {isSavingCredentials ? "Зберігаємо..." : "Зберегти ключ"}
-                </button>
-              </div>
-            </div>
-          )}
 
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-[58rem] w-full text-left text-sm">
