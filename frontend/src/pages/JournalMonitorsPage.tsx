@@ -233,152 +233,146 @@ export function JournalMonitorsPage() {
         </form>
       </Panel>
 
-      <div className="grid gap-4 lg:grid-cols-[20rem_1fr]">
-        <Panel title="Розділи">
-          {sections.length === 0 ? (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              Додайте перший розділ з посиланням на папку журналів.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {sections.map((section) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  className={clsx(
-                    "w-full rounded-lg border px-3 py-2 text-left text-sm transition",
-                    selectedId === section.id ? "border-pine bg-emerald-50" : "border-slate-200 bg-white hover:bg-slate-50"
-                  )}
-                  onClick={() => setSelectedId(section.id)}
-                >
-                  <span className="block font-semibold text-ink">{section.name}</span>
-                  <span className="mt-1 block text-xs text-slate-500">
-                    {section.stats.total} папок, оновлено: {formatDateTime(section.last_synced_at)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <Panel title={detail?.name || "Поточний стан"}>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-3 lg:grid-cols-5">
-              <span>Усього: <b className="text-ink">{detail?.stats.total ?? 0}</b></span>
-              <span>Повністю: <b className="text-emerald-700">{detail?.stats.complete ?? 0}</b></span>
-              <span>Тільки розклад: <b className="text-sky-700">{detail?.stats.schedule_only ?? 0}</b></span>
-              <span>Тільки слухачі: <b className="text-amber-700">{detail?.stats.trainees_only ?? 0}</b></span>
-              <span>Не опрацьовано: <b className="text-rose-700">{detail?.stats.not_processed ?? 0}</b></span>
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
-                onClick={() => syncSelected()}
-                disabled={!selectedId || isSyncing}
-              >
-                {isSyncing ? "Оновлюємо..." : "Оновити"}
-              </button>
-              {EXPORT_FORMATS.map((format) => (
-                <button
-                  key={format}
-                  type="button"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold uppercase text-slate-700 disabled:opacity-50"
-                  onClick={() => exportSection(format)}
-                  disabled={!selectedId}
-                >
-                  {format === "xlsx" ? "xls" : format}
-                </button>
-              ))}
-            </div>
+      <section className="rounded-2xl bg-white p-5 shadow-card">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-xl font-semibold text-ink">{detail?.name || "Поточний стан"}</h2>
+            <p className="mt-2 text-xs text-slate-500">
+              {detail
+                ? `${detail.stats.total} папок, оновлено: ${formatDateTime(detail.last_synced_at)}`
+                : "Додайте перший розділ з посиланням на папку журналів."}
+            </p>
           </div>
+          {sections.length > 1 && (
+            <label className="text-xs font-semibold text-slate-600">
+              Розділ для перегляду
+              <select
+                className="mt-1 block min-w-48 rounded border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+                value={selectedId ?? ""}
+                onChange={(event) => setSelectedId(Number(event.target.value))}
+              >
+                {sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
 
-          <p className="mb-3 text-xs text-slate-500">
-            Остання синхронізація: {formatDateTime(detail?.last_synced_at ?? null)}
-          </p>
-
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-3 lg:grid-cols-5">
+            <span>Усього: <b className="text-ink">{detail?.stats.total ?? 0}</b></span>
+            <span>Повністю: <b className="text-emerald-700">{detail?.stats.complete ?? 0}</b></span>
+            <span>Тільки розклад: <b className="text-sky-700">{detail?.stats.schedule_only ?? 0}</b></span>
+            <span>Тільки слухачі: <b className="text-amber-700">{detail?.stats.trainees_only ?? 0}</b></span>
+            <span>Не опрацьовано: <b className="text-rose-700">{detail?.stats.not_processed ?? 0}</b></span>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
             <button
               type="button"
-              className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
-              onClick={() => setEntriesExpanded((value) => !value)}
-              aria-expanded={entriesExpanded}
-              aria-controls="journal-monitor-entries"
+              className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
+              onClick={() => syncSelected()}
+              disabled={!selectedId || isSyncing}
             >
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink">Список журналів</p>
-                <p className="text-xs text-slate-600">
-                  Папок: {rows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
-                </p>
-              </div>
-              <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
-                {entriesExpanded ? "−" : "+"}
-              </span>
+              {isSyncing ? "Оновлюємо..." : "Оновити"}
             </button>
-
-            {entriesExpanded && (
-              <div id="journal-monitor-entries" className="border-t border-slate-200">
-                <div className="overflow-x-auto">
-                  <table className="min-w-[58rem] w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2">Група</th>
-                        <th className="px-3 py-2">Папка журналу</th>
-                        <th className="px-3 py-2">Статус</th>
-                        <th className="px-3 py-2">Розклад</th>
-                        <th className="px-3 py-2">Слухачі</th>
-                        <th className="px-3 py-2">Занять</th>
-                        <th className="px-3 py-2">Осіб</th>
-                        <th className="px-3 py-2">Drive</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {rows.map((row: JournalMonitorEntry) => (
-                        <tr key={row.id}>
-                          <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
-                          <td className="px-3 py-2">{row.journal_name}</td>
-                          <td className="px-3 py-2">
-                            <span className={clsx("rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
-                              {formatStatus(row.processing_status)}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
-                          <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
-                          <td className="px-3 py-2">{row.schedule_lessons}</td>
-                          <td className="px-3 py-2">{row.trainee_count}</td>
-                          <td className="px-3 py-2">
-                            {row.drive_url ? (
-                              <a className="font-semibold text-pine underline" href={row.drive_url} target="_blank" rel="noreferrer">
-                                Відкрити
-                              </a>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                      {!isLoading && rows.length === 0 && (
-                        <tr>
-                          <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                            Даних ще немає. Натисніть «Оновити» після створення розділу.
-                          </td>
-                        </tr>
-                      )}
-                      {isLoading && (
-                        <tr>
-                          <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
-                            Завантаження...
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            {EXPORT_FORMATS.map((format) => (
+              <button
+                key={format}
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold uppercase text-slate-700 disabled:opacity-50"
+                onClick={() => exportSection(format)}
+                disabled={!selectedId}
+              >
+                {format === "xlsx" ? "xls" : format}
+              </button>
+            ))}
           </div>
-        </Panel>
-      </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <button
+            type="button"
+            className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+            onClick={() => setEntriesExpanded((value) => !value)}
+            aria-expanded={entriesExpanded}
+            aria-controls="journal-monitor-entries"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-ink">Список журналів</p>
+              <p className="text-xs text-slate-600">
+                Папок: {rows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
+              </p>
+            </div>
+            <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
+              {entriesExpanded ? "−" : "+"}
+            </span>
+          </button>
+
+          {entriesExpanded && (
+            <div id="journal-monitor-entries" className="border-t border-slate-200">
+              <div className="overflow-x-auto">
+                <table className="min-w-[58rem] w-full text-left text-sm xl:min-w-full">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">Група</th>
+                      <th className="px-3 py-2">Папка журналу</th>
+                      <th className="px-3 py-2 whitespace-nowrap">Статус</th>
+                      <th className="px-3 py-2">Розклад</th>
+                      <th className="px-3 py-2">Слухачі</th>
+                      <th className="px-3 py-2">Занять</th>
+                      <th className="px-3 py-2">Осіб</th>
+                      <th className="px-3 py-2">Drive</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {rows.map((row: JournalMonitorEntry) => (
+                      <tr key={row.id}>
+                        <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
+                        <td className="px-3 py-2">{row.journal_name}</td>
+                        <td className="px-3 py-2">
+                          <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
+                            {formatStatus(row.processing_status)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
+                        <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
+                        <td className="px-3 py-2">{row.schedule_lessons}</td>
+                        <td className="px-3 py-2">{row.trainee_count}</td>
+                        <td className="px-3 py-2">
+                          {row.drive_url ? (
+                            <a className="font-semibold text-pine underline" href={row.drive_url} target="_blank" rel="noreferrer">
+                              Відкрити
+                            </a>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {!isLoading && rows.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                          Даних ще немає. Натисніть «Оновити» після створення розділу.
+                        </td>
+                      </tr>
+                    )}
+                    {isLoading && (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                          Завантаження...
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
