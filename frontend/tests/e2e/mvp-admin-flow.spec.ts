@@ -144,6 +144,14 @@ test("admin can run core MVP flow", async ({ page }) => {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(state.slots) });
     }
 
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ id: 1, first_name: "Іван", last_name: "Викладач", hourly_rate: 0, annual_load_hours: 100, is_active: true }])
+      });
+    }
+
     if (path.endsWith("/schedule/generate") && method === "POST") {
       const slot = {
         id: state.nextSlotId++,
@@ -222,22 +230,23 @@ test("admin can run core MVP flow", async ({ page }) => {
   await page.getByPlaceholder("Код групи").fill("MVP-001");
   await page.getByPlaceholder("Назва групи").fill("Група MVP");
   await page.getByRole("button", { name: "Створити" }).click();
-  await expect(page.getByText("MVP-001")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "MVP-001 — Група MVP" })).toBeVisible();
 
   await page.goto("/trainees");
-  await page.locator("input[placeholder=\"Ім'я\"]").fill("Марина");
-  await page.locator("input[placeholder=\"Прізвище\"]").fill("Іваненко");
+  await page.getByRole("textbox", { name: /Ім'я/ }).fill("Марина");
+  await page.getByRole("textbox", { name: /Прізвище/ }).fill("Іваненко");
   await page.getByRole("button", { name: "Додати" }).click();
+  await page.getByRole("button", { name: /Без призначеної групи/ }).click();
   await expect(page.getByText("Іваненко Марина")).toBeVisible();
 
   await page.goto("/schedule");
   await page.getByRole("button", { name: "Згенерувати" }).click();
-  await expect(page.locator("table tbody tr")).toHaveCount(1);
+  await expect(page.getByText(/Занять: 1/)).toBeVisible();
 
   await page.goto("/documents");
   await page.getByRole("button", { name: "Згенерувати" }).click();
   await page.getByRole("button", { name: "Оновити статус" }).click();
-  await expect(page.getByText("succeeded")).toBeVisible();
+  await expect(page.getByText("Успішно")).toBeVisible();
 
   await page.goto("/drafts");
   await page.getByRole("button", { name: "Підтвердити" }).click();

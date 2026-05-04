@@ -1,16 +1,15 @@
-import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
 import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
-import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { API_URL } from "../api/client";
 import { formatJobStatus, formatJobType } from "../i18n/statuses";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { Job } from "../types/api";
+import { useState } from "react";
 
 type JobStatusPayload = {
   job_type: "import" | "export";
@@ -18,30 +17,13 @@ type JobStatusPayload = {
 };
 
 type NoticeTone = "info" | "success" | "error";
-type KnownJobType = "import" | "export";
-type KnownJobStatus = Job["status"];
-type ImportMode = "skip_existing" | "missing_only" | "overwrite";
 
-type KnownJob = {
-  jobType: KnownJobType;
-  status: KnownJobStatus;
-};
-
-type DiagnosticsSnapshot = {
-  total: number;
-  active: number;
-  succeeded: number;
-  failed: number;
-};
-
-const DIAGNOSTICS_HISTORY_LIMIT = 12;
 const ALLOWED_REPORT_TYPES = new Set(["kpi", "trainees", "groups", "teacher_workload", "employment", "financial", "form_1pa"]);
 const ALLOWED_EXPORT_FORMATS = new Set(["xlsx", "pdf", "csv"]);
 
 export function DocumentsPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
-  const [file, setFile] = useState<File | null>(null);
   const [reportType, setReportType] = useState("kpi");
   const [exportFormat, setExportFormat] = useState("xlsx");
   const [activeJobId, setActiveJobId] = useState<number | null>(null);
@@ -50,48 +32,10 @@ export function DocumentsPage() {
   const [outputDocumentId, setOutputDocumentId] = useState<number | null>(null);
   const [downloadedDocumentIds, setDownloadedDocumentIds] = useState<number[]>([]);
   const [notice, setNotice] = useState<{ tone: NoticeTone; text: string } | null>(null);
-  const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [importFieldError, setImportFieldError] = useState<string | undefined>(undefined);
   const [exportErrors, setExportErrors] = useState<{ reportType?: string; exportFormat?: string }>({});
-  const [, setKnownJobs] = useState<Record<number, KnownJob>>({});
-  const [diagnosticsHistory, setDiagnosticsHistory] = useState<DiagnosticsSnapshot[]>([]);
-
-  const buildSnapshot = (registry: Record<number, KnownJob>): DiagnosticsSnapshot => {
-    let active = 0;
-    let succeeded = 0;
-    let failed = 0;
-    for (const item of Object.values(registry)) {
-      if (item.status === "queued" || item.status === "running") active += 1;
-      if (item.status === "succeeded") succeeded += 1;
-      if (item.status === "failed") failed += 1;
-    }
-    return {
-      total: Object.keys(registry).length,
-      active,
-      succeeded,
-      failed
-    };
-  };
-
-  const appendSnapshot = (registry: Record<number, KnownJob>) => {
-    const snapshot = buildSnapshot(registry);
-    setDiagnosticsHistory((prev) => {
-      const next = [...prev, snapshot];
-      if (next.length <= DIAGNOSTICS_HISTORY_LIMIT) return next;
-      return next.slice(next.length - DIAGNOSTICS_HISTORY_LIMIT);
-    });
-  };
-
-  const upsertKnownJob = (jobId: number, jobType: KnownJobType, status: KnownJobStatus) => {
-    setKnownJobs((prev) => {
-      const next = { ...prev, [jobId]: { jobType, status } };
-      appendSnapshot(next);
-      return next;
-    });
-  };
 
   const extractOutputDocumentId = (job: Job): number | null => {
     if (!job.result_payload || typeof job.result_payload !== "object") {
@@ -126,54 +70,6 @@ export function DocumentsPage() {
     URL.revokeObjectURL(objectUrl);
   };
 
-  const runImport = async (mode: ImportMode) => {
-    if (!file) {
-      showError("Оберіть файл для імпорту");
-      setImportFieldError("Оберіть файл для імпорту");
-      setNotice({ tone: "error", text: "Оберіть файл для імпорту" });
-      return;
-    }
-    setImportFieldError(undefined);
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("update_existing_mode", mode);
-    setIsImporting(true);
-    try {
-      const job = await request<Job>("/documents/import", {
-        method: "POST",
-        body: formData
-      });
-      upsertKnownJob(job.id, "import", job.status);
-      setActiveJobId(job.id);
-      setActiveJobType("import");
-      setActiveJobStatus(job.status);
-      setOutputDocumentId(null);
-      showSuccess(job.message || "Імпорт запущено");
-      const modeLabel =
-        mode === "overwrite"
-          ? "перезапис існуючих"
-            : mode === "missing_only"
-              ? "додавання/дозаповнення відсутнього"
-            : "пропуск наявних";
-      setNotice({
-        tone: "success",
-        text: job.message || `Імпорт запущено (${modeLabel}). Перевірте статус задачі нижче.`
-      });
-    } catch (error) {
-      const message = (error as Error).message;
-      showError(message);
-      setNotice({ tone: "error", text: message });
-    } finally {
-      setIsImporting(false);
-    }
-  };
-
-  const uploadImport = async (event: FormEvent) => {
-    event.preventDefault();
-    await runImport("skip_existing");
-  };
-
   const runExport = async () => {
     const nextErrors: { reportType?: string; exportFormat?: string } = {};
     if (!ALLOWED_REPORT_TYPES.has(reportType)) {
@@ -195,7 +91,6 @@ export function DocumentsPage() {
         method: "POST",
         body: JSON.stringify({ report_type: reportType, export_format: exportFormat })
       });
-      upsertKnownJob(job.id, "export", job.status);
       setActiveJobId(job.id);
       setActiveJobType("export");
       setActiveJobStatus(job.status);
@@ -208,7 +103,7 @@ export function DocumentsPage() {
         setNotice({ tone: "success", text: "Звіт сформовано і завантажено. Файл доступний у завантаженнях браузера." });
       } else {
         showSuccess(job.message || "Експорт запущено");
-        setNotice({ tone: "success", text: job.message || "Експорт запущено. Перевірте статус задачі нижче." });
+        setNotice({ tone: "success", text: job.message || "Експорт запущено. Перевірте статус експорту нижче." });
       }
     } catch (error) {
       const message = (error as Error).message;
@@ -224,7 +119,6 @@ export function DocumentsPage() {
     setIsCheckingStatus(true);
     try {
       const response = await request<JobStatusPayload>(`/jobs/${activeJobId}`);
-      upsertKnownJob(response.job.id, response.job_type, response.job.status);
       setActiveJobType(response.job_type);
       setActiveJobStatus(response.job.status);
       const exportedDocumentId = extractOutputDocumentId(response.job);
@@ -239,7 +133,7 @@ export function DocumentsPage() {
           showSuccess("Звіт сформовано і завантажено");
           setNotice({ tone: "success", text: "Експорт виконано. Файл завантажено у завантаження браузера." });
         } else {
-          setNotice({ tone: "success", text: "Експорт виконано. Натисніть “Завантажити файл”, якщо потрібна ще одна копія." });
+          setNotice({ tone: "success", text: "Експорт виконано. Натисніть «Завантажити файл», якщо потрібна ще одна копія." });
         }
       } else {
         setNotice({ tone: "info", text: response.job.message || "Статус задачі оновлено" });
@@ -265,11 +159,6 @@ export function DocumentsPage() {
       setNotice({ tone: "error", text: "Експортований файл ще недоступний" });
       return;
     }
-    if (!accessToken) {
-      showError("Потрібна авторизація");
-      setNotice({ tone: "error", text: "Потрібна авторизація" });
-      return;
-    }
     setIsDownloading(true);
     try {
       await downloadDocument(outputDocumentId);
@@ -285,63 +174,23 @@ export function DocumentsPage() {
     }
   };
 
-  const seriesByKey = useMemo(
-    () => ({
-      total: diagnosticsHistory.map((item) => item.total),
-      active: diagnosticsHistory.map((item) => item.active),
-      succeeded: diagnosticsHistory.map((item) => item.succeeded),
-      failed: diagnosticsHistory.map((item) => item.failed)
-    }),
-    [diagnosticsHistory]
-  );
-
   return (
     <div className="space-y-5">
-      <Panel title="Імпорт документів (.xls, .xlsx, .pdf, .docx, .csv)">
-        <form className="flex flex-wrap items-center gap-3" onSubmit={uploadImport} aria-busy={isImporting}>
-          <FormField
-            label="Файл для імпорту"
-            required
-            helperText="Підтримуються .xls/.xlsx, .pdf, .docx, .csv"
-            errorText={importFieldError}
-          >
-            <input
-              type="file"
-              className={formControlClass}
-              accept=".xls,.xlsx,.pdf,.docx,.csv"
-              onChange={(event) => {
-                setFile(event.target.files?.[0] || null);
-                setImportFieldError(undefined);
-              }}
-              disabled={isImporting}
-              required
-            />
-          </FormField>
-          <button
-            type="submit"
-            disabled={isImporting}
-            className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
-          >
-            {isImporting ? "Завантаження..." : "Завантажити нові"}
-          </button>
-          <button
-            type="button"
-            disabled={isImporting}
-            className="rounded-lg border border-pine px-4 py-2 font-semibold text-pine disabled:opacity-50"
-            onClick={() => void runImport("missing_only")}
-          >
-            {isImporting ? "Дозаповнення..." : "Додати/дозаповнити"}
-          </button>
-          <button
-            type="button"
-            disabled={isImporting}
-            className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
-            onClick={() => void runImport("overwrite")}
-          >
-            {isImporting ? "Оновлення..." : "Оновити існуючих"}
-          </button>
-        </form>
+      <Panel title="Імпорт даних">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="max-w-2xl text-sm leading-6 text-slate-700">
+            <p>
+              Завантаження договорів, списків слухачів і розкладів виконується у центрі імпорту. Там можна спочатку
+              перевірити файл, обрати режим оновлення і побачити історію задач.
+            </p>
+            <p className="mt-2 font-semibold text-ink">Автоматичний імпорт: XLS/XLSX/CSV для слухачів, DOCX для розкладу.</p>
+          </div>
+          <Link className="rounded-lg bg-pine px-4 py-2 text-sm font-semibold text-white" to="/jobs">
+            Відкрити центр імпорту
+          </Link>
+        </div>
       </Panel>
+
       <Panel title="Експорт звітів (.xlsx, .pdf, .csv)">
         <StickyActionBar>
           <form
@@ -398,65 +247,46 @@ export function DocumentsPage() {
           </form>
         </StickyActionBar>
       </Panel>
-      <Panel title="Статус job">
-        {notice && <InlineNotice className="mb-3" tone={notice.tone} text={notice.text} />}
-        <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {[
-            { key: "total", title: "Усього задач", series: seriesByKey.total },
-            { key: "active", title: "Активні задачі", series: seriesByKey.active },
-            { key: "succeeded", title: "Успішні задачі", series: seriesByKey.succeeded },
-            { key: "failed", title: "Помилки задач", series: seriesByKey.failed }
-          ].map((item) => {
-            const current = item.series.length ? item.series[item.series.length - 1] : 0;
-            const previous = item.series.length > 1 ? item.series[item.series.length - 2] : null;
-            const delta = previous == null ? null : current - previous;
-            return (
-              <TrendStatCard
-                key={item.key}
-                title={item.title}
-                valueLabel={String(current)}
-                delta={delta}
-                series={item.series}
-                sparklineLabel={`${item.title}: тренд за останні оновлення`}
-              />
-            );
-          })}
-        </div>
-        <StickyActionBar>
-          <div className="flex flex-wrap items-center gap-3">
-            <p>
-              ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
-            </p>
-            <p>
-              Тип: <span className="font-semibold">{formatJobType(activeJobType)}</span>
-            </p>
-            <p>
-              Статус: <span className="font-semibold">{formatJobStatus(activeJobStatus)}</span>
-            </p>
-            <button
-              type="button"
-              className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
-              onClick={() => checkJob(true)}
-              disabled={!activeJobId || isCheckingStatus}
-            >
-              {isCheckingStatus ? "Оновлюємо..." : "Оновити статус"}
-            </button>
-            {activeJobType === "export" && outputDocumentId && activeJobStatus === "succeeded" && (
+
+      {(notice || activeJobId) && (
+        <Panel title="Статус експорту">
+          {notice && <InlineNotice className="mb-3" tone={notice.tone} text={notice.text} />}
+          <StickyActionBar>
+            <div className="flex flex-wrap items-center gap-3">
+              <p>
+                ID: <span className="font-semibold">{activeJobId ?? "—"}</span>
+              </p>
+              <p>
+                Тип: <span className="font-semibold">{formatJobType(activeJobType)}</span>
+              </p>
+              <p>
+                Статус: <span className="font-semibold">{formatJobStatus(activeJobStatus)}</span>
+              </p>
               <button
                 type="button"
-                className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
-                onClick={downloadOutput}
-                disabled={isDownloading}
+                className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
+                onClick={() => checkJob(true)}
+                disabled={!activeJobId || isCheckingStatus}
               >
-                {isDownloading ? "Завантажуємо..." : "Завантажити файл"}
+                {isCheckingStatus ? "Оновлюємо..." : "Оновити статус"}
               </button>
-            )}
-            <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
-              Відкрити центр задач
-            </Link>
-          </div>
-        </StickyActionBar>
-      </Panel>
+              {activeJobType === "export" && outputDocumentId && activeJobStatus === "succeeded" && (
+                <button
+                  type="button"
+                  className="rounded-lg bg-pine px-4 py-2 font-semibold text-white disabled:opacity-50"
+                  onClick={downloadOutput}
+                  disabled={isDownloading}
+                >
+                  {isDownloading ? "Завантажуємо..." : "Завантажити файл"}
+                </button>
+              )}
+              <Link className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" to="/jobs">
+                Відкрити центр задач
+              </Link>
+            </div>
+          </StickyActionBar>
+        </Panel>
+      )}
     </div>
   );
 }

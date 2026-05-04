@@ -101,8 +101,8 @@ test("job center shows jobs and allows refresh", async ({ page }) => {
   });
 
   await page.goto("/jobs");
-  await expect(page.getByText("Центр задач імпорту/експорту")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "1.1 Центр імпорту" })).toBeVisible();
   await expect(page.getByText("Експорт виконано")).toBeVisible();
   await page.getByRole("button", { name: "Оновити" }).first().click();
-  await expect(page.getByRole("cell", { name: "succeeded" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Успішно" })).toBeVisible();
 });

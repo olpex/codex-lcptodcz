@@ -109,6 +109,18 @@ def test_import_preview_summarizes_schedule_docx(client, auth_headers):
     assert payload["groups"][0]["teachers"] == 1
 
 
+def test_import_rejects_pdf_instead_of_creating_noop_job(client, auth_headers, db_session):
+    response = client.post(
+        "/api/v1/documents/import",
+        headers=auth_headers,
+        files={"file": ("group.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "PDF" in response.json()["detail"]
+    assert db_session.query(ImportJob).count() == 0
+
+
 def test_import_works_when_queue_is_unavailable(client, auth_headers, monkeypatch):
     def _raise_queue_error(job_id: int):
         raise RuntimeError("redis unavailable")

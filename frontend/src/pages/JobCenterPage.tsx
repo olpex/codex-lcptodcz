@@ -593,8 +593,13 @@ export function JobCenterPage() {
   return (
     <div className="space-y-5">
       <Panel title="1.1 Центр імпорту">
+        <InlineNotice
+          className="mb-4"
+          tone="info"
+          text="PDF наразі не імпортується автоматично. Для груп і розкладу використовуйте DOCX, для слухачів - XLS/XLSX/CSV."
+        />
         <div className="mb-4 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_auto_auto]">
-          <FormField label="Файл" helperText="Договір XLS/XLSX/CSV або розклад DOCX">
+          <FormField label="Файл" helperText="Файли XLS/XLSX/CSV/DOCX">
             <input
               type="file"
               className={formControlClass}

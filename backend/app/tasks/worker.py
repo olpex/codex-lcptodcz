@@ -91,6 +91,8 @@ def process_import_job_task(self, import_job_id: int) -> dict:
             skipped_slots = int(import_result.get("skipped_existing_slots") or 0)
             if created_slots <= 0 and skipped_groups <= 0 and skipped_slots <= 0:
                 raise ValueError("DOCX розклад оброблено, але жодного заняття не створено")
+        else:
+            raise ValueError("Автоматичний імпорт підтримує лише .xls/.xlsx, .csv та .docx")
 
         initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
         payload = {

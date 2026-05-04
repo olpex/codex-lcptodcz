@@ -28,6 +28,12 @@ from app.tasks.worker import process_export_job_task, process_import_job_task
 router = APIRouter()
 logger = get_task_logger(__name__)
 MAX_BATCH_IMPORT_FILES = 100
+IMPORTABLE_DOCUMENT_TYPES = {"xlsx", "docx", "csv"}
+IMPORTABLE_DOCUMENT_TYPES_LABEL = ".xls/.xlsx, .csv, .docx"
+PDF_IMPORT_UNSUPPORTED_MESSAGE = (
+    "PDF не підтримується для автоматичного імпорту. "
+    "Для слухачів завантажте .xls/.xlsx або .csv, для розкладу - .docx."
+)
 
 
 def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
@@ -79,6 +85,13 @@ def _display_upload_name(file: UploadFile, relative_path: str | None = None) -> 
     return safe_name[-255:]
 
 
+def _ensure_importable_document_type(doc_type) -> None:
+    if doc_type.value == "pdf":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=PDF_IMPORT_UNSUPPORTED_MESSAGE)
+    if doc_type.value not in IMPORTABLE_DOCUMENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Підтримуються {IMPORTABLE_DOCUMENT_TYPES_LABEL}")
+
+
 def _create_import_job(
     db: DbSession,
     current_user: CurrentUser,
@@ -92,6 +105,7 @@ def _create_import_job(
     relative_path: str | None = None,
 ) -> ImportJob:
     doc_type = detect_document_type(file.filename)
+    _ensure_importable_document_type(doc_type)
     path, sha256 = persist_upload(file)
     document = Document(
         file_name=_display_upload_name(file, relative_path),
@@ -131,8 +145,7 @@ def preview_import_document(
     file: UploadFile = File(...),
 ) -> ImportPreviewResponse:
     doc_type = detect_document_type(file.filename)
-    if doc_type.value not in {"xlsx", "pdf", "docx", "csv"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються .xls/.xlsx, .pdf, .docx, .csv")
+    _ensure_importable_document_type(doc_type)
 
     temp_path = _write_upload_to_temp(file)
     try:
@@ -217,15 +230,7 @@ def preview_import_document(
                 warnings=warnings,
             )
 
-        parsed = parse_document_content(temp_path, doc_type)
-        return ImportPreviewResponse(
-            filename=file.filename or "uploaded_file",
-            file_type=doc_type.value,
-            import_kind="text",
-            rows=int(parsed.get("rows") or 0),
-            preview=[{"text_preview": str(parsed.get("text_preview") or "")[:1000]}],
-            warnings=["PDF/DOCX-текст розпізнано, але автоматичний імпорт підтримує договори XLS/XLSX/CSV і розклади DOCX"],
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Підтримуються {IMPORTABLE_DOCUMENT_TYPES_LABEL}")
     finally:
         try:
             Path(temp_path).unlink(missing_ok=True)
@@ -247,8 +252,7 @@ def import_document(
     x_idempotency_key: str | None = Header(default=None),
 ) -> JobResponse:
     doc_type = detect_document_type(file.filename)
-    if doc_type.value not in {"xlsx", "pdf", "docx", "csv"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Підтримуються .xls/.xlsx, .pdf, .docx, .csv")
+    _ensure_importable_document_type(doc_type)
     if update_existing_mode not in IMPORT_UPDATE_MODES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некоректний режим імпорту")
 
