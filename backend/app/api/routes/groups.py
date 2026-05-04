@@ -9,7 +9,19 @@ from openpyxl.styles import Font
 from sqlalchemy import func, or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import AuditLog, Group, GroupMembership, MembershipStatus, Performance, RoleName, ScheduleSlot, Teacher, Trainee, User
+from app.models import (
+    AuditLog,
+    Group,
+    GroupMembership,
+    JournalMonitorEntry,
+    MembershipStatus,
+    Performance,
+    RoleName,
+    ScheduleSlot,
+    Teacher,
+    Trainee,
+    User,
+)
 from app.schemas.api import (
     ActiveGroupBetweenDatesResponse,
     EnrollRequest,
@@ -415,6 +427,20 @@ def delete_group(
         .filter(Performance.group_id == group_id)
         .delete(synchronize_session=False)
     )
+    cleared_journal_monitor_matches = (
+        db.query(JournalMonitorEntry)
+        .filter(
+            JournalMonitorEntry.branch_id == group.branch_id,
+            JournalMonitorEntry.matched_group_id == group_id,
+        )
+        .update(
+            {
+                "matched_group_id": None,
+                "has_group": False,
+            },
+            synchronize_session=False,
+        )
+    )
 
     db.delete(group)
     db.commit()
@@ -431,6 +457,7 @@ def delete_group(
             "deleted_schedule_slots": deleted_schedule_slots,
             "deleted_memberships": deleted_memberships,
             "deleted_performances": deleted_performances,
+            "cleared_journal_monitor_matches": cleared_journal_monitor_matches,
         },
     )
 

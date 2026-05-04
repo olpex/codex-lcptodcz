@@ -8,6 +8,8 @@ from app.models import (
     GroupMembership,
     GroupStatus,
     ImportJob,
+    JournalMonitorEntry,
+    JournalMonitorSection,
     JobStatus,
     MembershipStatus,
     OCRResult,
@@ -615,6 +617,43 @@ def test_delete_group_clears_trainee_group_code_when_trainees_kept(client, auth_
     assert trainee is not None
     assert trainee.is_deleted is False
     assert trainee.group_code is None
+
+
+def test_delete_group_clears_journal_monitor_match(client, auth_headers, db_session):
+    group_response = client.post(
+        "/api/v1/groups",
+        json={"code": "GRP-JOURNAL-001", "name": "Група з журналом", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    assert group_response.status_code == 201
+    group_id = group_response.json()["id"]
+
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали",
+        folder_url="https://drive.google.com/drive/folders/test",
+        folder_id="test",
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-file-1",
+        journal_name="Журнал GRP-JOURNAL-001",
+        group_code="GRP-JOURNAL-001",
+        matched_group_id=group_id,
+        has_group=True,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    delete_response = client.delete(f"/api/v1/groups/{group_id}", headers=auth_headers)
+    assert delete_response.status_code == 204
+
+    db_session.refresh(entry)
+    assert entry.matched_group_id is None
+    assert entry.has_group is False
 
 
 def test_clear_orphan_group_codes_endpoint(client, auth_headers):
