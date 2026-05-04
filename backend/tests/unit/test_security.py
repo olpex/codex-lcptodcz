@@ -1,4 +1,5 @@
 from app.core.crypto import cipher
+from app.core.config import settings
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -36,10 +37,13 @@ def test_access_and_refresh_tokens_decode():
     assert refresh_exp is not None
 
 
+def test_refresh_token_lifetime_keeps_sessions_across_long_breaks():
+    assert settings.refresh_token_expire_minutes >= 60 * 24 * 30
+
+
 def test_crypto_roundtrip():
     source = "test@example.com"
     encrypted = cipher.encrypt(source)
     assert encrypted and encrypted != source
     decrypted = cipher.decrypt(encrypted)
     assert decrypted == source
-

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     secret_key: str = Field(default="change-this-secret")
     access_token_expire_minutes: int = Field(default=60)
-    refresh_token_expire_minutes: int = Field(default=60 * 24 * 7)
+    refresh_token_expire_minutes: int = Field(default=60 * 24 * 30)
     jwt_algorithm: str = Field(default="HS256")
 
     database_url: str = Field(default="postgresql+psycopg2://suptc:suptc@postgres:5432/suptc")

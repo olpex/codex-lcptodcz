@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "../api/client";
 import type { TokenPair, User } from "../types/api";
 
@@ -34,6 +34,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const accessTokenRef = useRef<string | null>(null);
+  const refreshTokenRef = useRef<string | null>(null);
+  const refreshPromiseRef = useRef<Promise<string> | null>(null);
 
   const persistTokens = (tokens: PersistedAuth | null) => {
     if (!tokens) {
@@ -44,9 +47,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const applyTokenPair = (pair: TokenPair) => {
+    accessTokenRef.current = pair.access_token;
+    refreshTokenRef.current = pair.refresh_token;
     setAccessToken(pair.access_token);
     setRefreshToken(pair.refresh_token);
     persistTokens({ accessToken: pair.access_token, refreshToken: pair.refresh_token });
+  };
+
+  const clearAuth = () => {
+    accessTokenRef.current = null;
+    refreshTokenRef.current = null;
+    persistTokens(null);
+    setUser(null);
+    setAccessToken(null);
+    setRefreshToken(null);
   };
 
   const fetchMe = async (token: string) => {
@@ -55,13 +69,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const refresh = async (token: string): Promise<string> => {
-    const pair = await apiRequest<TokenPair>("/auth/refresh", {
-      method: "POST",
-      body: JSON.stringify({ refresh_token: token })
-    });
-    applyTokenPair(pair);
-    await fetchMe(pair.access_token);
-    return pair.access_token;
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    const refreshPromise = (async () => {
+      try {
+        const pair = await apiRequest<TokenPair>("/auth/refresh", {
+          method: "POST",
+          body: JSON.stringify({ refresh_token: token })
+        });
+        applyTokenPair(pair);
+        await fetchMe(pair.access_token);
+        return pair.access_token;
+      } catch (error) {
+        clearAuth();
+        const sessionError = new Error("Сесія завершилась. Увійдіть повторно.") as Error & { status?: number };
+        sessionError.status = (error as Error & { status?: number }).status ?? 401;
+        throw sessionError;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = refreshPromise;
+    return refreshPromise;
   };
 
   useEffect(() => {
@@ -71,6 +103,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
         return;
       }
+      accessTokenRef.current = stored.accessToken;
+      refreshTokenRef.current = stored.refreshToken;
       setAccessToken(stored.accessToken);
       setRefreshToken(stored.refreshToken);
       try {
@@ -79,10 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           await refresh(stored.refreshToken);
         } catch {
-          persistTokens(null);
-          setAccessToken(null);
-          setRefreshToken(null);
-          setUser(null);
+          clearAuth();
         }
       } finally {
         setIsLoading(false);
@@ -101,33 +132,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    if (refreshToken && accessToken) {
+    const currentRefreshToken = refreshTokenRef.current;
+    const currentAccessToken = accessTokenRef.current;
+    if (currentRefreshToken && currentAccessToken) {
       try {
         await apiRequest<void>("/auth/logout", {
           method: "POST",
-          token: accessToken,
-          body: JSON.stringify({ refresh_token: refreshToken })
+          token: currentAccessToken,
+          body: JSON.stringify({ refresh_token: currentRefreshToken })
         });
       } catch {
         // ignore logout failures
       }
     }
-    persistTokens(null);
-    setUser(null);
-    setAccessToken(null);
-    setRefreshToken(null);
+    clearAuth();
   };
 
   const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    if (!accessToken) {
+    const currentAccessToken = accessTokenRef.current;
+    if (!currentAccessToken) {
       throw new Error("Потрібна авторизація");
     }
     try {
-      return await apiRequest<T>(path, { ...init, token: accessToken });
+      return await apiRequest<T>(path, { ...init, token: currentAccessToken });
     } catch (error) {
       const err = error as Error & { status?: number };
-      if (err.status === 401 && refreshToken) {
-        const nextAccess = await refresh(refreshToken);
+      const currentRefreshToken = refreshTokenRef.current;
+      if (err.status === 401 && currentRefreshToken) {
+        const nextAccess = await refresh(currentRefreshToken);
         return apiRequest<T>(path, { ...init, token: nextAccess });
       }
       throw err;
@@ -149,4 +181,3 @@ export function useAuth() {
   }
   return ctx;
 }
-
