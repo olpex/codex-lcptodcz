@@ -199,6 +199,18 @@ class GroupUpdate(BaseModel):
     end_date: date | None = None
 
 
+class GroupBulkDeleteRequest(BaseModel):
+    group_ids: list[int] = Field(min_length=1, max_length=200)
+    delete_trainees: bool = False
+
+
+class GroupBulkDeleteResponse(BaseModel):
+    deleted_count: int
+    deleted_ids: list[int]
+    missing_ids: list[int]
+    deleted_trainees_count: int
+
+
 class GroupResponse(ORMModel):
     id: int
     branch_id: str

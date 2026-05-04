@@ -656,6 +656,65 @@ def test_delete_group_clears_journal_monitor_match(client, auth_headers, db_sess
     assert entry.has_group is False
 
 
+def test_bulk_delete_groups_archives_matching_trainees(client, auth_headers, db_session):
+    kept_group = Group(branch_id="main", code="KEEP-001", name="Залишається", status=GroupStatus.ACTIVE)
+    db_session.add(kept_group)
+    db_session.commit()
+
+    first_group = client.post(
+        "/api/v1/groups",
+        json={"code": "BULK-DEL-001", "name": "Перша група", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    second_group = client.post(
+        "/api/v1/groups",
+        json={"code": "BULK-DEL-002", "name": "Друга група", "capacity": 20, "status": "active"},
+        headers=auth_headers,
+    )
+    assert first_group.status_code == 201
+    assert second_group.status_code == 201
+    group_ids = [first_group.json()["id"], second_group.json()["id"]]
+
+    first_trainee = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Ірина", "last_name": "Перша", "status": "active", "group_code": "BULK-DEL-001"},
+        headers=auth_headers,
+    )
+    second_trainee = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Олег", "last_name": "Другий", "status": "active", "group_code": "BULK-DEL-002"},
+        headers=auth_headers,
+    )
+    kept_trainee = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Марія", "last_name": "Залишити", "status": "active", "group_code": "KEEP-001"},
+        headers=auth_headers,
+    )
+    assert first_trainee.status_code == 201
+    assert second_trainee.status_code == 201
+    assert kept_trainee.status_code == 201
+
+    response = client.post(
+        "/api/v1/groups/bulk/delete",
+        json={"group_ids": group_ids, "delete_trainees": True},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deleted_count"] == 2
+    assert set(payload["deleted_ids"]) == set(group_ids)
+    assert payload["missing_ids"] == []
+    assert all(db_session.get(Group, group_id) is None for group_id in group_ids)
+    assert db_session.get(Group, kept_group.id) is not None
+
+    archived_rows = client.get("/api/v1/trainees?include_deleted=true", headers=auth_headers).json()
+    archived_by_id = {item["id"]: item for item in archived_rows}
+    assert archived_by_id[first_trainee.json()["id"]]["is_deleted"] is True
+    assert archived_by_id[second_trainee.json()["id"]]["is_deleted"] is True
+    assert archived_by_id[kept_trainee.json()["id"]]["is_deleted"] is False
+
+
 def test_clear_orphan_group_codes_endpoint(client, auth_headers):
     valid_group_response = client.post(
         "/api/v1/groups",

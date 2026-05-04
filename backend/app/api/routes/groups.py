@@ -25,6 +25,8 @@ from app.models import (
 from app.schemas.api import (
     ActiveGroupBetweenDatesResponse,
     EnrollRequest,
+    GroupBulkDeleteRequest,
+    GroupBulkDeleteResponse,
     ExpelRequest,
     GroupAuditLogResponse,
     GroupCreate,
@@ -70,6 +72,77 @@ def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]])
             "end_date": response.end_date or end_date,
         }
     )
+
+
+def _delete_group_rows(db: DbSession, group: Group, delete_trainees: bool) -> dict[str, int | bool]:
+    deleted_trainees_count = 0
+    cleared_trainee_group_codes = 0
+    if delete_trainees and group.code:
+        now = datetime.now(timezone.utc)
+        trainees_to_delete = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == group.branch_id,
+                Trainee.group_code == group.code,
+                Trainee.is_deleted.is_(False),
+            )
+            .all()
+        )
+        for trainee in trainees_to_delete:
+            trainee.is_deleted = True
+            trainee.deleted_at = now
+            db.add(trainee)
+        deleted_trainees_count = len(trainees_to_delete)
+    if group.code:
+        cleared_trainee_group_codes = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == group.branch_id,
+                Trainee.group_code == group.code,
+            )
+            .update({"group_code": None}, synchronize_session=False)
+        )
+
+    deleted_schedule_slots = (
+        db.query(ScheduleSlot)
+        .filter(ScheduleSlot.group_id == group.id)
+        .delete(synchronize_session=False)
+    )
+    deleted_memberships = (
+        db.query(GroupMembership)
+        .filter(GroupMembership.group_id == group.id)
+        .delete(synchronize_session=False)
+    )
+    deleted_performances = (
+        db.query(Performance)
+        .filter(Performance.group_id == group.id)
+        .delete(synchronize_session=False)
+    )
+    cleared_journal_monitor_matches = (
+        db.query(JournalMonitorEntry)
+        .filter(
+            JournalMonitorEntry.branch_id == group.branch_id,
+            JournalMonitorEntry.matched_group_id == group.id,
+        )
+        .update(
+            {
+                "matched_group_id": None,
+                "has_group": False,
+            },
+            synchronize_session=False,
+        )
+    )
+
+    db.delete(group)
+    return {
+        "delete_trainees": delete_trainees,
+        "deleted_trainees_count": deleted_trainees_count,
+        "cleared_trainee_group_codes": cleared_trainee_group_codes,
+        "deleted_schedule_slots": deleted_schedule_slots,
+        "deleted_memberships": deleted_memberships,
+        "deleted_performances": deleted_performances,
+        "cleared_journal_monitor_matches": cleared_journal_monitor_matches,
+    }
 
 
 @router.get("", response_model=list[GroupResponse])
@@ -287,6 +360,61 @@ def create_group(payload: GroupCreate, db: DbSession, current_user: CurrentUser)
     return GroupResponse.model_validate(group)
 
 
+@router.post(
+    "/bulk/delete",
+    response_model=GroupBulkDeleteResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_delete_groups(
+    payload: GroupBulkDeleteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> GroupBulkDeleteResponse:
+    requested_ids = list(dict.fromkeys(payload.group_ids))
+    groups = (
+        apply_branch_scope(db.query(Group), Group, current_user.branch_id)
+        .filter(Group.id.in_(requested_ids))
+        .all()
+    )
+    groups_by_id = {group.id: group for group in groups}
+    target_groups = [groups_by_id[group_id] for group_id in requested_ids if group_id in groups_by_id]
+    if not target_groups:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групи для видалення не знайдено")
+
+    deleted_ids: list[int] = []
+    details_by_group: dict[str, dict[str, int | bool]] = {}
+    deleted_trainees_count = 0
+    for group in target_groups:
+        details = _delete_group_rows(db, group, payload.delete_trainees)
+        deleted_ids.append(group.id)
+        details_by_group[str(group.id)] = details
+        deleted_trainees_count += int(details["deleted_trainees_count"])
+
+    db.commit()
+    missing_ids = [group_id for group_id in requested_ids if group_id not in groups_by_id]
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="group.bulk_delete",
+        entity_type="group_batch",
+        entity_id=",".join(str(item) for item in deleted_ids[:20]),
+        details={
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+            "missing_ids": missing_ids,
+            "delete_trainees": payload.delete_trainees,
+            "deleted_trainees_count": deleted_trainees_count,
+            "groups": details_by_group,
+        },
+    )
+    return GroupBulkDeleteResponse(
+        deleted_count=len(deleted_ids),
+        deleted_ids=deleted_ids,
+        missing_ids=missing_ids,
+        deleted_trainees_count=deleted_trainees_count,
+    )
+
+
 @router.get("/{group_id}", response_model=GroupResponse)
 def get_group(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupResponse:
     group = db.get(Group, group_id)
@@ -383,66 +511,7 @@ def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
     ensure_same_branch(current_user, group, "Групу")
 
-    deleted_trainees_count = 0
-    cleared_trainee_group_codes = 0
-    if delete_trainees and group.code:
-        now = datetime.now(timezone.utc)
-        trainees_to_delete = (
-            db.query(Trainee)
-            .filter(
-                Trainee.branch_id == group.branch_id,
-                Trainee.group_code == group.code,
-                Trainee.is_deleted.is_(False),
-            )
-            .all()
-        )
-        for trainee in trainees_to_delete:
-            trainee.is_deleted = True
-            trainee.deleted_at = now
-            db.add(trainee)
-        deleted_trainees_count = len(trainees_to_delete)
-    if group.code:
-        cleared_trainee_group_codes = (
-            db.query(Trainee)
-            .filter(
-                Trainee.branch_id == group.branch_id,
-                Trainee.group_code == group.code,
-            )
-            .update({"group_code": None}, synchronize_session=False)
-        )
-
-    # Explicitly clean related rows to avoid FK violations in production DBs.
-    deleted_schedule_slots = (
-        db.query(ScheduleSlot)
-        .filter(ScheduleSlot.group_id == group_id)
-        .delete(synchronize_session=False)
-    )
-    deleted_memberships = (
-        db.query(GroupMembership)
-        .filter(GroupMembership.group_id == group_id)
-        .delete(synchronize_session=False)
-    )
-    deleted_performances = (
-        db.query(Performance)
-        .filter(Performance.group_id == group_id)
-        .delete(synchronize_session=False)
-    )
-    cleared_journal_monitor_matches = (
-        db.query(JournalMonitorEntry)
-        .filter(
-            JournalMonitorEntry.branch_id == group.branch_id,
-            JournalMonitorEntry.matched_group_id == group_id,
-        )
-        .update(
-            {
-                "matched_group_id": None,
-                "has_group": False,
-            },
-            synchronize_session=False,
-        )
-    )
-
-    db.delete(group)
+    details = _delete_group_rows(db, group, delete_trainees)
     db.commit()
     write_audit(
         db,
@@ -450,15 +519,7 @@ def delete_group(
         action="group.delete",
         entity_type="group",
         entity_id=str(group_id),
-        details={
-            "delete_trainees": delete_trainees,
-            "deleted_trainees_count": deleted_trainees_count,
-            "cleared_trainee_group_codes": cleared_trainee_group_codes,
-            "deleted_schedule_slots": deleted_schedule_slots,
-            "deleted_memberships": deleted_memberships,
-            "deleted_performances": deleted_performances,
-            "cleared_journal_monitor_matches": cleared_journal_monitor_matches,
-        },
+        details=details,
     )
 
 

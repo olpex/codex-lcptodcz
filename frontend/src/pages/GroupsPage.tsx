@@ -40,6 +40,13 @@ type GroupDetailTeacher = {
   hours: number;
 };
 
+type GroupBulkDeleteResponse = {
+  deleted_count: number;
+  deleted_ids: number[];
+  missing_ids: number[];
+  deleted_trainees_count: number;
+};
+
 const TRAINEE_STATUS_LABELS: Record<string, string> = {
   active: "Активний",
   completed: "Завершив",
@@ -583,31 +590,29 @@ export function GroupsPage() {
   const confirmBulkDeleteGroups = async () => {
     if (!selectedGroupCount || isBulkDeleting) return;
     setIsBulkDeleting(true);
-    const failures: string[] = [];
-    const deletedIds: number[] = [];
     try {
-      const params = bulkDeleteTrainees ? "?delete_trainees=true" : "";
-      for (const group of selectedGroups) {
-        try {
-          await request(`/groups/${group.id}${params}`, { method: "DELETE" });
-          deletedIds.push(group.id);
-        } catch (error) {
-          failures.push(`${group.code}: ${(error as Error).message}`);
-        }
-      }
+      const response = await request<GroupBulkDeleteResponse>("/groups/bulk/delete", {
+        method: "POST",
+        body: JSON.stringify({
+          group_ids: selectedGroups.map((group) => group.id),
+          delete_trainees: bulkDeleteTrainees
+        })
+      });
       setSelectedGroupIds((prev) => {
         const next = { ...prev };
-        deletedIds.forEach((id) => delete next[id]);
+        response.deleted_ids.forEach((id) => delete next[id]);
         return next;
       });
       await loadGroups();
-      if (failures.length) {
-        showError(`Не вдалося видалити груп: ${failures.length}. ${failures[0]}`);
+      if (response.missing_ids.length) {
+        showError(`Видалено груп: ${response.deleted_count}. Не знайдено: ${response.missing_ids.length}`);
       } else {
         const suffix = bulkDeleteTrainees ? " разом зі слухачами" : "";
-        showSuccess(`Видалено груп: ${deletedIds.length}${suffix}`);
+        showSuccess(`Видалено груп: ${response.deleted_count}${suffix}`);
         closeBulkDeleteDialog();
       }
+    } catch (error) {
+      showError((error as Error).message);
     } finally {
       setIsBulkDeleting(false);
     }
