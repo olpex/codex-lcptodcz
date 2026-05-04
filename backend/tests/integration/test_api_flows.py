@@ -529,6 +529,63 @@ def test_bulk_archive_restore_flow(client, auth_headers):
     assert all(row["deleted_at"] is None for row in restored_by_id.values())
 
 
+def test_bulk_purge_trainees_removes_rows_and_related_history(client, auth_headers, db_session):
+    group = Group(branch_id="main", code="PURGE-001", name="Група для видалення слухачів", status=GroupStatus.ACTIVE)
+    db_session.add(group)
+    db_session.commit()
+
+    first = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Анна", "last_name": "Видалити", "status": "active", "group_code": "PURGE-001"},
+        headers=auth_headers,
+    )
+    second = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Петро", "last_name": "Видалити", "status": "active", "group_code": "PURGE-001"},
+        headers=auth_headers,
+    )
+    kept = client.post(
+        "/api/v1/trainees",
+        json={"first_name": "Марія", "last_name": "Залишити", "status": "active", "group_code": "PURGE-001"},
+        headers=auth_headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert kept.status_code == 201
+    purge_ids = [first.json()["id"], second.json()["id"]]
+    kept_id = kept.json()["id"]
+    db_session.add_all(
+        [
+            GroupMembership(group_id=group.id, trainee_id=purge_ids[0], status=MembershipStatus.ACTIVE),
+            GroupMembership(group_id=group.id, trainee_id=purge_ids[1], status=MembershipStatus.ACTIVE),
+            Performance(branch_id="main", trainee_id=purge_ids[0], group_id=group.id, progress_pct=50, attendance_pct=80),
+        ]
+    )
+    db_session.commit()
+
+    purge_response = client.post(
+        "/api/v1/trainees/bulk/purge",
+        json={"trainee_ids": purge_ids},
+        headers=auth_headers,
+    )
+
+    assert purge_response.status_code == 200
+    payload = purge_response.json()
+    assert payload["purged_count"] == 2
+    assert set(payload["purged_ids"]) == set(purge_ids)
+    assert payload["missing_ids"] == []
+    assert all(db_session.get(Trainee, trainee_id) is None for trainee_id in purge_ids)
+    assert db_session.get(Trainee, kept_id) is not None
+    assert db_session.query(GroupMembership).filter(GroupMembership.trainee_id.in_(purge_ids)).count() == 0
+    assert db_session.query(Performance).filter(Performance.trainee_id.in_(purge_ids)).count() == 0
+
+    purge_all_response = client.post("/api/v1/trainees/bulk/purge-all", headers=auth_headers)
+
+    assert purge_all_response.status_code == 200
+    assert purge_all_response.json()["purged_count"] == 1
+    assert db_session.query(Trainee).count() == 0
+
+
 def test_delete_group_cleans_related_rows(client, auth_headers, db_session):
     trainee_response = client.post(
         "/api/v1/trainees",

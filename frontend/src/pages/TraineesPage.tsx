@@ -52,12 +52,19 @@ type BulkRestoreResponse = {
   restored_ids: number[];
 };
 
+type BulkPurgeResponse = {
+  purged_count: number;
+  purged_ids: number[];
+  missing_ids: number[];
+};
+
 type ClearOrphanGroupsResponse = {
   cleared_count: number;
   cleared_ids: number[];
 };
 
 type TraineeProblemFilter = "all" | "unassigned" | "orphan_group" | "archived";
+type TraineePurgeMode = "selected" | "all";
 
 const TRAINEE_STATUS_OPTIONS = [
   { value: "active", label: "Активний" },
@@ -153,6 +160,8 @@ export function TraineesPage() {
   const [editErrors, setEditErrors] = useState<{ firstName?: string; lastName?: string; sourceRowNumber?: string }>({});
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [archiveTargetIds, setArchiveTargetIds] = useState<number[]>([]);
+  const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
+  const [purgeMode, setPurgeMode] = useState<TraineePurgeMode>("selected");
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -503,6 +512,55 @@ export function TraineesPage() {
     }
   };
 
+  const openPurgeSelectedDialog = () => {
+    if (!selectedIds.length) {
+      showError("Виберіть щонайменше одного слухача");
+      return;
+    }
+    setPurgeMode("selected");
+    setPurgeDialogOpen(true);
+  };
+
+  const openPurgeAllDialog = () => {
+    setPurgeMode("all");
+    setPurgeDialogOpen(true);
+  };
+
+  const closePurgeDialog = () => {
+    if (isBulkUpdating) return;
+    setPurgeDialogOpen(false);
+  };
+
+  const runPurgeTrainees = async () => {
+    if (isBulkUpdating) return;
+    if (purgeMode === "selected" && !selectedIds.length) {
+      closePurgeDialog();
+      return;
+    }
+    setIsBulkUpdating(true);
+    try {
+      const response =
+        purgeMode === "all"
+          ? await request<BulkPurgeResponse>("/trainees/bulk/purge-all", { method: "POST" })
+          : await request<BulkPurgeResponse>("/trainees/bulk/purge", {
+              method: "POST",
+              body: JSON.stringify({ trainee_ids: selectedIds })
+            });
+      await fetchTrainees(search);
+      clearSelection();
+      showSuccess(
+        purgeMode === "all"
+          ? `Видалено всіх слухачів: ${response.purged_count}`
+          : `Видалено слухачів: ${response.purged_count}`
+      );
+      setPurgeDialogOpen(false);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
   const runClearOrphanGroupCodes = async () => {
     if (!canEdit) return;
     const unassignedCount = trainees.filter((item) => !item.is_deleted && !(item.group_code || "").trim()).length;
@@ -630,6 +688,23 @@ export function TraineesPage() {
     const hasMore = targetRows.length > 2 ? ` та ще ${targetRows.length - 2}` : "";
     return `Підтвердьте архівування: ${preview}${hasMore}.`;
   }, [archiveTargetIds, trainees]);
+
+  const purgeDialogDescription = useMemo(() => {
+    if (purgeMode === "all") {
+      return "Видалити всіх слухачів поточної філії з реєстру та історії? Пов'язані записи членства й успішності також буде видалено.";
+    }
+    if (!selectedIds.length) return "Оберіть слухачів для видалення.";
+    const targetRows = trainees.filter((item) => selectedIds.includes(item.id));
+    if (!targetRows.length) {
+      return `Підтвердьте видалення ${selectedIds.length} запис(ів). Цю дію не можна скасувати.`;
+    }
+    const preview = targetRows
+      .slice(0, 2)
+      .map((item) => buildDisplayName(item))
+      .join(", ");
+    const hasMore = targetRows.length > 2 ? ` та ще ${targetRows.length - 2}` : "";
+    return `Видалити з реєстру: ${preview}${hasMore}? Цю дію не можна скасувати.`;
+  }, [purgeMode, selectedIds, trainees]);
 
   return (
     <div className="space-y-5">
@@ -821,6 +896,20 @@ export function TraineesPage() {
                   disabled={isBulkUpdating || !selectedActiveIds.length}
                 >
                   Архівувати вибраних
+                </button>
+                <button
+                  className="rounded-lg bg-red-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={openPurgeSelectedDialog}
+                  disabled={isBulkUpdating || !selectedIds.length}
+                >
+                  Видалити слухача
+                </button>
+                <button
+                  className="rounded-lg bg-red-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={openPurgeAllDialog}
+                  disabled={isBulkUpdating}
+                >
+                  Видалити всіх слухачів
                 </button>
               </>
             )}
@@ -1100,6 +1189,17 @@ export function TraineesPage() {
         onCancel={closeBulkArchiveDialog}
         confirmVariant="danger"
         confirmDisabled={isBulkUpdating}
+      />
+      <ConfirmDialog
+        open={purgeDialogOpen}
+        title={purgeMode === "all" ? "Видалити всіх слухачів?" : "Видалити слухача?"}
+        description={purgeDialogDescription}
+        confirmLabel={isBulkUpdating ? "Видалення..." : purgeMode === "all" ? "Видалити всіх" : "Видалити"}
+        cancelLabel="Скасувати"
+        onConfirm={runPurgeTrainees}
+        onCancel={closePurgeDialog}
+        confirmVariant="danger"
+        confirmDisabled={isBulkUpdating || (purgeMode === "selected" && !selectedIds.length)}
       />
     </div>
   );

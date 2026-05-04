@@ -5,12 +5,14 @@ from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
-from app.models import Group, RoleName, Trainee
+from app.models import Group, GroupMembership, Performance, RoleName, Trainee
 from app.schemas.api import (
     TraineeBulkDeleteRequest,
     TraineeBulkDeleteResponse,
     TraineeBulkGroupUpdateRequest,
     TraineeBulkGroupUpdateResponse,
+    TraineeBulkPurgeRequest,
+    TraineeBulkPurgeResponse,
     TraineeBulkRestoreRequest,
     TraineeBulkRestoreResponse,
     TraineeBulkStatusUpdateRequest,
@@ -54,6 +56,14 @@ def _to_response(trainee: Trainee) -> TraineeResponse:
         created_at=trainee.created_at,
         updated_at=trainee.updated_at,
     )
+
+
+def _purge_trainee_ids(db: DbSession, trainee_ids: list[int]) -> None:
+    if not trainee_ids:
+        return
+    db.query(GroupMembership).filter(GroupMembership.trainee_id.in_(trainee_ids)).delete(synchronize_session=False)
+    db.query(Performance).filter(Performance.trainee_id.in_(trainee_ids)).delete(synchronize_session=False)
+    db.query(Trainee).filter(Trainee.id.in_(trainee_ids)).delete(synchronize_session=False)
 
 
 @router.get("", response_model=list[TraineeResponse])
@@ -320,6 +330,68 @@ def bulk_restore_trainees(
         details={"restored_count": len(restored_ids)},
     )
     return TraineeBulkRestoreResponse(restored_count=len(restored_ids), restored_ids=restored_ids)
+
+
+@router.post(
+    "/bulk/purge",
+    response_model=TraineeBulkPurgeResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_purge_trainees(
+    payload: TraineeBulkPurgeRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> TraineeBulkPurgeResponse:
+    requested_ids = list(dict.fromkeys(payload.trainee_ids))
+    target_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.id.in_(requested_ids))
+        .all()
+    )
+    if not target_rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Слухачів для видалення не знайдено")
+
+    found_ids = {item.id for item in target_rows}
+    purged_ids = [trainee_id for trainee_id in requested_ids if trainee_id in found_ids]
+    missing_ids = [trainee_id for trainee_id in requested_ids if trainee_id not in found_ids]
+    _purge_trainee_ids(db, purged_ids)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_purge",
+        entity_type="trainee_batch",
+        entity_id=",".join(str(item) for item in purged_ids[:20]),
+        details={"purged_count": len(purged_ids), "missing_ids": missing_ids},
+    )
+    return TraineeBulkPurgeResponse(purged_count=len(purged_ids), purged_ids=purged_ids, missing_ids=missing_ids)
+
+
+@router.post(
+    "/bulk/purge-all",
+    response_model=TraineeBulkPurgeResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_purge_all_trainees(db: DbSession, current_user: CurrentUser) -> TraineeBulkPurgeResponse:
+    purged_ids = [
+        item.id
+        for item in apply_branch_scope(db.query(Trainee.id), Trainee, current_user.branch_id)
+        .order_by(Trainee.id.asc())
+        .all()
+    ]
+    _purge_trainee_ids(db, purged_ids)
+    db.commit()
+
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_purge_all",
+        entity_type="trainee_batch",
+        entity_id="all",
+        details={"purged_count": len(purged_ids)},
+    )
+    return TraineeBulkPurgeResponse(purged_count=len(purged_ids), purged_ids=purged_ids, missing_ids=[])
 
 
 @router.post(

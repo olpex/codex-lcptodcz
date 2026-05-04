@@ -172,6 +172,16 @@ class TraineeBulkRestoreResponse(BaseModel):
     restored_ids: list[int]
 
 
+class TraineeBulkPurgeRequest(BaseModel):
+    trainee_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class TraineeBulkPurgeResponse(BaseModel):
+    purged_count: int
+    purged_ids: list[int]
+    missing_ids: list[int]
+
+
 class TraineeClearOrphanGroupsResponse(BaseModel):
     cleared_count: int
     cleared_ids: list[int]
