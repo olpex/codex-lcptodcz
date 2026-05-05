@@ -1,6 +1,11 @@
 from datetime import date
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from app.api.deps import CurrentUser, DbSession, require_roles
 from app.models import RoleName, ScheduleSlot, Teacher
@@ -30,6 +35,77 @@ def get_workload(
         )
         for row in summary
     ]
+
+
+@router.get("/export-summary")
+def export_workload_summary(
+    db: DbSession,
+    current_user: CurrentUser,
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+) -> StreamingResponse:
+    rows = collect_teacher_workload_summary(db, current_user.branch_id, date_from=date_from, date_to=date_to)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Піднавантаження"
+    headers = ["Викладач", "Поточні години", "Річний план", "Залишок годин"]
+    sheet.append(headers)
+
+    for row in rows:
+        sheet.append(
+            [
+                row["teacher_name"],
+                row["total_hours"],
+                row["annual_load_hours"],
+                row["remaining_hours"],
+            ]
+        )
+
+    header_fill = PatternFill("solid", fgColor="E8F1F4")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="1F3349")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for row in sheet.iter_rows(min_row=2, min_col=2, max_col=4):
+        for cell in row:
+            cell.alignment = Alignment(horizontal="right")
+        remaining_cell = row[2]
+        if isinstance(remaining_cell.value, (int, float)) and remaining_cell.value < 0:
+            remaining_cell.font = Font(bold=True, color="DC2626")
+        else:
+            remaining_cell.font = Font(bold=True, color="0F5132")
+
+    widths = {
+        "A": 42,
+        "B": 16,
+        "C": 16,
+        "D": 16,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = "A2"
+    sheet.page_setup.orientation = "portrait"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+
+    if rows:
+        table = Table(displayName="TeacherWorkloadSummary", ref=f"A1:D{len(rows) + 1}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        sheet.add_table(table)
+
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    date_from_part = date_from.isoformat() if date_from else "all"
+    date_to_part = date_to.isoformat() if date_to else "all"
+    filename = f"teacher_workload_summary_{date_from_part}_{date_to_part}.xlsx"
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

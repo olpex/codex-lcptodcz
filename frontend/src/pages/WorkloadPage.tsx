@@ -41,6 +41,7 @@ function splitTeacherName(value: string): { lastName: string; firstName: string 
 export function WorkloadPage() {
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [isPrintingSummary, setIsPrintingSummary] = useState(false);
   const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [rows, setRows] = useState<Workload[]>([]);
@@ -307,6 +308,40 @@ export function WorkloadPage() {
     }
   };
 
+  const handlePrintSummary = async () => {
+    setIsPrintingSummary(true);
+    try {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const response = await fetch(`${API_URL}/teacher-workload/export-summary${query}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!response.ok) {
+        throw new Error(`Не вдалося сформувати зведення (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+      const fileName = fileNameMatch?.[1] || "teacher_workload_summary.xlsx";
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+      showSuccess("Зведення піднавантаження завантажено");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsPrintingSummary(false);
+    }
+  };
+
   const columns: DataTableColumn<Workload>[] = [
     {
       key: "select",
@@ -524,6 +559,14 @@ export function WorkloadPage() {
               {isExporting ? "Формування..." : selectedTeacherIds.length > 0 ? `Експорт обраних (${selectedTeacherIds.length})` : "Експорт всіх"}
             </button>
           )}
+          <button
+            type="button"
+            className="rounded-lg border border-pine bg-white px-4 py-2 font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+            onClick={handlePrintSummary}
+            disabled={isPrintingSummary || rows.length === 0}
+          >
+            {isPrintingSummary ? "Формування..." : "Друк піднавантаження"}
+          </button>
         </div>
         <DataTable
           data={rows}

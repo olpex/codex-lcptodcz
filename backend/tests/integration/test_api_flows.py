@@ -1,4 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 from app.models import (
     Document,
@@ -173,6 +176,74 @@ def test_schedule_workload_and_kpi_flow(client, auth_headers):
     kpi_payload = kpi_response.json()
     assert kpi_payload["active_groups"] >= 1
     assert "facility_load_pct" not in kpi_payload
+
+
+def test_teacher_workload_summary_export_is_single_printable_sheet(client, auth_headers, db_session):
+    first_teacher = Teacher(
+        branch_id="main",
+        first_name="Галина Михайлівна",
+        last_name="Войтехівська",
+        hourly_rate=0,
+        annual_load_hours=180,
+        is_active=True,
+    )
+    second_teacher = Teacher(
+        branch_id="main",
+        first_name="Роман Йосипович",
+        last_name="Бубняк",
+        hourly_rate=0,
+        annual_load_hours=0,
+        is_active=True,
+    )
+    group = Group(branch_id="main", code="PRINT-001", name="Група для друку", status=GroupStatus.ACTIVE)
+    subject = Subject(branch_id="main", name="Предмет для друку", hours_total=20)
+    room = Room(branch_id="main", name="Аудиторія друку", capacity=20)
+    db_session.add_all([first_teacher, second_teacher, group, subject, room])
+    db_session.flush()
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=first_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(hours=2),
+                pair_number=1,
+                academic_hours=10,
+            ),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=second_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(hours=2),
+                pair_number=2,
+                academic_hours=4,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/teacher-workload/export-summary", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    assert workbook.sheetnames == ["Піднавантаження"]
+    sheet = workbook["Піднавантаження"]
+    assert [cell.value for cell in sheet[1]] == ["Викладач", "Поточні години", "Річний план", "Залишок годин"]
+    values = {
+        row[0]: row[1:]
+        for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, values_only=True)
+        if row[0]
+    }
+    assert values["Войтехівська Галина Михайлівна"] == (10, 180, 170)
+    assert values["Бубняк Роман Йосипович"] == (4, 0, -4)
 
 
 def test_dashboard_kpi_excludes_archived_trainees_from_active_count(client, auth_headers, db_session):
