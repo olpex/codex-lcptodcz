@@ -7,10 +7,10 @@
 | Роль | Акаунт |
 |------|--------|
 | **Отримувач** (скринька, яку читає Flow) | `lcptodcz.audyt@gmail.com` |
-| **Відправник** (від кого приходять договори) | `lcptodcz@gmail.com` |
+| **Відправник** (від кого приходять договори) | `lcptodcz@gmail.com` або `olppara@gmail.com` |
 
 OAuth 2.0 токен (`gmailAccessToken`) має бути виданий для акаунту **`lcptodcz.audyt@gmail.com`**.  
-Flow читає вхідні листи цієї скриньки та шукає листи **від `lcptodcz@gmail.com`** з вкладеннями `Договори*.xlsx`.
+Flow читає вхідні листи цієї скриньки та шукає листи **від `lcptodcz@gmail.com` або `olppara@gmail.com`** з вкладеннями `Договори*.xlsx`.
 
 ## Архітектура workflow
 
@@ -20,7 +20,7 @@ Flow читає вхідні листи цієї скриньки та шука�
   ▼
 [GET] List messages (Договори)
   https://gmail.googleapis.com/gmail/v1/users/me/messages
-  ?q=from:lcptodcz@gmail.com has:attachment
+  ?q={from:lcptodcz@gmail.com from:olppara@gmail.com} has:attachment
   │  (читає скриньку lcptodcz.audyt@gmail.com)
   ├─ Has messages? ──[ELSE]──► "No messages found" (кінець)
   │
@@ -101,6 +101,7 @@ Backend автоматично виконує нормалізацію пере�
 |--------|---------|
 | `MAIL_WEBHOOK_SECRET` | Секрет для авторизації запитів від Postman Flow |
 | `IMAP_CONTRACT_SENDER_EMAIL` | `lcptodcz@gmail.com` |
+| `IMAP_CONTRACT_SENDER_ALIASES` | `olppara@gmail.com` |
 | `IMAP_CONTRACT_SENDER_NAME` | `Львівський центр ПТО ДСЗ` |
 | `IMAP_CONTRACT_ATTACHMENT_PREFIX` | `Договори` |
 | `IMAP_CONTRACT_UPDATE_MODE` | `overwrite` або `skip` |
@@ -132,9 +133,9 @@ Backend автоматично виконує нормалізацію пере�
 
 ## Як перевірити
 
-1. Надішліть лист **від** `lcptodcz@gmail.com` **на** `lcptodcz.audyt@gmail.com` з вкладенням `Договори*.xlsx`.
+1. Надішліть лист **від** `lcptodcz@gmail.com` або `olppara@gmail.com` **на** `lcptodcz.audyt@gmail.com` з вкладенням `Договори*.xlsx`.
 2. Запустіть Postman Flow кнопкою **Run**.
-3. Flow знайде листи від `lcptodcz@gmail.com` у скриньці `lcptodcz.audyt@gmail.com`.
+3. Flow знайде листи від налаштованих адрес у скриньці `lcptodcz.audyt@gmail.com`.
 4. Перевірте `/jobs` у додатку — має з'явитись новий імпорт з джерелом `mail_gmail_api`.
 5. Перевірте `/trainees` на нових/оновлених слухачів.
 

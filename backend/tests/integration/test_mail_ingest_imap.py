@@ -373,6 +373,40 @@ def test_ingest_mailbox_reprocesses_unread_schedule_even_when_group_has_other_sl
     assert len(imported_slots) == 2
 
 
+def test_ingest_mailbox_auto_imports_schedule_from_forwarding_address(db_session, monkeypatch, tmp_path: Path):
+    schedule_path = _build_schedule_docx(tmp_path)
+    raw_message = _build_message_with_attachment(
+        sender="OLP Para <olppara@gmail.com>",
+        filename="Розклад 162-25.docx",
+        payload=schedule_path.read_bytes(),
+        subtype="vnd.openxmlformats-officedocument.wordprocessingml.document",
+        message_id="<test-message-forwarded-schedule@example.com>",
+    )
+    fake_client = FakeIMAP4SSL(raw_message)
+
+    monkeypatch.setattr(mail_ingest.settings, "imap_host", "imap.example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_port", 993)
+    monkeypatch.setattr(mail_ingest.settings, "imap_user", "inbox@example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_password", "secret")
+    monkeypatch.setattr(mail_ingest.settings, "imap_mailbox", "INBOX")
+    monkeypatch.setattr(mail_ingest.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_ingest.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_ingest.imaplib, "IMAP4_SSL", lambda host, port: fake_client)
+
+    result = mail_ingest.ingest_mailbox(db_session)
+    assert result["processed"] == 1
+
+    import_job = db_session.query(ImportJob).order_by(ImportJob.id.desc()).first()
+    assert import_job is not None
+    assert import_job.status == JobStatus.SUCCEEDED
+    assert import_job.result_payload is not None
+    assert import_job.result_payload.get("source") == "mail_auto_schedules"
+    assert import_job.result_payload.get("sender_email") == "olppara@gmail.com"
+
+    group = db_session.query(Group).filter(Group.code == "162-25").one()
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 2
+
+
 def test_ingest_mailbox_processes_two_messages_with_same_message_id(db_session, monkeypatch, tmp_path: Path):
     duplicated_message_id = "<same-message-id@example.com>"
     raw_message_one = _build_message_with_explicit_id_and_docx(

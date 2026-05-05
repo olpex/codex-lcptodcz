@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     imap_allowed_senders: str = Field(default="")
     imap_contract_sender_name: str = Field(default="Львівський центр ПТО ДСЗ")
     imap_contract_sender_email: str = Field(default="lcptodcz@gmail.com")
+    imap_contract_sender_aliases: str = Field(default="olppara@gmail.com")
     imap_contract_attachment_prefix: str = Field(default="Договори")
     imap_contract_update_mode: str = Field(default="overwrite")
     cron_secret: str = Field(default="")
@@ -78,6 +79,18 @@ class Settings(BaseSettings):
     @property
     def imap_contract_sender_email_normalized(self) -> str:
         return self.imap_contract_sender_email.strip().lower()
+
+    @property
+    def imap_contract_sender_aliases_normalized(self) -> List[str]:
+        return [part.strip().lower() for part in self.imap_contract_sender_aliases.split(",") if part.strip()]
+
+    @property
+    def imap_contract_sender_emails_normalized(self) -> List[str]:
+        emails: List[str] = []
+        for email in [self.imap_contract_sender_email_normalized, *self.imap_contract_sender_aliases_normalized]:
+            if email and email not in emails:
+                emails.append(email)
+        return emails
 
 
 @lru_cache

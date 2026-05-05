@@ -4,8 +4,8 @@
 
 | Тип файлу | Правило | Endpoint |
 |---|---|---|
-| Договори (`.xls/.xlsx`) | *Будь-який Excel-файл від `lcptodcz@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
-| Розклади (`.docx`) | *Будь-який Word-файл від `lcptodcz@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
+| Договори (`.xls/.xlsx`) | *Будь-який Excel-файл від `lcptodcz@gmail.com` або `olppara@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
+| Розклади (`.docx`) | *Будь-який Word-файл від `lcptodcz@gmail.com` або `olppara@gmail.com`* | `/mail/gmail-api-webhook/contracts` |
 
 > Один запуск Apps Script = один файл. Якщо в листі 3 придатні вкладення, скрипт ставить у внутрішню чергу 3 файли й обробляє їх по одному в наступних сесіях.
 
@@ -16,6 +16,7 @@
 | `MAIL_WEBHOOK_SECRET` | довгий випадковий секрет |
 | `IMAP_CONTRACT_SENDER_NAME` | `Львівський центр ПТО ДСЗ` |
 | `IMAP_CONTRACT_SENDER_EMAIL` | `lcptodcz@gmail.com` |
+| `IMAP_CONTRACT_SENDER_ALIASES` | `olppara@gmail.com` |
 | `IMAP_CONTRACT_ATTACHMENT_PREFIX` | не використовується для Apps Script |
 | `IMAP_CONTRACT_UPDATE_MODE` | `overwrite` |
 
@@ -34,7 +35,7 @@
 // ─── Налаштування ───────────────────────────────────────────────────────────
 const PROJECT_BASE_URL  = "https://codex-lcptodcz.vercel.app";
 const WEBHOOK_SECRET    = "olppara13091972olppara13091972"; // ← ваш секрет
-const SENDER_EMAIL      = "lcptodcz@gmail.com";
+const SENDER_EMAILS     = ["lcptodcz@gmail.com", "olppara@gmail.com"];
 const LABEL_PROCESSED   = "suptc/processed";
 const LABEL_FAILED      = "suptc/failed";
 const SCAN_THREAD_LIMIT = 300;
@@ -466,7 +467,9 @@ function getExtension_(name) {
 
 function isExpectedSender_(message) {
   const from = (message.getFrom() || "").toLowerCase();
-  return from.indexOf(SENDER_EMAIL.toLowerCase()) !== -1;
+  return SENDER_EMAILS.some(function(email) {
+    return from.indexOf(email.toLowerCase()) !== -1;
+  });
 }
 
 function messageHasAttachments_(message) {
@@ -502,7 +505,7 @@ function findExpectedSenderMessagesWithMatchedAttachments_(messages) {
   }
 
   if (ALLOW_THREAD_ATTACHMENT_FALLBACK && fallbackMessages.length > 0) {
-    Logger.log("Не знайдено вкладень від точного SENDER_EMAIL; беру придатні вкладення з unread-треду як fallback: " + fallbackMessages.length);
+    Logger.log("Не знайдено вкладень від точних SENDER_EMAILS; беру придатні вкладення з unread-треду як fallback: " + fallbackMessages.length);
     fallbackMessages.forEach(function(message) {
       Logger.log("Fallback-кандидат: " + describeMessage_(message));
     });
@@ -567,7 +570,7 @@ function getOrCreateLabel_(labelName) {
 ## 3) Як перевірити
 
 1. Надішліть тестовий лист на `lcptodcz.audyt@gmail.com`:
-   - від `lcptodcz@gmail.com`,
+   - від `lcptodcz@gmail.com` або `olppara@gmail.com`,
    - **кілька вкладень**: наприклад `Розклад_46-26.docx` + `Розклад_47-26.docx`.
 2. Запустіть `processIncomingEmails()` вручну або зачекайте тригер (5 хв).
 3. В Google Apps Script → **Виконання** перевірте логи — має бути рядок `✅ Успіх` для **кожного** файлу.

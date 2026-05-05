@@ -108,6 +108,42 @@ def test_google_webhook_imports_contract_file(client, db_session, monkeypatch):
     assert trainee is not None
 
 
+def test_google_webhook_imports_contract_file_from_forwarding_address(client, db_session, monkeypatch):
+    def _raise_queue_error(job_id: int):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(mail_routes.process_import_job_task, "delay", _raise_queue_error)
+    monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
+    monkeypatch.setattr(mail_routes.settings, "imap_branch_id", "main")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_routes.settings, "imap_contract_attachment_prefix", "Договори")
+
+    response = client.post(
+        "/api/v1/mail/google-webhook/contracts",
+        headers={"Authorization": "Bearer mail-webhook-secret"},
+        data={
+            "sender_email": "olppara@gmail.com",
+            "sender_name": "OLP Para",
+            "subject": "Договори групи",
+            "message_id": "<google-webhook-forwarded-contracts@example.com>",
+            "update_existing_mode": "overwrite",
+        },
+        files={
+            "file": (
+                "73-26 Договори Штучний інтелект.xlsx",
+                _contracts_xlsx_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["result_payload"]["sender_email"] == "olppara@gmail.com"
+
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "73-26/001").first()
+    assert trainee is not None
+
+
 def test_google_webhook_rejects_sender_mismatch(client, monkeypatch):
     monkeypatch.setattr(mail_routes.settings, "mail_webhook_secret", "mail-webhook-secret")
     monkeypatch.setattr(mail_routes.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")

@@ -38,13 +38,20 @@ def _normalize_compact(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+def is_contract_sender_email(sender_email: str) -> bool:
+    return _normalize_compact(sender_email) in settings.imap_contract_sender_emails_normalized
+
+
 def is_contract_sender(sender_name: str, sender_email: str) -> bool:
     expected_name = settings.imap_contract_sender_name_normalized
     expected_email = settings.imap_contract_sender_email_normalized
-    if not expected_email:
+    sender_email_normalized = _normalize_compact(sender_email)
+    if not settings.imap_contract_sender_emails_normalized:
         return False
-    if _normalize_compact(sender_email) != expected_email:
+    if sender_email_normalized not in settings.imap_contract_sender_emails_normalized:
         return False
+    if sender_email_normalized != expected_email:
+        return True
     if expected_name and _normalize_compact(sender_name) != expected_name:
         actual_name = _normalize_compact(sender_name)
         if expected_name not in actual_name:
@@ -137,7 +144,7 @@ def is_duplicate_attachment(db: Session, branch_id: str, filename: str, file_pat
             ).first()
             if exists:
                 return True
-    elif doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
+    elif doc_type == DocumentType.DOCX and is_contract_sender_email(sender_email):
         # A manually-unread email is an explicit retry signal. Schedule imports are
         # idempotent at the slot level, so never drop schedule DOCX attachments here
         # based on stale mail/document history or unrelated slots for the same group.
@@ -334,7 +341,7 @@ def ingest_mailbox(db: Session) -> dict:
 
             # Check if this DOCX is a schedule attachment
             is_schedule_attachment = False
-            if doc_type == DocumentType.DOCX and sender_email == "lcptodcz@gmail.com":
+            if doc_type == DocumentType.DOCX and is_contract_sender_email(sender_email):
                 is_schedule_attachment = True
 
             if is_schedule_attachment:

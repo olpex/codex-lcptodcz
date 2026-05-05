@@ -64,7 +64,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 Реалізовано автоматичний імпорт вкладень з IMAP-скриньки за правилами:
 
-- відправник: `IMAP_CONTRACT_SENDER_NAME` + `IMAP_CONTRACT_SENDER_EMAIL`,
+- відправник: `IMAP_CONTRACT_SENDER_NAME` + `IMAP_CONTRACT_SENDER_EMAIL`, а також адреси з `IMAP_CONTRACT_SENDER_ALIASES` для переадресації,
 - назва вкладення: починається з `IMAP_CONTRACT_ATTACHMENT_PREFIX` і містить номер групи (наприклад `73-26`),
 - формат вкладення: `.xls/.xlsx`.
 
