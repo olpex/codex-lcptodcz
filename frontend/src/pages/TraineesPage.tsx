@@ -58,6 +58,13 @@ type BulkPurgeResponse = {
   missing_ids: number[];
 };
 
+type BulkGroupDeleteResponse = {
+  deleted_count: number;
+  deleted_ids: number[];
+  missing_ids: number[];
+  deleted_trainees_count: number;
+};
+
 type ClearOrphanGroupsResponse = {
   cleared_count: number;
   cleared_ids: number[];
@@ -151,6 +158,7 @@ export function TraineesPage() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [selected, setSelected] = useState<Record<number, boolean>>({});
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
   const [bulkGroupCode, setBulkGroupCode] = useState("");
   const [bulkStatus, setBulkStatus] = useState<"active" | "completed" | "expelled">("active");
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
@@ -162,6 +170,7 @@ export function TraineesPage() {
   const [archiveTargetIds, setArchiveTargetIds] = useState<number[]>([]);
   const [purgeDialogOpen, setPurgeDialogOpen] = useState(false);
   const [purgeMode, setPurgeMode] = useState<TraineePurgeMode>("selected");
+  const [groupDeleteDialogOpen, setGroupDeleteDialogOpen] = useState(false);
 
   const canEdit = useMemo(
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
@@ -183,6 +192,17 @@ export function TraineesPage() {
     () => new Set(groups.map((group) => (group.code || "").trim()).filter(Boolean)),
     [groups]
   );
+
+  const groupByCode = useMemo(() => {
+    const entries = new Map<string, Group>();
+    for (const group of groups) {
+      const code = (group.code || "").trim();
+      if (code && !entries.has(code)) {
+        entries.set(code, group);
+      }
+    }
+    return entries;
+  }, [groups]);
 
   const problemCounts = useMemo(
     () => ({
@@ -242,6 +262,16 @@ export function TraineesPage() {
     [selected]
   );
 
+  const selectedGroupIdList = useMemo(
+    () => Object.entries(selectedGroupIds).filter(([, checked]) => checked).map(([id]) => Number(id)),
+    [selectedGroupIds]
+  );
+
+  const selectedGroupRows = useMemo(
+    () => groups.filter((group) => selectedGroupIds[group.id]),
+    [groups, selectedGroupIds]
+  );
+
   const selectedActiveIds = useMemo(
     () =>
       selectedIds.filter((id) => {
@@ -286,6 +316,13 @@ export function TraineesPage() {
         }
         return next;
       });
+      setSelectedGroupIds((prev) => {
+        const next: Record<number, boolean> = {};
+        for (const group of groupsData) {
+          if (prev[group.id]) next[group.id] = true;
+        }
+        return next;
+      });
       setLoadError(null);
     } catch (error) {
       const message = (error as Error).message;
@@ -303,31 +340,6 @@ export function TraineesPage() {
   usePageRefresh(() => fetchTrainees(search), {
     enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating
   });
-
-  
-  const [groupToDelete, setGroupToDelete] = useState<Group | null>(null);
-
-  const confirmDeleteGroup = async () => {
-    if (!groupToDelete) return;
-    try {
-      await request(`/groups/${groupToDelete.id}?delete_trainees=true`, { method: "DELETE" });
-      setGroupToDelete(null);
-      showSuccess("Групу та її слухачів успішно видалено");
-      fetchTrainees(search);
-    } catch (error) {
-      showError((error as Error).message);
-    }
-  };
-
-  const handleGroupDeleteClick = (groupCode: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const groupObj = groups.find(g => g.code === groupCode);
-    if (groupObj) {
-      setGroupToDelete(groupObj);
-    } else {
-      showError("Групу не знайдено в базі даних (можливо, це віртуальна група).");
-    }
-  };
 
   const createTrainee = async (event: FormEvent) => {
     event.preventDefault();
@@ -393,13 +405,20 @@ export function TraineesPage() {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const toggleGroupSelected = (groupId: number) => {
+    setSelectedGroupIds((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
   const selectAllVisible = () => {
     const next: Record<number, boolean> = {};
     for (const trainee of filteredTrainees) next[trainee.id] = true;
     setSelected(next);
   };
 
-  const clearSelection = () => setSelected({});
+  const clearSelection = () => {
+    setSelected({});
+    setSelectedGroupIds({});
+  };
 
   const runBulkGroupUpdate = async (targetGroupCode: string | null) => {
     if (!selectedActiveIds.length) {
@@ -531,6 +550,42 @@ export function TraineesPage() {
     setPurgeDialogOpen(false);
   };
 
+  const openGroupDeleteDialog = () => {
+    if (!selectedGroupIdList.length) {
+      showError("Виберіть щонайменше одну групу");
+      return;
+    }
+    setGroupDeleteDialogOpen(true);
+  };
+
+  const closeGroupDeleteDialog = () => {
+    if (isBulkUpdating) return;
+    setGroupDeleteDialogOpen(false);
+  };
+
+  const runBulkDeleteGroups = async () => {
+    if (isBulkUpdating) return;
+    if (!selectedGroupIdList.length) {
+      closeGroupDeleteDialog();
+      return;
+    }
+    setIsBulkUpdating(true);
+    try {
+      const response = await request<BulkGroupDeleteResponse>("/groups/bulk/delete", {
+        method: "POST",
+        body: JSON.stringify({ group_ids: selectedGroupIdList, delete_trainees: true })
+      });
+      await fetchTrainees(search);
+      clearSelection();
+      showSuccess(`Видалено груп: ${response.deleted_count}. Видалено слухачів: ${response.deleted_trainees_count}`);
+      setGroupDeleteDialogOpen(false);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
   const runPurgeTrainees = async () => {
     if (isBulkUpdating) return;
     if (purgeMode === "selected" && !selectedIds.length) {
@@ -546,6 +601,7 @@ export function TraineesPage() {
               method: "POST",
               body: JSON.stringify({ trainee_ids: selectedIds })
             });
+      setPurgeDialogOpen(false);
       await fetchTrainees(search);
       clearSelection();
       showSuccess(
@@ -553,7 +609,6 @@ export function TraineesPage() {
           ? `Видалено всіх слухачів: ${response.purged_count}`
           : `Видалено слухачів: ${response.purged_count}`
       );
-      setPurgeDialogOpen(false);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -706,6 +761,19 @@ export function TraineesPage() {
     return `Видалити з реєстру: ${preview}${hasMore}? Цю дію не можна скасувати.`;
   }, [purgeMode, selectedIds, trainees]);
 
+  const groupDeleteDialogDescription = useMemo(() => {
+    if (!selectedGroupRows.length) return "Оберіть групи для видалення.";
+    const preview = selectedGroupRows
+      .slice(0, 3)
+      .map((group) => group.code)
+      .join(", ");
+    const hasMore = selectedGroupRows.length > 3 ? ` та ще ${selectedGroupRows.length - 3}` : "";
+    const traineeCount = trainees.filter((trainee) =>
+      selectedGroupRows.some((group) => group.code === (trainee.group_code || "").trim())
+    ).length;
+    return `Видалити групи: ${preview}${hasMore}? Разом із ними буде видалено слухачів цієї групи: ${traineeCount}.`;
+  }, [selectedGroupRows, trainees]);
+
   return (
     <div className="space-y-5">
       <Panel title="Пошук слухачів">
@@ -831,6 +899,9 @@ export function TraineesPage() {
                 <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
                   Вибрано: {selectedIds.length}
                 </span>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                  Груп вибрано: {selectedGroupIdList.length}
+                </span>
                 <input
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   placeholder="Номер групи"
@@ -905,6 +976,13 @@ export function TraineesPage() {
                   Видалити слухача
                 </button>
                 <button
+                  className="rounded-lg bg-red-800 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={openGroupDeleteDialog}
+                  disabled={isBulkUpdating || !selectedGroupIdList.length}
+                >
+                  Видалити групи
+                </button>
+                <button
                   className="rounded-lg bg-red-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
                   onClick={openPurgeAllDialog}
                   disabled={isBulkUpdating}
@@ -934,24 +1012,36 @@ export function TraineesPage() {
         <div className="space-y-2">
           {groupedTrainees.map((group) => {
             const groupExpanded = Boolean(expandedGroups[group.key]);
+            const groupRecord = groupByCode.get(group.key);
+            const isGroupSelected = groupRecord ? Boolean(selectedGroupIds[groupRecord.id]) : false;
             return (
               <section key={group.key} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 bg-slate-50 px-3 py-2 text-left"
-                  onClick={() => toggleGroupExpanded(group.key)}
-                  aria-expanded={groupExpanded}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {group.key === "__no_group__" ? group.label : `Група: ${group.label}`}
-                    </p>
-                    <p className="truncate text-xs text-slate-600">
-                      Слухачів: {group.trainees.length}
-                    </p>
-                  </div>
-                  <span className="text-xl leading-none text-slate-500">{groupExpanded ? "−" : "+"}</span>
-                </button>
+                <div className="flex items-center gap-2 bg-slate-50 px-3 py-2">
+                  {canEdit && groupRecord && (
+                    <input
+                      type="checkbox"
+                      checked={isGroupSelected}
+                      onChange={() => toggleGroupSelected(groupRecord.id)}
+                      aria-label={`Вибрати групу ${groupRecord.code}`}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                    onClick={() => toggleGroupExpanded(group.key)}
+                    aria-expanded={groupExpanded}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {group.key === "__no_group__" ? group.label : `Група: ${group.label}`}
+                      </p>
+                      <p className="truncate text-xs text-slate-600">
+                        Слухачів: {group.trainees.length}
+                      </p>
+                    </div>
+                    <span className="text-xl leading-none text-slate-500">{groupExpanded ? "−" : "+"}</span>
+                  </button>
+                </div>
                 {groupExpanded && (
                   <div className="space-y-2 border-t border-slate-200 px-3 py-3">
                     {group.trainees.map((trainee) => {
@@ -1200,6 +1290,17 @@ export function TraineesPage() {
         onCancel={closePurgeDialog}
         confirmVariant="danger"
         confirmDisabled={isBulkUpdating || (purgeMode === "selected" && !selectedIds.length)}
+      />
+      <ConfirmDialog
+        open={groupDeleteDialogOpen}
+        title={selectedGroupIdList.length === 1 ? "Видалити групу?" : "Видалити групи?"}
+        description={groupDeleteDialogDescription}
+        confirmLabel={isBulkUpdating ? "Видалення..." : selectedGroupIdList.length === 1 ? "Видалити групу" : "Видалити групи"}
+        cancelLabel="Скасувати"
+        onConfirm={runBulkDeleteGroups}
+        onCancel={closeGroupDeleteDialog}
+        confirmVariant="danger"
+        confirmDisabled={isBulkUpdating || !selectedGroupIdList.length}
       />
     </div>
   );
