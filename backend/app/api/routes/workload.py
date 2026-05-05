@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -47,9 +48,15 @@ def export_workload_summary(
     rows = collect_teacher_workload_summary(db, current_user.branch_id, date_from=date_from, date_to=date_to)
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "Піднавантаження"
+    sheet.title = "Педнавантаження"
+    generated_at = datetime.now(ZoneInfo("Europe/Kyiv"))
+    sheet.merge_cells("A1:D1")
+    sheet["A1"] = f"Дата формування: {generated_at.strftime('%d.%m.%Y %H:%M')}"
+    sheet["A1"].font = Font(bold=True, color="1F3349")
+    sheet["A1"].alignment = Alignment(horizontal="left")
     headers = ["Викладач", "Поточні години", "Річний план", "Залишок годин"]
     sheet.append(headers)
+    sheet.insert_rows(2)
 
     for row in rows:
         sheet.append(
@@ -62,12 +69,12 @@ def export_workload_summary(
         )
 
     header_fill = PatternFill("solid", fgColor="E8F1F4")
-    for cell in sheet[1]:
+    for cell in sheet[3]:
         cell.font = Font(bold=True, color="1F3349")
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
 
-    for row in sheet.iter_rows(min_row=2, min_col=2, max_col=4):
+    for row in sheet.iter_rows(min_row=4, min_col=2, max_col=4):
         for cell in row:
             cell.alignment = Alignment(horizontal="right")
         remaining_cell = row[2]
@@ -84,14 +91,14 @@ def export_workload_summary(
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
-    sheet.freeze_panes = "A2"
+    sheet.freeze_panes = "A4"
     sheet.page_setup.orientation = "portrait"
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
 
     if rows:
-        table = Table(displayName="TeacherWorkloadSummary", ref=f"A1:D{len(rows) + 1}")
+        table = Table(displayName="TeacherWorkloadSummary", ref=f"A3:D{len(rows) + 3}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
         sheet.add_table(table)
 

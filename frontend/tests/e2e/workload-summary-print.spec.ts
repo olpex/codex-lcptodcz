@@ -72,7 +72,7 @@ test("workload page downloads a one-sheet printable summary with current date fi
   await page.goto("/workload");
   await page.locator('input[type="date"]').nth(0).fill("2026-04-01");
   await page.locator('input[type="date"]').nth(1).fill("2026-04-30");
-  await page.getByRole("button", { name: "Друк піднавантаження" }).click();
+  await page.getByRole("button", { name: "Друк педнавантаження" }).click();
 
   await expect.poll(() => exportUrl?.pathname).toContain("/teacher-workload/export-summary");
   expect(exportUrl?.searchParams.get("date_from")).toBe("2026-04-01");

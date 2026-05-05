@@ -234,12 +234,14 @@ def test_teacher_workload_summary_export_is_single_printable_sheet(client, auth_
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     workbook = load_workbook(BytesIO(response.content), data_only=True)
-    assert workbook.sheetnames == ["Піднавантаження"]
-    sheet = workbook["Піднавантаження"]
-    assert [cell.value for cell in sheet[1]] == ["Викладач", "Поточні години", "Річний план", "Залишок годин"]
+    assert workbook.sheetnames == ["Педнавантаження"]
+    sheet = workbook["Педнавантаження"]
+    assert isinstance(sheet["A1"].value, str)
+    assert sheet["A1"].value.startswith("Дата формування:")
+    assert [cell.value for cell in sheet[3]] == ["Викладач", "Поточні години", "Річний план", "Залишок годин"]
     values = {
         row[0]: row[1:]
-        for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, values_only=True)
+        for row in sheet.iter_rows(min_row=4, max_row=sheet.max_row, values_only=True)
         if row[0]
     }
     assert values["Войтехівська Галина Михайлівна"] == (10, 180, 170)

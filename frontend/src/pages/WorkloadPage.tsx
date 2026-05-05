@@ -565,7 +565,7 @@ export function WorkloadPage() {
             onClick={handlePrintSummary}
             disabled={isPrintingSummary || rows.length === 0}
           >
-            {isPrintingSummary ? "Формування..." : "Друк піднавантаження"}
+            {isPrintingSummary ? "Формування..." : "Друк педнавантаження"}
           </button>
         </div>
         <DataTable
