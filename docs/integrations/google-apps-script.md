@@ -26,11 +26,10 @@
 2. Замініть весь вміст на код нижче.
 3. Вкажіть свої значення у `PROJECT_BASE_URL` та `WEBHOOK_SECRET`.
 4. Збережіть проект.
-5. Увімкніть Gmail API для Google Cloud-проєкту Apps Script. Якщо в журналі є `SERVICE_DISABLED`, відкрийте URL з помилки на кшталт `https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=...` і натисніть **Enable**.
-6. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
-7. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
+5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
+6. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
 
-> Скрипт спершу використовує `GmailApp`, а якщо Gmail показує вкладення в інтерфейсі, але `GmailApp.getAttachments()` повертає порожньо, має fallback через Gmail REST API. Advanced Gmail Service у Apps Script вмикати не потрібно, але сам Gmail API у прив'язаному Google Cloud-проєкті має бути enabled.
+> Скрипт спершу використовує `GmailApp`, а якщо Gmail показує вкладення в інтерфейсі, але `GmailApp.getAttachments()` повертає порожньо, читає raw MIME-вміст листа через `GmailApp`. Gmail API та зміна Google Cloud-проєкту для стандартної роботи не потрібні.
 
 ```javascript
 // ─── Налаштування ───────────────────────────────────────────────────────────
@@ -46,12 +45,13 @@ const LEGACY_QUEUE_KEY  = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 300;
 const MAX_ATTACHMENT_ATTEMPTS = 3;
 const ALLOW_THREAD_ATTACHMENT_LOOKUP = true;
-const ALLOW_GMAIL_API_ATTACHMENT_FALLBACK = true;
+const ALLOW_RAW_MIME_ATTACHMENT_FALLBACK = true;
+const ALLOW_GMAIL_API_ATTACHMENT_FALLBACK = false;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v11");
+  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v12");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -288,6 +288,13 @@ function processOneAttachment_(target) {
 }
 
 function getAttachmentBase64_(target) {
+  if (target.item && target.item.source === "rawMime") {
+    if (!target.rawBase64) {
+      throw new Error("Raw MIME вкладення недоступне: " + target.fileName);
+    }
+    return target.rawBase64;
+  }
+
   if (target.item && target.item.source === "gmailApi") {
     return fetchGmailApiAttachmentBase64_(target.item.messageId, target.item.attachmentId);
   }
@@ -338,6 +345,7 @@ function getNextQueuedAttachmentTarget_() {
           thread: thread,
           message: message,
           attachment: matched.attachment || null,
+          rawBase64: matched.rawBase64 || "",
           fileName: matched.fileName,
           item: item,
         };
@@ -379,6 +387,7 @@ function enqueueAttachmentItems_(thread, messages) {
         source: item.source || "gmailApp",
         attachmentIndex: item.index,
         attachmentId: item.attachmentId || "",
+        mimePartIndex: item.mimePartIndex || item.index,
         attachmentKey: item.attachmentKey,
         fileName: item.fileName,
         attempts: 0,
@@ -482,6 +491,13 @@ function getMatchedAttachments_(message) {
     });
   });
 
+  if (matched.length === 0 && ALLOW_RAW_MIME_ATTACHMENT_FALLBACK) {
+    const rawMatched = getRawMimeMatchedAttachments_(message);
+    if (rawMatched.length > 0) {
+      return rawMatched;
+    }
+  }
+
   if (matched.length === 0 && ALLOW_GMAIL_API_ATTACHMENT_FALLBACK) {
     return getGmailApiMatchedAttachments_(message);
   }
@@ -510,6 +526,127 @@ function makeAttachmentKey_(message, index, fileName) {
 
 function makeGmailApiAttachmentKey_(message, index, attachmentId, fileName) {
   return message.getId() + ":api:" + index + ":" + attachmentId + ":" + fileName;
+}
+
+function makeRawMimeAttachmentKey_(message, index, fileName) {
+  return message.getId() + ":raw:" + index + ":" + fileName;
+}
+
+function getRawMimeMatchedAttachments_(message) {
+  try {
+    const raw = message.getRawContent();
+    const parts = splitRawMimeParts_(raw);
+    const matched = [];
+    parts.forEach(function(part, index) {
+      const parsed = parseRawMimePart_(part);
+      if (!parsed) {
+        return;
+      }
+      const ext = getExtension_(parsed.fileName);
+      const isContract = ext === "xlsx" || ext === "xls";
+      const isSchedule = ext === "docx";
+      if (!isContract && !isSchedule) {
+        return;
+      }
+      matched.push({
+        attachment: null,
+        source: "rawMime",
+        index: index,
+        mimePartIndex: index,
+        attachmentId: "",
+        fileName: parsed.fileName,
+        rawBase64: parsed.base64,
+        attachmentKey: makeRawMimeAttachmentKey_(message, index, parsed.fileName),
+      });
+    });
+    if (matched.length > 0) {
+      Logger.log("Raw MIME fallback знайшов придатні вкладення: " + matched.map(function(item) {
+        return item.fileName;
+      }).join(", "));
+    }
+    return matched;
+  } catch (e) {
+    Logger.log("Raw MIME fallback не зміг прочитати вкладення для messageId=" + message.getId() + ": " + e);
+    return [];
+  }
+}
+
+function splitRawMimeParts_(raw) {
+  const normalized = (raw || "").replace(/\r\n/g, "\n");
+  return normalized.split(/\n--[^\n]+(?:--)?[ \t]*(?:\n|$)/g);
+}
+
+function parseRawMimePart_(part) {
+  const separator = part.indexOf("\n\n");
+  if (separator < 0) {
+    return null;
+  }
+
+  const headers = unfoldMimeHeaders_(part.slice(0, separator));
+  const body = part.slice(separator + 2);
+  const fileName = extractMimeFilename_(headers);
+  if (!fileName) {
+    return null;
+  }
+
+  if (!/content-transfer-encoding:\s*base64/i.test(headers)) {
+    return null;
+  }
+
+  const base64 = body.replace(/\s/g, "");
+  if (!base64) {
+    return null;
+  }
+
+  return {
+    fileName: fileName,
+    base64: base64,
+  };
+}
+
+function unfoldMimeHeaders_(headers) {
+  return (headers || "").replace(/\n[ \t]+/g, " ");
+}
+
+function extractMimeFilename_(headers) {
+  const filenameStar = headers.match(/filename\*\s*=\s*(?:UTF-8''|utf-8'')?("?[^;\n"]+"?|[^;\n]+)/i);
+  const filename = headers.match(/filename\s*=\s*("?[^;\n"]+"?|[^;\n]+)/i);
+  const name = headers.match(/name\s*=\s*("?[^;\n"]+"?|[^;\n]+)/i);
+  const rawName = filenameStar ? filenameStar[1] : (filename ? filename[1] : (name ? name[1] : ""));
+  return decodeMimeHeaderValue_(stripMimeQuotes_(rawName)).trim();
+}
+
+function stripMimeQuotes_(value) {
+  const trimmed = (value || "").trim();
+  if (trimmed.charAt(0) === "\"" && trimmed.charAt(trimmed.length - 1) === "\"") {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function decodeMimeHeaderValue_(value) {
+  let decoded = value || "";
+  if (decoded.indexOf("%") !== -1) {
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch (e) {
+      decoded = value || "";
+    }
+  }
+
+  decoded = decoded.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, function(match, charset, encoding, text) {
+    try {
+      if (encoding.toUpperCase() === "B") {
+        return Utilities.newBlob(Utilities.base64Decode(text)).getDataAsString(charset);
+      }
+      const qp = text.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, "%$1");
+      return decodeURIComponent(qp);
+    } catch (e) {
+      return match;
+    }
+  });
+
+  return decoded;
 }
 
 function getGmailApiMatchedAttachments_(message) {
@@ -676,11 +813,17 @@ function describeMessage_(message) {
   const names = attachments.map(function(att) {
     return att.getName();
   }).join(", ");
+  let rawNames = "";
+  if (!names && ALLOW_RAW_MIME_ATTACHMENT_FALLBACK) {
+    rawNames = getRawMimeMatchedAttachments_(message).map(function(item) {
+      return item.fileName;
+    }).join(", ");
+  }
   let apiNames = "";
-  if (!names && ALLOW_GMAIL_API_ATTACHMENT_FALLBACK) {
+  if (!names && !rawNames && ALLOW_GMAIL_API_ATTACHMENT_FALLBACK) {
     apiNames = getGmailApiAttachmentNames_(message).join(", ");
   }
-  return "from='" + message.getFrom() + "', subject='" + message.getSubject() + "', files=[" + names + "], apiFiles=[" + apiNames + "]";
+  return "from='" + message.getFrom() + "', subject='" + message.getSubject() + "', files=[" + names + "], rawFiles=[" + rawNames + "], apiFiles=[" + apiNames + "]";
 }
 
 function getGmailApiAttachmentNames_(message) {
