@@ -44,11 +44,12 @@ const PENDING_QUEUE_KEY = "suptc_pending_attachment_queue";
 const LEGACY_QUEUE_KEY  = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 300;
 const MAX_ATTACHMENT_ATTEMPTS = 3;
+const ALLOW_THREAD_ATTACHMENT_LOOKUP = true;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-02 attachment-queue-v8");
+  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v9");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -154,6 +155,7 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
     unread: 0,
     expectedSenderUnread: 0,
     expectedSenderUnreadWithAttachments: 0,
+    threadLookupWithAttachments: 0,
     fallbackUnreadWithAttachments: 0,
     queuedAttachments: 0,
   };
@@ -168,6 +170,7 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
       stats.threads += 1;
       const messages = thread.getMessages();
       const expectedUnreadMessages = [];
+      const expectedUnreadWithoutAttachments = [];
       const fallbackUnreadMessages = [];
 
       for (const message of messages) {
@@ -180,7 +183,7 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
         }
 
         stats.unread += 1;
-        if (!isExpectedSender_(message)) {
+        if (!expectedSender) {
           Logger.log("Unread-marker не від цільового відправника: " + describeMessage_(message));
           if (ALLOW_THREAD_ATTACHMENT_FALLBACK && hasMatchedAttachment) {
             stats.fallbackUnreadWithAttachments += 1;
@@ -195,6 +198,7 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
           expectedUnreadMessages.push(message);
         } else {
           Logger.log("Непрочитаний лист від цільового відправника без придатних вкладень: " + describeMessage_(message));
+          expectedUnreadWithoutAttachments.push(message);
         }
       }
 
@@ -202,6 +206,21 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
         const added = enqueueAttachmentItems_(thread, expectedUnreadMessages);
         stats.queuedAttachments += added;
         Logger.log("Поставлено в чергу файлів від цільового відправника: " + added);
+      } else if (ALLOW_THREAD_ATTACHMENT_LOOKUP && expectedUnreadWithoutAttachments.length > 0) {
+        const threadMessagesWithAttachments = findExpectedSenderMessagesWithMatchedAttachments_(messages);
+        if (threadMessagesWithAttachments.length > 0) {
+          const added = enqueueAttachmentItems_(thread, threadMessagesWithAttachments);
+          stats.threadLookupWithAttachments += added;
+          stats.queuedAttachments += added;
+          expectedUnreadWithoutAttachments.forEach(function(message) {
+            markMessageReadOnly_(message);
+          });
+          Logger.log("Unread-лист без вкладень, але у цьому треді знайдено придатні вкладення: " + added);
+        } else if (fallbackUnreadMessages.length > 0) {
+          const added = enqueueAttachmentItems_(thread, fallbackUnreadMessages);
+          stats.queuedAttachments += added;
+          Logger.log("Поставлено в fallback-чергу файлів: " + added);
+        }
       } else if (fallbackUnreadMessages.length > 0) {
         const added = enqueueAttachmentItems_(thread, fallbackUnreadMessages);
         stats.queuedAttachments += added;
@@ -215,6 +234,7 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
     ", непрочитаних=" + stats.unread +
     ", від потрібного відправника=" + stats.expectedSenderUnread +
     ", придатних файлів=" + stats.expectedSenderUnreadWithAttachments +
+    ", знайдено в тредах=" + stats.threadLookupWithAttachments +
     ", fallback-непрочитаних з вкладеннями=" + stats.fallbackUnreadWithAttachments +
     ", поставлено в чергу=" + stats.queuedAttachments
   );
