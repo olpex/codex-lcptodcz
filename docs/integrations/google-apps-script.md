@@ -26,10 +26,11 @@
 2. Замініть весь вміст на код нижче.
 3. Вкажіть свої значення у `PROJECT_BASE_URL` та `WEBHOOK_SECRET`.
 4. Збережіть проект.
-5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
-6. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
+5. Увімкніть Gmail API для Google Cloud-проєкту Apps Script. Якщо в журналі є `SERVICE_DISABLED`, відкрийте URL з помилки на кшталт `https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=...` і натисніть **Enable**.
+6. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
+7. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
 
-> Скрипт спершу використовує `GmailApp`, а якщо Gmail показує вкладення в інтерфейсі, але `GmailApp.getAttachments()` повертає порожньо, має fallback через Gmail REST API. Окремо вмикати Advanced Gmail Service у Apps Script не потрібно.
+> Скрипт спершу використовує `GmailApp`, а якщо Gmail показує вкладення в інтерфейсі, але `GmailApp.getAttachments()` повертає порожньо, має fallback через Gmail REST API. Advanced Gmail Service у Apps Script вмикати не потрібно, але сам Gmail API у прив'язаному Google Cloud-проєкті має бути enabled.
 
 ```javascript
 // ─── Налаштування ───────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v10");
+  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v11");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -584,9 +585,32 @@ function gmailApiFetchJson_(url) {
   const code = resp.getResponseCode();
   const text = resp.getContentText() || "{}";
   if (code < 200 || code >= 300) {
-    throw new Error("HTTP " + code + ": " + text);
+    throw new Error("HTTP " + code + ": " + summarizeGmailApiError_(text));
   }
   return JSON.parse(text);
+}
+
+function summarizeGmailApiError_(text) {
+  try {
+    const parsed = JSON.parse(text || "{}");
+    const error = parsed.error || {};
+    const details = error.details || [];
+    const serviceDisabled = details.some(function(detail) {
+      return detail.reason === "SERVICE_DISABLED";
+    });
+    const activationDetail = details.find(function(detail) {
+      return detail.metadata && detail.metadata.activationUrl;
+    });
+    if (serviceDisabled) {
+      const activationUrl = activationDetail && activationDetail.metadata ? activationDetail.metadata.activationUrl : "";
+      return "Gmail API вимкнений у Google Cloud-проєкті Apps Script. Увімкніть Gmail API" +
+        (activationUrl ? ": " + activationUrl : "") +
+        ". Після ввімкнення зачекайте кілька хвилин і запустіть processIncomingEmails() ще раз.";
+    }
+    return error.message || text;
+  } catch (e) {
+    return text;
+  }
 }
 
 function getExtension_(name) {
