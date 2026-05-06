@@ -29,7 +29,7 @@
 5. Запустіть `processIncomingEmails()` вручну 1 раз (надайте дозволи Gmail та UrlFetch).
 6. Запустіть `installSingleTrigger()` вручну 1 раз. Вона видалить дублікати тригерів у цьому проєкті й створить рівно один time-driven тригер кожні 5 хвилин.
 
-> Скрипт використовує тільки вбудований `GmailApp`; окремо вмикати Gmail REST API у Google Cloud не потрібно.
+> Скрипт спершу використовує `GmailApp`, а якщо Gmail показує вкладення в інтерфейсі, але `GmailApp.getAttachments()` повертає порожньо, має fallback через Gmail REST API. Окремо вмикати Advanced Gmail Service у Apps Script не потрібно.
 
 ```javascript
 // ─── Налаштування ───────────────────────────────────────────────────────────
@@ -45,11 +45,12 @@ const LEGACY_QUEUE_KEY  = "suptc_pending_message_queue";
 const MAX_QUEUE_ITEMS   = 300;
 const MAX_ATTACHMENT_ATTEMPTS = 3;
 const ALLOW_THREAD_ATTACHMENT_LOOKUP = true;
+const ALLOW_GMAIL_API_ATTACHMENT_FALLBACK = true;
 const ALLOW_THREAD_ATTACHMENT_FALLBACK = false;
 // ────────────────────────────────────────────────────────────────────────────
 
 function processIncomingEmails() {
-  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v9");
+  Logger.log("Версія скрипта: 2026-05-06 attachment-queue-v10");
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
     Logger.log("Інший запуск ще працює. Пропускаємо цю сесію.");
@@ -174,13 +175,13 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
       const fallbackUnreadMessages = [];
 
       for (const message of messages) {
-        const matchedAttachments = getMatchedAttachments_(message);
-        const hasMatchedAttachment = matchedAttachments.length > 0;
-        const expectedSender = isExpectedSender_(message);
-
         if (!message.isUnread()) {
           continue;
         }
+
+        const expectedSender = isExpectedSender_(message);
+        const matchedAttachments = (expectedSender || ALLOW_THREAD_ATTACHMENT_FALLBACK) ? getMatchedAttachments_(message) : [];
+        const hasMatchedAttachment = matchedAttachments.length > 0;
 
         stats.unread += 1;
         if (!expectedSender) {
@@ -242,8 +243,13 @@ function scanUnreadMessagesIntoAttachmentQueue_() {
 }
 
 function processOneAttachment_(target) {
-  const bytes = target.attachment.getBytes();
-  const b64   = Utilities.base64EncodeWebSafe(bytes);
+  let b64 = "";
+  try {
+    b64 = getAttachmentBase64_(target);
+  } catch (e) {
+    Logger.log("❌ Не вдалося прочитати вкладення '%s': %s", target.fileName, e);
+    return { ok: false };
+  }
 
   const payload = JSON.stringify({
     filename:      target.fileName,
@@ -278,6 +284,19 @@ function processOneAttachment_(target) {
   Logger.log("✅ Успіх %s для '%s': job_id=%s, status=%s", code, target.fileName, body.id || "?", body.status || "?");
   logImportResult_(body, target.fileName);
   return { ok: true };
+}
+
+function getAttachmentBase64_(target) {
+  if (target.item && target.item.source === "gmailApi") {
+    return fetchGmailApiAttachmentBase64_(target.item.messageId, target.item.attachmentId);
+  }
+
+  if (!target.attachment) {
+    throw new Error("Вкладення недоступне: " + target.fileName);
+  }
+
+  const bytes = target.attachment.getBytes();
+  return Utilities.base64EncodeWebSafe(bytes);
 }
 
 function logImportResult_(body, fileName) {
@@ -317,7 +336,7 @@ function getNextQueuedAttachmentTarget_() {
         return {
           thread: thread,
           message: message,
-          attachment: matched.attachment,
+          attachment: matched.attachment || null,
           fileName: matched.fileName,
           item: item,
         };
@@ -356,7 +375,9 @@ function enqueueAttachmentItems_(thread, messages) {
       queue.push({
         threadId: thread.getId(),
         messageId: message.getId(),
+        source: item.source || "gmailApp",
         attachmentIndex: item.index,
+        attachmentId: item.attachmentId || "",
         attachmentKey: item.attachmentKey,
         fileName: item.fileName,
         attempts: 0,
@@ -452,11 +473,17 @@ function getMatchedAttachments_(message) {
     }
     matched.push({
       attachment: att,
+      source: "gmailApp",
       index: index,
+      attachmentId: "",
       fileName: fileName,
       attachmentKey: makeAttachmentKey_(message, index, fileName),
     });
   });
+
+  if (matched.length === 0 && ALLOW_GMAIL_API_ATTACHMENT_FALLBACK) {
+    return getGmailApiMatchedAttachments_(message);
+  }
 
   return matched;
 }
@@ -478,6 +505,88 @@ function findMatchedAttachmentByItem_(message, item) {
 
 function makeAttachmentKey_(message, index, fileName) {
   return message.getId() + ":" + index + ":" + fileName;
+}
+
+function makeGmailApiAttachmentKey_(message, index, attachmentId, fileName) {
+  return message.getId() + ":api:" + index + ":" + attachmentId + ":" + fileName;
+}
+
+function getGmailApiMatchedAttachments_(message) {
+  const messageId = message.getId();
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(messageId) + "?format=full";
+  try {
+    const payload = gmailApiFetchJson_(url);
+    const parts = [];
+    collectGmailApiParts_(payload.payload, parts);
+    const matched = [];
+    parts.forEach(function(part, index) {
+      const fileName = (part.filename || "").trim();
+      const ext = getExtension_(fileName);
+      const isContract = ext === "xlsx" || ext === "xls";
+      const isSchedule = ext === "docx";
+      const attachmentId = part.body && part.body.attachmentId ? part.body.attachmentId : "";
+      if ((!isContract && !isSchedule) || !attachmentId) {
+        return;
+      }
+      matched.push({
+        attachment: null,
+        source: "gmailApi",
+        index: index,
+        attachmentId: attachmentId,
+        fileName: fileName,
+        attachmentKey: makeGmailApiAttachmentKey_(message, index, attachmentId, fileName),
+      });
+    });
+    if (matched.length > 0) {
+      Logger.log("Gmail API fallback знайшов придатні вкладення: " + matched.map(function(item) {
+        return item.fileName;
+      }).join(", "));
+    }
+    return matched;
+  } catch (e) {
+    Logger.log("Gmail API fallback не зміг прочитати вкладення для messageId=" + messageId + ": " + e);
+    return [];
+  }
+}
+
+function collectGmailApiParts_(part, acc) {
+  if (!part) {
+    return;
+  }
+  if (part.filename || (part.body && part.body.attachmentId)) {
+    acc.push(part);
+  }
+  const children = part.parts || [];
+  children.forEach(function(child) {
+    collectGmailApiParts_(child, acc);
+  });
+}
+
+function fetchGmailApiAttachmentBase64_(messageId, attachmentId) {
+  if (!attachmentId) {
+    throw new Error("Немає Gmail API attachmentId для messageId=" + messageId);
+  }
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" +
+    encodeURIComponent(messageId) + "/attachments/" + encodeURIComponent(attachmentId);
+  const payload = gmailApiFetchJson_(url);
+  if (!payload.data) {
+    throw new Error("Gmail API не повернув data для attachmentId=" + attachmentId);
+  }
+  return payload.data;
+}
+
+function gmailApiFetchJson_(url) {
+  const resp = UrlFetchApp.fetch(url, {
+    method: "get",
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  const code = resp.getResponseCode();
+  const text = resp.getContentText() || "{}";
+  if (code < 200 || code >= 300) {
+    throw new Error("HTTP " + code + ": " + text);
+  }
+  return JSON.parse(text);
 }
 
 function getExtension_(name) {
@@ -543,7 +652,30 @@ function describeMessage_(message) {
   const names = attachments.map(function(att) {
     return att.getName();
   }).join(", ");
-  return "from='" + message.getFrom() + "', subject='" + message.getSubject() + "', files=[" + names + "]";
+  let apiNames = "";
+  if (!names && ALLOW_GMAIL_API_ATTACHMENT_FALLBACK) {
+    apiNames = getGmailApiAttachmentNames_(message).join(", ");
+  }
+  return "from='" + message.getFrom() + "', subject='" + message.getSubject() + "', files=[" + names + "], apiFiles=[" + apiNames + "]";
+}
+
+function getGmailApiAttachmentNames_(message) {
+  const messageId = message.getId();
+  const url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(messageId) + "?format=full";
+  try {
+    const payload = gmailApiFetchJson_(url);
+    const parts = [];
+    collectGmailApiParts_(payload.payload, parts);
+    return parts
+      .filter(function(part) {
+        return part.filename && part.body && part.body.attachmentId;
+      })
+      .map(function(part) {
+        return part.filename;
+      });
+  } catch (e) {
+    return ["Gmail API error: " + e];
+  }
 }
 
 function threadHasUnreadMessages_(thread) {
