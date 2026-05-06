@@ -191,6 +191,17 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByRole("table").getByText("Не опрацьовано", { exact: true })).toBeVisible();
 });
 
+test("journal monitor opens the current-year section by default", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [archiveSection, { ...section, entries: [] }]
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByRole("heading", { name: "Журнали 2026" })).toBeVisible();
+  await expect(page.getByLabel("Розділ для перегляду")).toHaveValue("1");
+});
+
 test("journal monitor section can be deleted from the project", async ({ page }) => {
   const remainingSections = [{ ...section, entries: [] }];
   let deletedSectionId: number | null = null;
@@ -208,6 +219,8 @@ test("journal monitor section can be deleted from the project", async ({ page })
   });
 
   await page.goto("/journals");
+  await expect(page.getByRole("heading", { name: "Журнали 2026" })).toBeVisible();
+  await page.getByLabel("Розділ для перегляду").selectOption("2");
   await expect(page.getByRole("heading", { name: "Журнали 2025" })).toBeVisible();
 
   await page.getByRole("button", { name: "Видалити розділ" }).click();

@@ -148,6 +148,15 @@ function getFileName(response: Response, fallback: string): string {
   return plainMatch?.[1] || fallback;
 }
 
+function pickDefaultSectionId(sections: JournalMonitorSection[], currentYear = new Date().getFullYear()): number | null {
+  if (!sections.length) return null;
+  const exactName = `журнали ${currentYear}`;
+  const exactMatch = sections.find((section) => section.name.trim().toLocaleLowerCase("uk-UA") === exactName);
+  if (exactMatch) return exactMatch.id;
+  const yearMatch = sections.find((section) => new RegExp(`(^|\\D)${currentYear}(\\D|$)`).test(section.name));
+  return yearMatch?.id ?? sections[0].id;
+}
+
 export function JournalMonitorsPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess, showInfo } = useToast();
@@ -205,7 +214,7 @@ export function JournalMonitorsPage() {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
     setSections(data);
     if (data.length > 0 && !selectedId) {
-      setSelectedId(data[0].id);
+      setSelectedId(pickDefaultSectionId(data));
     }
     if (data.length === 0) {
       setDetail(null);
@@ -223,7 +232,7 @@ export function JournalMonitorsPage() {
     setIsLoading(true);
     try {
       const data = await loadSections();
-      const nextSelectedId = selectedId || data[0]?.id || null;
+      const nextSelectedId = selectedId || pickDefaultSectionId(data);
       if (nextSelectedId) {
         await loadDetail(nextSelectedId);
       }
