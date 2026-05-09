@@ -97,7 +97,7 @@ const archiveSection = {
 
 async function loginAndMockJournals(
   page: Page,
-  options: { sections?: unknown[]; onExport?: (url: URL) => void } = {}
+  options: { sections?: unknown[]; onExport?: (url: URL) => void; onProcessingStart?: (url: URL) => void } = {}
 ) {
   await page.addInitScript(() => {
     localStorage.setItem(
@@ -146,6 +146,15 @@ async function loginAndMockJournals(
         contentType: "text/csv",
         headers: { "content-disposition": "attachment; filename=journal-monitor.csv" },
         body: "Номер групи\n2-26\n"
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/1/processing/start") && method === "POST") {
+      options.onProcessingStart?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...section, workload_auto_enabled: true, workload_auto_year: Number(url.searchParams.get("year")) })
       });
     }
 
@@ -247,7 +256,7 @@ test("journal monitor entries can be searched and sorted", async ({ page }) => {
   await page.getByRole("button", { name: /Група/ }).click();
   await expect.poll(visibleGroupCodes).toEqual(["1-26", "2-26", "10п-26", "100-26"]);
 
-  await page.getByRole("button", { name: /Папка журналу/ }).click();
+  await page.getByRole("button", { name: /Папка \/ файли журналів/ }).click();
   await expect.poll(visibleGroupCodes).toEqual(["1-26", "2-26", "10п-26", "100-26"]);
 
   await page.getByRole("button", { name: /Статус/ }).click();
@@ -287,4 +296,22 @@ test("journal monitor export uses current filters", async ({ page }) => {
   expect(exportUrl?.searchParams.get("status")).toBe("trainees_only");
   expect(exportUrl?.searchParams.get("has_schedule")).toBe("false");
   expect(exportUrl?.searchParams.get("has_trainees")).toBe("true");
+});
+
+test("journal monitor starts one combined processing action for trainees and workload", async ({ page }) => {
+  let processingUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    onProcessingStart: (url) => {
+      processingUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+  await expect(page.getByRole("button", { name: "Почати опрацювання" })).toBeVisible();
+  await page.getByLabel("Рік").fill("2026");
+  await page.getByRole("button", { name: "Почати опрацювання" }).click();
+
+  await expect.poll(() => processingUrl?.pathname).toContain("/journal-monitors/1/processing/start");
+  expect(processingUrl?.searchParams.get("year")).toBe("2026");
+  await expect(page.getByRole("button", { name: "Зупинити опрацювання" })).toBeVisible();
 });

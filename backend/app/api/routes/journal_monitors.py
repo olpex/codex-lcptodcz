@@ -161,6 +161,66 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
+def _start_section_processing(
+    section: JournalMonitorSection,
+    db: DbSession,
+    year: int,
+    *,
+    error_prefix: str,
+) -> JournalMonitorDetailResponse:
+    section.workload_auto_enabled = True
+    section.workload_auto_year = year
+    db.add(section)
+    db.flush()
+    try:
+        section = sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=False)
+        requeue_journal_workload_for_year(db, section, year)
+        process_next_journal_workload(db, section, limit=None, target_year=year, retry_failed=True)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+def _stop_section_processing(section: JournalMonitorSection, db: DbSession) -> JournalMonitorDetailResponse:
+    section.workload_auto_enabled = False
+    db.add(section)
+    db.commit()
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+@router.post(
+    "/{section_id}/processing/start",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def start_section_processing(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    year: int = Query(default=2026, ge=2025, le=2100),
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    return _start_section_processing(section, db, year, error_prefix="Не вдалося запустити опрацювання журналів")
+
+
+@router.post(
+    "/{section_id}/processing/stop",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def stop_section_processing(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    return _stop_section_processing(section, db)
+
+
 @router.post(
     "/{section_id}/workload-auto/start",
     response_model=JournalMonitorDetailResponse,
@@ -173,20 +233,7 @@ def start_section_workload_auto(
     year: int = Query(default=2026, ge=2025, le=2100),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    section.workload_auto_enabled = True
-    section.workload_auto_year = year
-    db.add(section)
-    db.flush()
-    try:
-        section = sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=False)
-        requeue_journal_workload_for_year(db, section, year)
-        process_next_journal_workload(db, section, limit=None, target_year=year, retry_failed=True)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося запустити обробку педнавантаження: {exc}") from exc
-    db.refresh(section)
-    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+    return _start_section_processing(section, db, year, error_prefix="Не вдалося запустити обробку педнавантаження")
 
 
 @router.post(
@@ -200,11 +247,7 @@ def stop_section_workload_auto(
     current_user: CurrentUser,
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    section.workload_auto_enabled = False
-    db.add(section)
-    db.commit()
-    db.refresh(section)
-    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+    return _stop_section_processing(section, db)
 
 
 @router.post(

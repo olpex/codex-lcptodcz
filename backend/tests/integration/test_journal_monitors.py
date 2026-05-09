@@ -71,6 +71,31 @@ def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, st
     return stream.getvalue()
 
 
+def _journal_combined_workbook_bytes() -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    disciplines = workbook.create_sheet("Дисципліни")
+    disciplines.append(["Назва дисципліни", "Кількість годин", "Сторінки", "Прізвище, ім'я, по батькові викладача"])
+    disciplines.append(["Основи безпеки", 8, "1-8", "Коваль Олена Петрівна"])
+    zv = workbook.create_sheet("ЗВ")
+    zv.append(
+        [
+            "Номер за порядком",
+            "Номер в журналі З-СНН",
+            "Прізвище, ім'я та по батькові слухача",
+            "Стать",
+            "Дата народження",
+            "Ідентифікаційний номер",
+            "Домашня адреса",
+            "Телефон",
+        ]
+    )
+    zv.append((1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", "+380501112233"))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def test_journal_sync_imports_trainees_from_zv_sheet_and_updates_group_status(
     client,
     auth_headers,
@@ -274,6 +299,53 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     refreshed_summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert refreshed_summary["Коваль Олена Петрівна"]["total_hours"] == 24
     assert refreshed_summary["Шевченко Марія Іванівна"]["total_hours"] == 16
+
+
+def test_journal_processing_start_runs_trainees_and_workload_together(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["workload_auto_enabled"] is True
+    entry = response.json()["entries"][0]
+    assert entry["trainees_status"] == "processed"
+    assert entry["trainee_count"] == 1
+    assert entry["workload_status"] == "processed"
+    assert entry["workload_hours"] == 8
+    summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
 
 def test_journal_workload_can_be_run_for_2025_on_demand(client, auth_headers, monkeypatch):

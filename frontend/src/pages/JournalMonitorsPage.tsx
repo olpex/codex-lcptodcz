@@ -213,7 +213,7 @@ export function JournalMonitorsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isProcessingWorkload, setIsProcessingWorkload] = useState(false);
+  const [isProcessingJournals, setIsProcessingJournals] = useState(false);
   const [workloadYear, setWorkloadYear] = useState(String(new Date().getFullYear()));
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -386,21 +386,21 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const toggleWorkloadAuto = async () => {
+  const toggleJournalProcessing = async () => {
     if (!selectedId) return;
     if (detail?.workload_auto_enabled) {
-      setIsProcessingWorkload(true);
+      setIsProcessingJournals(true);
       try {
-        const data = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}/workload-auto/stop`, {
+        const data = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}/processing/stop`, {
           method: "POST"
         });
         setDetail(data);
         await loadSections();
-        showInfo("Автоопрацювання педнавантаження зупинено");
+        showInfo("Автоопрацювання журналів зупинено");
       } catch (error) {
         showError((error as Error).message);
       } finally {
-        setIsProcessingWorkload(false);
+        setIsProcessingJournals(false);
       }
       return;
     }
@@ -409,19 +409,19 @@ export function JournalMonitorsPage() {
       showError("Вкажіть рік від 2025 до 2100");
       return;
     }
-    setIsProcessingWorkload(true);
+    setIsProcessingJournals(true);
     try {
       const data = await request<JournalMonitorSection>(
-        `/journal-monitors/${selectedId}/workload-auto/start?year=${year}`,
+        `/journal-monitors/${selectedId}/processing/start?year=${year}`,
         { method: "POST" }
       );
       setDetail(data);
       await loadSections();
-      showSuccess(`Автоопрацювання педнавантаження для ${year} року увімкнено`);
+      showSuccess(`Опрацювання журналів для ${year} року запущено: слухачі та години`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
-      setIsProcessingWorkload(false);
+      setIsProcessingJournals(false);
     }
   };
 
@@ -594,7 +594,7 @@ export function JournalMonitorsPage() {
                 value={workloadYear}
               onChange={(event) => setWorkloadYear(event.target.value)}
               inputMode="numeric"
-              disabled={Boolean(detail?.workload_auto_enabled) || isProcessingWorkload}
+              disabled={Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             />
           </label>
           <button
@@ -605,14 +605,14 @@ export function JournalMonitorsPage() {
                 ? "border-rose-300 text-rose-700 hover:bg-rose-50"
                 : "border-emerald-500 text-emerald-700"
             )}
-            onClick={toggleWorkloadAuto}
-            disabled={!selectedId || isProcessingWorkload}
+            onClick={toggleJournalProcessing}
+            disabled={!selectedId || isProcessingJournals}
           >
-            {isProcessingWorkload
+            {isProcessingJournals
               ? "Змінюємо..."
               : detail?.workload_auto_enabled
                 ? "Зупинити опрацювання"
-                : "Опрацювати години"}
+                : "Почати опрацювання"}
           </button>
             <button
               type="button"
