@@ -178,7 +178,7 @@ def _start_section_processing(
 ) -> JournalMonitorDetailResponse:
     section.workload_auto_enabled = True
     section.workload_auto_year = year
-    section.last_sync_message = "Опрацювання журналів поставлено в чергу: слухачі та години"
+    section.last_sync_message = "Опрацювання журналів запущено"
     db.add(section)
     requeue_journal_workload_for_year(db, section, year)
     requeue_journal_trainees_for_year(db, section, year)

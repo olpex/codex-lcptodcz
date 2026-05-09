@@ -36,6 +36,7 @@ SERVICE_ACCOUNT_SETUP_MESSAGE = (
 GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-–—]\s*[0-9]{2,4})")
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 JOURNAL_WORKLOAD_START_YEAR = 2026
+JOURNAL_MONITOR_MESSAGE_LIMIT = 500
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -96,6 +97,13 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def _norm(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").replace("\u00a0", " ")).strip()
+
+
+def _clip_monitor_message(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = _norm(value)
+    return text[:JOURNAL_MONITOR_MESSAGE_LIMIT] if text else None
 
 
 def _parse_hours(value: Any) -> float:
@@ -898,6 +906,8 @@ def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSectio
             continue
         if not entry.group_code:
             continue
+        if entry.trainees_status == "processed" and entry.has_trainees:
+            continue
         if entry.trainees_status in {"pending", "failed", "no_data", "processed"}:
             entry.trainees_status = "pending"
             entry.trainees_message = "Поставлено в чергу повторної обробки слухачів"
@@ -979,8 +989,7 @@ def process_journal_monitor_section_step(
         section.workload_auto_enabled = False
         message_parts.append("опрацювання завершено")
     if message_parts:
-        prefix = section.last_sync_message or ""
-        section.last_sync_message = f"{prefix}; {'; '.join(message_parts)}" if prefix else "; ".join(message_parts)
+        section.last_sync_message = _clip_monitor_message("; ".join(message_parts))
     db.flush()
     db.refresh(section)
     return result

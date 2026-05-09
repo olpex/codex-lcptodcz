@@ -618,6 +618,67 @@ def test_journal_auto_worker_continues_with_one_pending_trainees_after_workloads
     assert db_session.query(Trainee).filter(Trainee.group_code == "51-26").count() == 1
 
 
+def test_start_requeue_keeps_already_imported_trainees_out_of_front_of_queue(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    imported = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-1-26",
+        journal_name="1-26 Журнал",
+        group_code="1-26",
+        has_trainees=True,
+        trainee_count=33,
+        trainees_status="processed",
+    )
+    pending = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-2-26",
+        journal_name="2-26 Журнал",
+        group_code="2-26",
+        has_trainees=False,
+        trainee_count=0,
+        trainees_status="no_data",
+    )
+    db_session.add_all([imported, pending])
+    db_session.commit()
+
+    changed = journal_monitor.requeue_journal_trainees_for_year(db_session, section, 2026)
+
+    assert changed == 1
+    assert imported.trainees_status == "processed"
+    assert pending.trainees_status == "pending"
+
+
+def test_journal_step_message_does_not_grow_past_database_limit(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+        last_sync_message="x" * 500,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    journal_monitor.process_journal_monitor_section_step(db_session, section)
+    db_session.commit()
+
+    assert section.last_sync_message is not None
+    assert len(section.last_sync_message) <= 500
+
+
 def test_journal_workload_can_be_run_for_2025_on_demand(client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
