@@ -1036,7 +1036,7 @@ def process_journal_monitor_section_step(
         workload_result = process_next_journal_workload(
             db,
             section,
-            limit=1,
+            limit=None,
             target_year=section.workload_auto_year,
             retry_failed=True,
         )
@@ -1288,34 +1288,53 @@ def process_journal_monitor_background_step(
     folder_lister=list_drive_child_folders,
     target_year: int | None = None,
 ) -> dict[str, Any]:
-    section = sync_journal_monitor_section(
-        db,
-        section,
-        folder_lister=folder_lister,
-        process_workload=False,
-        process_trainees=False,
-    )
+    section_id = section.id
+    sync_warning: str | None = None
+    try:
+        section = sync_journal_monitor_section(
+            db,
+            section,
+            folder_lister=folder_lister,
+            process_workload=False,
+            process_trainees=False,
+        )
+    except Exception as exc:
+        db.rollback()
+        section = db.get(JournalMonitorSection, section_id)
+        if section is None:
+            raise
+        sync_warning = f"Синхронізацію Drive пропущено: {exc}"
+        section.last_sync_status = "failed"
+        section.last_sync_message = _clip_monitor_message(sync_warning)
+        db.add(section)
+        db.flush()
+    effective_target_year = target_year if target_year is not None else section.workload_auto_year
     workload_result = process_next_journal_workload(
         db,
         section,
-        limit=1,
-        target_year=target_year,
+        limit=None,
+        target_year=effective_target_year,
         retry_failed=True,
     )
     trainees_result = process_journal_trainees_for_section(
         db,
         section,
         limit=1,
-        target_year=target_year,
+        target_year=effective_target_year,
         retry_failed=True,
     )
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     for entry in section.entries:
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-    section.last_sync_message = _clip_monitor_message(
+    if section.workload_auto_enabled and _section_auto_processing_complete(section):
+        section.workload_auto_enabled = False
+    processing_message = (
         "Фонове опрацювання: "
         f"педнавантаження {workload_result['processed']}/{workload_result['failed']}, "
         f"слухачі {trainees_result['processed']}/{trainees_result['no_data']}/{trainees_result['failed']}"
+    )
+    section.last_sync_message = _clip_monitor_message(
+        f"{sync_warning}; {processing_message}" if sync_warning else processing_message
     )
     db.add(section)
     db.flush()

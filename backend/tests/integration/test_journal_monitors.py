@@ -616,6 +616,55 @@ def test_journal_auto_worker_processes_trainees_and_workload_together(db_session
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
 
+def test_journal_auto_worker_processes_active_sections_without_manual_auto_toggle(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.tasks.worker.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "1-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=False,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    from app.tasks.worker import process_journal_monitor_auto_task
+
+    result = process_journal_monitor_auto_task.run()
+
+    assert result == {"processed_sections": 1, "failed_sections": 0}
+    entry = section.entries[0]
+    assert entry.group_code == "1-26"
+    assert entry.workload_status == "processed"
+    assert entry.trainees_status == "processed"
+    assert entry.trainee_count == 1
+
+
 def test_journal_auto_worker_continues_with_one_pending_trainees_after_workloads_processed(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {
@@ -1318,6 +1367,122 @@ def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_head
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"
     assert entry["trainee_count"] == 1
+
+
+def test_background_tick_processes_existing_pending_entries_when_folder_sync_fails(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Drive root temporarily unavailable")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section_id,
+            branch_id="main",
+            drive_file_id="drive-1-26",
+            drive_url="https://drive.google.com/drive/folders/drive-1-26",
+            journal_name="1-26 Журнал",
+            group_code="1-26",
+            workload_status="pending",
+            trainees_status="pending",
+        )
+    )
+    db_session.commit()
+
+    tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        headers=auth_headers,
+    )
+
+    assert tick_response.status_code == 200
+    payload = tick_response.json()
+    assert "Drive root temporarily unavailable" in payload["last_sync_message"]
+    entry = payload["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["trainees_status"] == "processed"
+    assert entry["trainee_count"] == 1
+
+
+def test_background_tick_clears_all_pending_workloads_for_resynced_journals(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    folders = [
+        {
+            "id": "drive-1-26",
+            "name": "1-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-1-26",
+            "modified_time": "2026-05-01T10:00:00Z",
+        },
+        {
+            "id": "drive-10-26",
+            "name": "10-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-10-26",
+            "modified_time": "2026-05-01T11:00:00Z",
+        },
+        {
+            "id": "drive-11-26",
+            "name": "11-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-11-26",
+            "modified_time": "2026-05-01T12:00:00Z",
+        },
+    ]
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", lambda _folder_id, service_account_json=None: folders)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        headers=auth_headers,
+    )
+
+    assert tick_response.status_code == 200
+    entries = {entry["group_code"]: entry for entry in tick_response.json()["entries"]}
+    assert {entries[code]["workload_status"] for code in ("1-26", "10-26", "11-26")} == {"processed"}
+    assert sum(1 for code in ("1-26", "10-26", "11-26") if entries[code]["trainees_status"] == "processed") == 1
 
 
 def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, auth_headers, db_session, monkeypatch):

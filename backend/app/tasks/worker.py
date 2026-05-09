@@ -18,7 +18,7 @@ from app.services.import_export import (
     try_import_trainees,
 )
 from app.services.mail_ingest import ingest_mailbox
-from app.services.journal_monitor import list_drive_child_folders, sync_journal_monitor_section
+from app.services.journal_monitor import list_drive_child_folders, process_journal_monitor_background_step
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
 from app.services.schedule_import import import_schedule_docx
 
@@ -218,13 +218,18 @@ def process_journal_monitor_auto_task(self) -> dict:
             db.query(JournalMonitorSection)
             .filter(
                 JournalMonitorSection.is_active.is_(True),
-                JournalMonitorSection.workload_auto_enabled.is_(True),
             )
             .all()
         )
         for section in sections:
             try:
-                sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=True)
+                target_year = section.workload_auto_year or datetime.now(timezone.utc).year
+                process_journal_monitor_background_step(
+                    db,
+                    section,
+                    folder_lister=list_drive_child_folders,
+                    target_year=target_year,
+                )
                 db.commit()
                 processed_sections += 1
             except Exception as exc:
