@@ -3,7 +3,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from app.models import Group, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.models import Group, GroupMembership, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
 from app.services.import_export import (
     analyze_trainee_import_duplicates,
@@ -479,6 +479,30 @@ def test_import_skip_existing_mode_does_not_update_duplicate(tmp_path: Path, db_
     assert trainee is not None
     assert trainee.group_code == "OLD-GROUP"
     assert trainee.status == "completed"
+
+
+def test_import_deduplicates_repeated_rows_for_same_group_membership(db_session):
+    parsed = {
+        "rows": 3,
+        "headers": ["Прізвище", "Ім'я", "По батькові"],
+        "sheet_name": "ЗВ",
+        "default_group_code": "1-26",
+        "default_group_name": "Журнал 1-26",
+        "data": [
+            {"Прізвище": "Петренко", "Ім'я": "Іван", "По батькові": "Іванович"},
+            {"Прізвище": "Петренко", "Ім'я": "Іван", "По батькові": "Іванович"},
+            {"Прізвище": "Петренко", "Ім'я": "Іван", "По батькові": "Іванович"},
+        ],
+    }
+
+    result = try_import_trainees(db_session, parsed, "main")
+
+    assert result["inserted"] == 1
+    assert result["updated_existing"] == 0
+    assert result["skipped_existing"] == 2
+    assert result["memberships_created"] == 1
+    assert db_session.query(Trainee).count() == 1
+    assert db_session.query(GroupMembership).count() == 1
 
 
 def test_analyze_trainee_import_duplicates_reports_existing_rows(tmp_path: Path, db_session):

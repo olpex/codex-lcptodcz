@@ -454,6 +454,7 @@ def _ensure_group_for_trainee(
     trainee: Trainee,
     branch_id: str,
     group_cache: dict[str, Group],
+    membership_cache: set[tuple[int, int]],
     group_code_raw: str | None,
     group_name_raw: str | None,
     overwrite_group: bool = False,
@@ -491,6 +492,10 @@ def _ensure_group_for_trainee(
             db.flush()
         group_cache[cache_key] = group
 
+    membership_key = (group.id, trainee.id)
+    if membership_key in membership_cache:
+        return 0, trainee_group_changed
+
     membership_exists = (
         db.query(GroupMembership)
         .filter(
@@ -500,6 +505,7 @@ def _ensure_group_for_trainee(
         .first()
     )
     if membership_exists:
+        membership_cache.add(membership_key)
         return 0, trainee_group_changed
 
     db.add(
@@ -509,6 +515,7 @@ def _ensure_group_for_trainee(
             status=MembershipStatus.ACTIVE,
         )
     )
+    membership_cache.add(membership_key)
     return 1, True
 
 
@@ -747,6 +754,7 @@ def try_import_trainees(
     default_group_name = _normalize_text_value(parsed.get("default_group_name"))
 
     group_cache: dict[str, Group] = {}
+    membership_cache: set[tuple[int, int]] = set()
     for row in parsed.get("data", []):
         payload = _extract_trainee_payload(row, default_group_code, default_group_name)
         if not payload:
@@ -816,6 +824,7 @@ def try_import_trainees(
                 existing,
                 branch_id,
                 group_cache,
+                membership_cache,
                 group_code,
                 group_name,
                 overwrite_group=overwrite_existing,
@@ -860,6 +869,7 @@ def try_import_trainees(
             trainee,
             branch_id,
             group_cache,
+            membership_cache,
             group_code,
             group_name,
             overwrite_group=True,

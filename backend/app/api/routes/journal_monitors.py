@@ -284,12 +284,13 @@ def _process_section_once(
     *,
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
+    section_id = section.id
     try:
         process_journal_monitor_section_step(db, section, process_workload=True, process_trainees=True)
         db.commit()
     except Exception as exc:
-        logger.exception("Journal processing tick failed for section %s", section.id)
         db.rollback()
+        logger.exception("Journal processing tick failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
@@ -398,8 +399,8 @@ def background_tick_section_processing(
         )
         db.commit()
     except Exception as exc:
-        logger.exception("Journal background processing failed for section %s", section.id)
         db.rollback()
+        logger.exception("Journal background processing failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося виконати фонове опрацювання журналів: {exc}") from exc
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
