@@ -31,14 +31,16 @@ const WORKLOAD_STATUS_LABELS: Record<string, string> = {
   pending: "Очікує",
   processed: "Додано",
   failed: "Помилка",
-  skipped_year: "Пропущено за роком"
+  skipped_year: "Пропущено за роком",
+  needs_regeneration: "Повторити"
 };
 
 const WORKLOAD_STATUS_CLASSES: Record<string, string> = {
   pending: "bg-slate-100 text-slate-700",
   processed: "bg-emerald-100 text-emerald-800",
   failed: "bg-rose-100 text-rose-800",
-  skipped_year: "bg-amber-100 text-amber-800"
+  skipped_year: "bg-amber-100 text-amber-800",
+  needs_regeneration: "bg-violet-100 text-violet-800"
 };
 
 const PROGRESS_CARDS = [
@@ -364,8 +366,24 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const processWorkload = async () => {
+  const toggleWorkloadAuto = async () => {
     if (!selectedId) return;
+    if (detail?.workload_auto_enabled) {
+      setIsProcessingWorkload(true);
+      try {
+        const data = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}/workload-auto/stop`, {
+          method: "POST"
+        });
+        setDetail(data);
+        await loadSections();
+        showInfo("Автоопрацювання педнавантаження зупинено");
+      } catch (error) {
+        showError((error as Error).message);
+      } finally {
+        setIsProcessingWorkload(false);
+      }
+      return;
+    }
     const year = Number(workloadYear);
     if (!Number.isInteger(year) || year < 2025 || year > 2100) {
       showError("Вкажіть рік від 2025 до 2100");
@@ -374,12 +392,12 @@ export function JournalMonitorsPage() {
     setIsProcessingWorkload(true);
     try {
       const data = await request<JournalMonitorSection>(
-        `/journal-monitors/${selectedId}/process-workload?year=${year}&limit=1`,
+        `/journal-monitors/${selectedId}/workload-auto/start?year=${year}`,
         { method: "POST" }
       );
       setDetail(data);
       await loadSections();
-      showSuccess(`Опрацьовано наступний журнал для ${year} року`);
+      showSuccess(`Автоопрацювання педнавантаження для ${year} року увімкнено`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -539,18 +557,28 @@ export function JournalMonitorsPage() {
               <input
                 className="w-20 rounded-lg border border-slate-300 px-2 py-2 text-sm font-normal tracking-normal text-ink"
                 value={workloadYear}
-                onChange={(event) => setWorkloadYear(event.target.value)}
-                inputMode="numeric"
-              />
-            </label>
-            <button
-              type="button"
-              className="rounded-lg border border-emerald-500 px-3 py-2 text-sm font-semibold text-emerald-700 disabled:opacity-50"
-              onClick={processWorkload}
-              disabled={!selectedId || isProcessingWorkload}
-            >
-              {isProcessingWorkload ? "Опрацьовуємо..." : "Опрацювати години"}
-            </button>
+              onChange={(event) => setWorkloadYear(event.target.value)}
+              inputMode="numeric"
+              disabled={Boolean(detail?.workload_auto_enabled) || isProcessingWorkload}
+            />
+          </label>
+          <button
+            type="button"
+            className={clsx(
+              "rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50",
+              detail?.workload_auto_enabled
+                ? "border-rose-300 text-rose-700 hover:bg-rose-50"
+                : "border-emerald-500 text-emerald-700"
+            )}
+            onClick={toggleWorkloadAuto}
+            disabled={!selectedId || isProcessingWorkload}
+          >
+            {isProcessingWorkload
+              ? "Змінюємо..."
+              : detail?.workload_auto_enabled
+                ? "Зупинити опрацювання"
+                : "Опрацювати години"}
+          </button>
             <button
               type="button"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"

@@ -200,6 +200,8 @@ export interface JournalMonitorSection {
   folder_url: string;
   folder_id: string;
   is_active: boolean;
+  workload_auto_enabled: boolean;
+  workload_auto_year: number | null;
   has_service_account_credentials: boolean;
   last_synced_at: string | null;
   last_sync_status: string;

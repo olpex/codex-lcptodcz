@@ -314,6 +314,8 @@ class JournalMonitorSection(Base):
     folder_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     service_account_json_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    workload_auto_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    workload_auto_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_status: Mapped[str] = mapped_column(String(50), default="never", nullable=False)
     last_sync_message: Mapped[str | None] = mapped_column(String(500), nullable=True)

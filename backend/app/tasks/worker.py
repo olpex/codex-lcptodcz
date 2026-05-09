@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models import Document, ExportJob, ImportJob, JobStatus, OCRResult
+from app.models import Document, ExportJob, ImportJob, JobStatus, JournalMonitorSection, OCRResult
 from app.services.import_export import (
     IMPORT_UPDATE_MODES,
     collect_report_rows,
@@ -18,6 +18,7 @@ from app.services.import_export import (
     try_import_trainees,
 )
 from app.services.mail_ingest import ingest_mailbox
+from app.services.journal_monitor import list_drive_child_folders, sync_journal_monitor_section
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
 from app.services.schedule_import import import_schedule_docx
 
@@ -188,6 +189,37 @@ def poll_mailbox_task(self, force: bool = False) -> dict:
     db = _get_db()
     try:
         return ingest_mailbox(db)
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.worker.process_journal_monitor_auto_task",
+)
+def process_journal_monitor_auto_task(self) -> dict:
+    db = _get_db()
+    processed_sections = 0
+    failed_sections = 0
+    try:
+        sections = (
+            db.query(JournalMonitorSection)
+            .filter(
+                JournalMonitorSection.is_active.is_(True),
+                JournalMonitorSection.workload_auto_enabled.is_(True),
+            )
+            .all()
+        )
+        for section in sections:
+            try:
+                sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=True)
+                db.commit()
+                processed_sections += 1
+            except Exception as exc:
+                logger.exception("Journal monitor auto processing failed for section %s: %s", section.id, exc)
+                db.rollback()
+                failed_sections += 1
+        return {"processed_sections": processed_sections, "failed_sections": failed_sections}
     finally:
         db.close()
 

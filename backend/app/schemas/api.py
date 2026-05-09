@@ -474,6 +474,8 @@ class JournalMonitorSectionResponse(BaseModel):
     folder_url: str
     folder_id: str
     is_active: bool
+    workload_auto_enabled: bool = False
+    workload_auto_year: int | None = None
     has_service_account_credentials: bool = False
     last_synced_at: datetime | None = None
     last_sync_status: str

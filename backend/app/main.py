@@ -47,6 +47,8 @@ def ensure_runtime_schema() -> None:
             ("trainees", "is_deleted", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("trainees", "deleted_at", "TIMESTAMP NULL"),
             ("journal_monitor_sections", "service_account_json_encrypted", "TEXT NULL"),
+            ("journal_monitor_sections", "workload_auto_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("journal_monitor_sections", "workload_auto_year", "INTEGER NULL"),
             ("journal_monitor_entries", "workload_status", "VARCHAR(50) NOT NULL DEFAULT 'pending'"),
             ("journal_monitor_entries", "workload_message", "VARCHAR(500) NULL"),
             ("journal_monitor_entries", "workload_processed_at", "TIMESTAMP NULL"),

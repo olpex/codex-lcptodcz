@@ -16,6 +16,7 @@ from app.services.journal_monitor import (
     EXPORT_FORMATS,
     extract_drive_folder_id,
     list_drive_child_folders,
+    requeue_journal_workload_for_year,
     save_journal_monitor_export,
     section_to_response_payload,
     process_next_journal_workload,
@@ -161,6 +162,52 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
 
 
 @router.post(
+    "/{section_id}/workload-auto/start",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def start_section_workload_auto(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    year: int = Query(default=2026, ge=2025, le=2100),
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    section.workload_auto_enabled = True
+    section.workload_auto_year = year
+    db.add(section)
+    db.flush()
+    try:
+        section = sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=False)
+        requeue_journal_workload_for_year(db, section, year)
+        process_next_journal_workload(db, section, limit=1, target_year=year, retry_failed=True)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося запустити обробку педнавантаження: {exc}") from exc
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+@router.post(
+    "/{section_id}/workload-auto/stop",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def stop_section_workload_auto(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    section.workload_auto_enabled = False
+    db.add(section)
+    db.commit()
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+@router.post(
     "/{section_id}/process-workload",
     response_model=JournalMonitorDetailResponse,
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
@@ -173,7 +220,9 @@ def process_section_workload(
     limit: int = Query(default=1, ge=1, le=20),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    process_next_journal_workload(db, section, limit=limit, target_year=year)
+    if year is not None:
+        requeue_journal_workload_for_year(db, section, year)
+    process_next_journal_workload(db, section, limit=limit, target_year=year, retry_failed=True)
     db.commit()
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))

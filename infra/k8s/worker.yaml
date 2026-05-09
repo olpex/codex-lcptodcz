@@ -17,7 +17,7 @@ spec:
         - name: worker
           image: ghcr.io/your-org/suptc-backend:latest
           imagePullPolicy: Always
-          command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--queues=mail_ingest,ocr_parse,import_parse,report_export"]
+          command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--queues=mail_ingest,ocr_parse,import_parse,report_export,journal_monitor"]
           envFrom:
             - configMapRef:
                 name: suptc-config

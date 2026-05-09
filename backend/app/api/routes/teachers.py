@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import RoleName, Teacher, ScheduleSlot
+from app.models import JournalMonitorEntry, JournalWorkloadEntry, RoleName, Teacher, ScheduleSlot
 from app.schemas.api import TeacherCreate, TeacherResponse, TeacherUpdate
 from app.services.audit import write_audit
 
@@ -70,6 +70,22 @@ def delete_teacher(teacher_id: int, db: DbSession, current_user: CurrentUser) ->
     if not teacher:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Викладача не знайдено")
     ensure_same_branch(current_user, teacher, "Викладача")
+    affected_journal_ids = [
+        row[0]
+        for row in db.query(JournalWorkloadEntry.journal_monitor_entry_id)
+        .filter(JournalWorkloadEntry.teacher_id == teacher_id)
+        .distinct()
+        .all()
+    ]
+    if affected_journal_ids:
+        db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id.in_(affected_journal_ids)).delete(
+            synchronize_session=False
+        )
+        for entry in db.query(JournalMonitorEntry).filter(JournalMonitorEntry.id.in_(affected_journal_ids)).all():
+            entry.workload_status = "needs_regeneration"
+            entry.workload_message = "Пов'язане педнавантаження видалено разом з викладачем; журнал потребує повторної обробки"
+            entry.workload_hours = 0.0
+            db.add(entry)
     db.query(ScheduleSlot).filter(ScheduleSlot.teacher_id == teacher_id).delete(synchronize_session=False)
     db.delete(teacher)
     db.commit()
