@@ -5,6 +5,7 @@ import re
 import tempfile
 import time
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlencode, urlparse, parse_qs
@@ -12,15 +13,18 @@ from urllib.request import Request, urlopen
 
 from docx import Document as DocxDocument
 from jose import jwt
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Group, JournalMonitorEntry, JournalMonitorSection, ScheduleSlot, Trainee
+from app.models import Group, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
 from app.services.import_export import save_report_file
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+GOOGLE_DRIVE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+GOOGLE_DRIVE_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+GOOGLE_DRIVE_XLS_MIME = "application/vnd.ms-excel"
 GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 SERVICE_ACCOUNT_SETUP_MESSAGE = (
@@ -31,6 +35,7 @@ SERVICE_ACCOUNT_SETUP_MESSAGE = (
 )
 GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-–—]\s*[0-9]{2,4})")
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
+JOURNAL_WORKLOAD_START_YEAR = 2026
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -83,6 +88,51 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _norm(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").replace("\u00a0", " ")).strip()
+
+
+def _parse_hours(value: Any) -> float:
+    text = _norm(value)
+    match = re.search(r"([0-9]+(?:[.,][0-9]+)?)", text)
+    if not match:
+        return 0.0
+    return float(match.group(1).replace(",", "."))
+
+
+def _split_teacher_name(full_name: str) -> tuple[str, str]:
+    tokens = [part for part in _norm(full_name).split(" ") if part]
+    if not tokens:
+        return "Невідомий", "Викладач"
+    if len(tokens) == 1:
+        return tokens[0], "Викладач"
+    return tokens[0], " ".join(tokens[1:])
+
+
+def _find_header_column(headers: list[str], keywords: tuple[str, ...], excluded: tuple[str, ...] = ()) -> int | None:
+    for index, header in enumerate(headers):
+        normalized = header.casefold()
+        if excluded and any(item in normalized for item in excluded):
+            continue
+        if any(item in normalized for item in keywords):
+            return index
+    return None
+
+
+def _infer_journal_year(entry: JournalMonitorEntry, section: JournalMonitorSection | None = None) -> int | None:
+    for value in (entry.group_code, entry.journal_name, section.name if section else None):
+        text = _norm(value)
+        if not text:
+            continue
+        full_year = re.search(r"\b(20\d{2})\b", text)
+        if full_year:
+            return int(full_year.group(1))
+        group_year = re.search(r"[-–—/]\s*(\d{2})(?:\D|$)", text)
+        if group_year:
+            return 2000 + int(group_year.group(1))
+    return None
 
 
 def _decode_service_account_json(raw_json: str | None = None) -> dict[str, Any]:
@@ -193,6 +243,249 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
             return folders
 
 
+def _drive_request_url(url: str, service_account_json: str | None = None) -> str | Request:
+    effective_service_account_json = service_account_json or settings.google_drive_service_account_json
+    if effective_service_account_json.strip():
+        access_token = _get_service_account_access_token(effective_service_account_json)
+        return Request(url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
+    if settings.google_drive_api_key:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}key={quote(settings.google_drive_api_key)}"
+    raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
+
+
+def list_drive_journal_workbook_files(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
+    mime_filter = " or ".join(
+        [
+            f"mimeType = '{GOOGLE_DRIVE_SHEETS_MIME}'",
+            f"mimeType = '{GOOGLE_DRIVE_XLSX_MIME}'",
+            f"mimeType = '{GOOGLE_DRIVE_XLS_MIME}'",
+        ]
+    )
+    query = f"'{folder_id}' in parents and ({mime_filter}) and trashed = false"
+    fields = "nextPageToken,files(id,name,mimeType,modifiedTime)"
+    page_token = ""
+    files: list[dict[str, Any]] = []
+    while True:
+        url = (
+            "https://www.googleapis.com/drive/v3/files"
+            f"?q={quote(query)}"
+            f"&fields={quote(fields)}"
+            "&pageSize=100"
+        )
+        if page_token:
+            url += f"&pageToken={quote(page_token)}"
+        with urlopen(_drive_request_url(url, service_account_json), timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        files.extend(payload.get("files", []))
+        page_token = payload.get("nextPageToken") or ""
+        if not page_token:
+            return files
+
+
+def download_drive_file_bytes(
+    file_id: str,
+    mime_type: str | None = None,
+    service_account_json: str | None = None,
+) -> bytes:
+    if mime_type == GOOGLE_DRIVE_SHEETS_MIME:
+        url = (
+            f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}/export"
+            f"?mimeType={quote(GOOGLE_DRIVE_XLSX_MIME)}"
+        )
+    else:
+        url = f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}?alt=media"
+    request_or_url = _drive_request_url(url, service_account_json)
+    if isinstance(request_or_url, Request) and mime_type == GOOGLE_DRIVE_SHEETS_MIME:
+        request_or_url.add_header("Accept", GOOGLE_DRIVE_XLSX_MIME)
+    with urlopen(request_or_url, timeout=30) as response:
+        return response.read()
+
+
+def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
+    workbook = load_workbook(BytesIO(payload), data_only=True, read_only=True)
+    try:
+        sheet = workbook["Дисципліни"] if "Дисципліни" in workbook.sheetnames else workbook.worksheets[2]
+        rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+    finally:
+        workbook.close()
+
+    header_index = -1
+    subject_col: int | None = None
+    hours_col: int | None = None
+    pages_col: int | None = None
+    teacher_col: int | None = None
+    for index, raw_row in enumerate(rows[:30]):
+        headers = [_norm(value) for value in raw_row]
+        subject_candidate = _find_header_column(headers, ("дисципл", "предмет", "назва"), ("стор", "год", "виклада", "піб"))
+        hours_candidate = _find_header_column(headers, ("год", "кількість годин"))
+        teacher_candidate = _find_header_column(headers, ("виклада", "піб", "прізвищ"))
+        if subject_candidate is not None and hours_candidate is not None and teacher_candidate is not None:
+            header_index = index
+            subject_col = subject_candidate
+            hours_col = hours_candidate
+            pages_col = _find_header_column(headers, ("стор", "сторін"))
+            teacher_col = teacher_candidate
+            break
+
+    if header_index < 0 or subject_col is None or hours_col is None or teacher_col is None:
+        raise ValueError("На аркуші «Дисципліни» не знайдено колонки дисципліни, годин і викладача")
+
+    parsed: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw_row in rows[header_index + 1 :]:
+        subject_name = _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
+        teacher_name = _norm(raw_row[teacher_col] if teacher_col < len(raw_row) else "")
+        hours = _parse_hours(raw_row[hours_col] if hours_col < len(raw_row) else "")
+        pages = _norm(raw_row[pages_col] if pages_col is not None and pages_col < len(raw_row) else "")
+        if not subject_name or not teacher_name or hours <= 0:
+            continue
+        key = (subject_name.casefold(), teacher_name.casefold())
+        if key not in parsed:
+            parsed[key] = {
+                "subject_name": subject_name[:255],
+                "hours": 0.0,
+                "pages": pages[:255] if pages else None,
+                "teacher_name": teacher_name,
+            }
+        parsed[key]["hours"] = round(float(parsed[key]["hours"]) + hours, 2)
+        if pages and not parsed[key].get("pages"):
+            parsed[key]["pages"] = pages[:255]
+
+    return list(parsed.values())
+
+
+def _find_or_create_teacher(db: Session, branch_id: str, full_name: str) -> Teacher:
+    last_name, first_name = _split_teacher_name(full_name)
+    last_name = last_name[:120] or "Невідомий"
+    first_name = first_name[:120] or "Викладач"
+    for teacher in db.query(Teacher).filter(Teacher.branch_id == branch_id).all():
+        if (teacher.last_name or "").strip().casefold() != last_name.casefold():
+            continue
+        existing_first = (teacher.first_name or "").strip().casefold()
+        incoming_first = first_name.casefold()
+        if existing_first == incoming_first:
+            return teacher
+        existing_initials = "".join(part[0].casefold() for part in _norm(teacher.first_name).split() if part)
+        incoming_initials = "".join(part[0].casefold() for part in first_name.split() if part)
+        if existing_initials and incoming_initials and existing_initials == incoming_initials:
+            if len(first_name) > len(teacher.first_name or ""):
+                teacher.first_name = first_name
+                db.add(teacher)
+                db.flush()
+            return teacher
+
+    teacher = Teacher(branch_id=branch_id, last_name=last_name, first_name=first_name, hourly_rate=0.0, is_active=True)
+    db.add(teacher)
+    db.flush()
+    return teacher
+
+
+def process_journal_workload_entry(
+    db: Session,
+    entry: JournalMonitorEntry,
+    *,
+    service_account_json: str | None = None,
+    workbook_lister=None,
+    workbook_downloader=None,
+) -> dict[str, Any]:
+    if workbook_lister is None:
+        workbook_lister = list_drive_journal_workbook_files
+    if workbook_downloader is None:
+        workbook_downloader = download_drive_file_bytes
+    files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
+    if not files:
+        raise ValueError("У папці журналу не знайдено Google Sheet або Excel-файл")
+    workbook_file = sorted(files, key=lambda item: str(item.get("name") or "").casefold())[0]
+    payload = workbook_downloader(
+        str(workbook_file.get("id") or ""),
+        mime_type=str(workbook_file.get("mimeType") or ""),
+        service_account_json=service_account_json,
+    )
+    rows = parse_journal_disciplines_xlsx(payload)
+    if not rows:
+        raise ValueError("На аркуші «Дисципліни» не знайдено рядків з годинами викладачів")
+
+    db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
+        synchronize_session=False
+    )
+    total_hours = 0.0
+    for row in rows:
+        teacher = _find_or_create_teacher(db, entry.branch_id, row["teacher_name"])
+        hours = round(float(row["hours"]), 2)
+        total_hours += hours
+        db.add(
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=entry.id,
+                branch_id=entry.branch_id,
+                teacher_id=teacher.id,
+                subject_name=row["subject_name"],
+                hours=hours,
+                pages=row.get("pages"),
+            )
+        )
+    entry.workload_status = "processed"
+    entry.workload_message = f"Додано годин із журналу: {round(total_hours, 2)}"
+    entry.workload_processed_at = datetime.now(timezone.utc)
+    entry.workload_hours = round(total_hours, 2)
+    db.add(entry)
+    db.flush()
+    return {"entries": len(rows), "hours": round(total_hours, 2)}
+
+
+def process_next_journal_workload(
+    db: Session,
+    section: JournalMonitorSection,
+    *,
+    limit: int = 1,
+    start_year: int = JOURNAL_WORKLOAD_START_YEAR,
+    target_year: int | None = None,
+) -> dict[str, Any]:
+    from app.core.crypto import cipher
+
+    processed = 0
+    failed = 0
+    skipped_year = 0
+    section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
+
+    entries = sorted(
+        section.entries,
+        key=lambda item: (_infer_journal_year(item, section) or 9999, (item.group_code or "~~~~").casefold(), item.journal_name.casefold()),
+    )
+    for entry in entries:
+        if processed >= limit:
+            break
+        if entry.workload_status == "processed":
+            continue
+        if entry.workload_status == "failed" and target_year is None:
+            continue
+        year = _infer_journal_year(entry, section)
+        entry.workload_year = year
+        if target_year is not None:
+            eligible = year == target_year
+        else:
+            eligible = year is not None and year >= start_year
+        if not eligible:
+            if year is not None and year < start_year and entry.workload_status != "skipped_year":
+                entry.workload_status = "skipped_year"
+                entry.workload_message = f"Журнал {year} року пропущено поточним правилом обробки"
+                db.add(entry)
+                skipped_year += 1
+            continue
+        try:
+            process_journal_workload_entry(db, entry, service_account_json=section_service_account_json)
+            processed += 1
+        except Exception as exc:
+            entry.workload_status = "failed"
+            entry.workload_message = str(exc)[:500]
+            entry.workload_processed_at = datetime.now(timezone.utc)
+            db.add(entry)
+            failed += 1
+            continue
+
+    db.flush()
+    return {"processed": processed, "failed": failed, "skipped_year": skipped_year}
+
+
 def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
     stats = {
         "total": len(entries),
@@ -241,6 +534,11 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "schedule_lessons": entry.schedule_lessons,
         "trainee_count": entry.trainee_count,
         "processing_status": entry.processing_status,
+        "workload_status": entry.workload_status,
+        "workload_message": entry.workload_message,
+        "workload_processed_at": entry.workload_processed_at,
+        "workload_year": entry.workload_year,
+        "workload_hours": entry.workload_hours,
         "drive_modified_at": entry.drive_modified_at,
         "last_seen_at": entry.last_seen_at,
     }
@@ -295,6 +593,7 @@ def sync_journal_monitor_section(
     db: Session,
     section: JournalMonitorSection,
     folder_lister=list_drive_child_folders,
+    process_workload: bool = True,
 ) -> JournalMonitorSection:
     now = datetime.now(timezone.utc)
     from app.core.crypto import cipher
@@ -351,6 +650,15 @@ def sync_journal_monitor_section(
     section.last_sync_message = f"Оновлено папок журналів: {len(seen_drive_ids)}"
     db.flush()
     db.refresh(section)
+    if process_workload:
+        workload_result = process_next_journal_workload(db, section, limit=1)
+        if workload_result.get("processed") or workload_result.get("failed") or workload_result.get("skipped_year"):
+            section.last_sync_message += (
+                f"; педнавантаження: опрацьовано {workload_result['processed']}, "
+                f"помилок {workload_result['failed']}"
+            )
+    db.flush()
+    db.refresh(section)
     return section
 
 
@@ -366,6 +674,10 @@ def collect_export_rows(
             "Номер групи": entry.group_code or "",
             "Назва папки журналу": entry.journal_name,
             "Статус опрацювання": format_processing_status(entry.processing_status),
+            "Статус педнавантаження": format_workload_status(entry.workload_status),
+            "Годин із журналу": entry.workload_hours,
+            "Рік педнавантаження": entry.workload_year or "",
+            "Повідомлення педнавантаження": entry.workload_message or "",
             "Є група в системі": "Так" if entry.has_group else "Ні",
             "Є розклад": "Так" if entry.has_schedule else "Ні",
             "Занять у розкладі": entry.schedule_lessons,
@@ -385,6 +697,15 @@ def format_processing_status(value: str) -> str:
         "trainees_only": "Опрацьовано тільки слухачі",
         "not_processed": "Не опрацьовано",
         "unknown_code": "Не визначено номер групи",
+    }.get(value, value)
+
+
+def format_workload_status(value: str) -> str:
+    return {
+        "pending": "Очікує обробки",
+        "processed": "Педнавантаження додано",
+        "failed": "Помилка обробки",
+        "skipped_year": "Пропущено за роком",
     }.get(value, value)
 
 

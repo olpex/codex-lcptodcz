@@ -185,6 +185,11 @@ export interface JournalMonitorEntry {
   schedule_lessons: number;
   trainee_count: number;
   processing_status: string;
+  workload_status: string;
+  workload_message: string | null;
+  workload_processed_at: string | null;
+  workload_year: number | null;
+  workload_hours: number;
   drive_modified_at: string | null;
   last_seen_at: string;
 }

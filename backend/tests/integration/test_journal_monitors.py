@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
+from io import BytesIO
+
+from openpyxl import Workbook
 
 from app.models import Group, GroupStatus, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.services.import_export import collect_teacher_workload_summary
 from app.services import journal_monitor
 
 
@@ -22,6 +26,158 @@ def _seed_schedule(db_session, group: Group, suffix: str) -> None:
             academic_hours=2,
         )
     )
+
+
+def _journal_workbook_bytes(rows: list[tuple[str, float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    workbook.create_sheet("Слухачі")
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["Назва дисципліни", "Кількість годин", "Сторінки", "Прізвище, ім'я, по батькові викладача"])
+    for row in rows:
+        sheet.append(list(row))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def test_journal_workload_sync_processes_one_2026_journal_and_updates_teacher_workload(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    existing_teacher = Teacher(
+        branch_id="main",
+        first_name="Олена Петрівна",
+        last_name="Коваль",
+        hourly_rate=0,
+        is_active=True,
+    )
+    db_session.add(existing_teacher)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-73-26",
+                "name": "73-26 Журнал з кібербезпеки",
+                "url": "https://drive.google.com/drive/folders/drive-73-26",
+                "modified_time": "2026-02-01T10:00:00Z",
+            },
+            {
+                "id": "drive-74-26",
+                "name": "74-26 Журнал з обліку",
+                "url": "https://drive.google.com/drive/folders/drive-74-26",
+                "modified_time": "2026-02-02T10:00:00Z",
+            },
+            {
+                "id": "drive-10-25",
+                "name": "10-25 Архівний журнал",
+                "url": "https://drive.google.com/drive/folders/drive-10-25",
+                "modified_time": "2025-02-01T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [
+                ("Основи кібербезпеки", 12, "1-18", "Коваль Олена Петрівна"),
+                ("Безпечна робота", 8, "19-25", "Шевченко Марія Іванівна"),
+            ]
+        ),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entries = {item["drive_file_id"]: item for item in sync_response.json()["entries"]}
+    assert entries["drive-73-26"]["workload_status"] == "processed"
+    assert entries["drive-73-26"]["workload_hours"] == 20
+    assert entries["drive-74-26"]["workload_status"] == "pending"
+    assert entries["drive-10-25"]["workload_status"] == "skipped_year"
+
+    summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert summary["Коваль Олена Петрівна"]["total_hours"] == 12
+    assert summary["Шевченко Марія Іванівна"]["total_hours"] == 8
+
+    second_sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert second_sync_response.status_code == 200
+    second_entries = {item["drive_file_id"]: item for item in second_sync_response.json()["entries"]}
+    assert second_entries["drive-74-26"]["workload_status"] == "processed"
+
+    refreshed_summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert refreshed_summary["Коваль Олена Петрівна"]["total_hours"] == 24
+    assert refreshed_summary["Шевченко Марія Іванівна"]["total_hours"] == 16
+
+
+def test_journal_workload_can_be_run_for_2025_on_demand(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-10-25",
+                "name": "10-25 Архівний журнал",
+                "url": "https://drive.google.com/drive/folders/drive-10-25",
+                "modified_time": "2025-02-01T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [("Архівна дисципліна", 6, "1-6", "Петренко Ігор Степанович")]
+        ),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2025", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert sync_response.json()["entries"][0]["workload_status"] == "skipped_year"
+
+    process_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/process-workload?year=2025",
+        headers=auth_headers,
+    )
+
+    assert process_response.status_code == 200
+    entry = process_response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["workload_year"] == 2025
+    assert entry["workload_hours"] == 6
 
 
 def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, auth_headers, db_session, monkeypatch):

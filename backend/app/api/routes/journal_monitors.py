@@ -18,6 +18,7 @@ from app.services.journal_monitor import (
     list_drive_child_folders,
     save_journal_monitor_export,
     section_to_response_payload,
+    process_next_journal_workload,
     sync_journal_monitor_section,
 )
 
@@ -155,6 +156,25 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
         db.add(section)
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося оновити Google Drive: {exc}") from exc
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+@router.post(
+    "/{section_id}/process-workload",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def process_section_workload(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    year: int | None = Query(default=None, ge=2025, le=2100),
+    limit: int = Query(default=1, ge=1, le=20),
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    process_next_journal_workload(db, section, limit=limit, target_year=year)
+    db.commit()
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 

@@ -27,6 +27,8 @@ from app.models import (
     GroupMembership,
     ImportJob,
     JobStatus,
+    JournalMonitorEntry,
+    JournalWorkloadEntry,
     MembershipStatus,
     Performance,
     ScheduleSlot,
@@ -1004,6 +1006,26 @@ def collect_teacher_workload_summary(
             totals[slot.teacher_id] += float(slot.academic_hours)
         else:
             totals[slot.teacher_id] += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+
+    journal_query = (
+        db.query(JournalWorkloadEntry)
+        .join(JournalMonitorEntry, JournalMonitorEntry.id == JournalWorkloadEntry.journal_monitor_entry_id)
+        .filter(
+            JournalWorkloadEntry.branch_id == branch_id,
+            JournalMonitorEntry.workload_status == "processed",
+        )
+    )
+    if date_from or date_to:
+        start_year = date_from.year if date_from else 0
+        end_year = date_to.year if date_to else 9999
+        journal_query = journal_query.filter(
+            JournalMonitorEntry.workload_year.is_not(None),
+            JournalMonitorEntry.workload_year >= start_year,
+            JournalMonitorEntry.workload_year <= end_year,
+        )
+    for journal_entry in journal_query.all():
+        totals.setdefault(journal_entry.teacher_id, 0.0)
+        totals[journal_entry.teacher_id] += float(journal_entry.hours or 0)
 
     rows: list[dict] = []
     for teacher in teachers:

@@ -346,11 +346,39 @@ class JournalMonitorEntry(Base):
     schedule_lessons: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     trainee_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     processing_status: Mapped[str] = mapped_column(String(50), default="not_processed", nullable=False, index=True)
+    workload_status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False, index=True)
+    workload_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    workload_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    workload_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    workload_hours: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     drive_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     section: Mapped[JournalMonitorSection] = relationship(back_populates="entries")
     matched_group: Mapped[Group | None] = relationship()
+    workload_entries: Mapped[list["JournalWorkloadEntry"]] = relationship(
+        back_populates="journal_entry",
+        cascade="all, delete-orphan",
+    )
+
+
+class JournalWorkloadEntry(Base):
+    __tablename__ = "journal_workload_entries"
+    __table_args__ = (
+        UniqueConstraint("journal_monitor_entry_id", "teacher_id", "subject_name", name="uq_journal_workload_subject_teacher"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    journal_monitor_entry_id: Mapped[int] = mapped_column(ForeignKey("journal_monitor_entries.id"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id"), nullable=False, index=True)
+    subject_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    hours: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    pages: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    journal_entry: Mapped[JournalMonitorEntry] = relationship(back_populates="workload_entries")
+    teacher: Mapped[Teacher] = relationship()
 
 
 class Order(Base):

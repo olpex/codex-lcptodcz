@@ -10,6 +10,7 @@ from app.models.entities import (
     ImportJob,
     JournalMonitorEntry,
     JournalMonitorSection,
+    JournalWorkloadEntry,
     JobStatus,
     MembershipStatus,
     MailMessage,

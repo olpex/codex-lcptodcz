@@ -27,6 +27,20 @@ const STATUS_CLASSES: Record<string, string> = {
   unknown_code: "bg-slate-100 text-slate-700"
 };
 
+const WORKLOAD_STATUS_LABELS: Record<string, string> = {
+  pending: "Очікує",
+  processed: "Додано",
+  failed: "Помилка",
+  skipped_year: "Пропущено за роком"
+};
+
+const WORKLOAD_STATUS_CLASSES: Record<string, string> = {
+  pending: "bg-slate-100 text-slate-700",
+  processed: "bg-emerald-100 text-emerald-800",
+  failed: "bg-rose-100 text-rose-800",
+  skipped_year: "bg-amber-100 text-amber-800"
+};
+
 const PROGRESS_CARDS = [
   {
     key: "complete",
@@ -58,7 +72,7 @@ const PROGRESS_CARDS = [
   }
 ] as const;
 
-type SortKey = "group" | "journal" | "status" | "schedule" | "trainees";
+type SortKey = "group" | "journal" | "status" | "workload" | "schedule" | "trainees";
 type SortDirection = "asc" | "desc";
 
 const STATUS_SORT_ORDER: Record<string, number> = {
@@ -82,6 +96,10 @@ function formatDateTime(value: string | null): string {
 
 function formatStatus(value: string): string {
   return STATUS_LABELS[value] || value;
+}
+
+function formatWorkloadStatus(value: string): string {
+  return WORKLOAD_STATUS_LABELS[value] || value;
 }
 
 function formatPercent(count = 0, total = 0): string {
@@ -134,6 +152,11 @@ function compareJournalRows(left: JournalMonitorEntry, right: JournalMonitorEntr
   if (sortKey === "status") {
     return (STATUS_SORT_ORDER[left.processing_status] ?? 99) - (STATUS_SORT_ORDER[right.processing_status] ?? 99);
   }
+  if (sortKey === "workload") {
+    return (left.workload_status || "").localeCompare(right.workload_status || "", "uk-UA", {
+      sensitivity: "base"
+    });
+  }
   if (sortKey === "schedule") {
     return Number(right.has_schedule) - Number(left.has_schedule);
   }
@@ -168,6 +191,8 @@ export function JournalMonitorsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isProcessingWorkload, setIsProcessingWorkload] = useState(false);
+  const [workloadYear, setWorkloadYear] = useState(String(new Date().getFullYear()));
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
@@ -339,6 +364,29 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const processWorkload = async () => {
+    if (!selectedId) return;
+    const year = Number(workloadYear);
+    if (!Number.isInteger(year) || year < 2025 || year > 2100) {
+      showError("Вкажіть рік від 2025 до 2100");
+      return;
+    }
+    setIsProcessingWorkload(true);
+    try {
+      const data = await request<JournalMonitorSection>(
+        `/journal-monitors/${selectedId}/process-workload?year=${year}&limit=1`,
+        { method: "POST" }
+      );
+      setDetail(data);
+      await loadSections();
+      showSuccess(`Опрацьовано наступний журнал для ${year} року`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsProcessingWorkload(false);
+    }
+  };
+
   const deleteSelectedSection = async () => {
     if (!selectedId) return;
     setIsDeleting(true);
@@ -486,6 +534,23 @@ export function JournalMonitorsPage() {
             <span>Не опрацьовано: <b className="text-rose-700">{detail?.stats.not_processed ?? 0}</b></span>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
+            <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Рік
+              <input
+                className="w-20 rounded-lg border border-slate-300 px-2 py-2 text-sm font-normal tracking-normal text-ink"
+                value={workloadYear}
+                onChange={(event) => setWorkloadYear(event.target.value)}
+                inputMode="numeric"
+              />
+            </label>
+            <button
+              type="button"
+              className="rounded-lg border border-emerald-500 px-3 py-2 text-sm font-semibold text-emerald-700 disabled:opacity-50"
+              onClick={processWorkload}
+              disabled={!selectedId || isProcessingWorkload}
+            >
+              {isProcessingWorkload ? "Опрацьовуємо..." : "Опрацювати години"}
+            </button>
             <button
               type="button"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
@@ -599,6 +664,8 @@ export function JournalMonitorsPage() {
                       <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
                       <th className="px-3 py-2">{renderSortButton("journal", "Папка журналу")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
+                      <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
+                      <th className="px-3 py-2">Години</th>
                       <th className="px-3 py-2">{renderSortButton("schedule", "Розклад")}</th>
                       <th className="px-3 py-2">{renderSortButton("trainees", "Слухачі")}</th>
                       <th className="px-3 py-2">Занять</th>
@@ -616,6 +683,18 @@ export function JournalMonitorsPage() {
                             {formatStatus(row.processing_status)}
                           </span>
                         </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={clsx(
+                              "whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold",
+                              WORKLOAD_STATUS_CLASSES[row.workload_status] || WORKLOAD_STATUS_CLASSES.pending
+                            )}
+                            title={row.workload_message || undefined}
+                          >
+                            {formatWorkloadStatus(row.workload_status)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">{row.workload_hours || 0}</td>
                         <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
                         <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
                         <td className="px-3 py-2">{row.schedule_lessons}</td>
@@ -633,21 +712,21 @@ export function JournalMonitorsPage() {
                     ))}
                     {!isLoading && rows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                           Даних ще немає. Натисніть «Оновити» після створення розділу.
                         </td>
                       </tr>
                     )}
                     {!isLoading && rows.length > 0 && visibleRows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                           За цим пошуком журналів не знайдено.
                         </td>
                       </tr>
                     )}
                     {isLoading && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={8}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
                           Завантаження...
                         </td>
                       </tr>

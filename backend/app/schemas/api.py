@@ -459,6 +459,11 @@ class JournalMonitorEntryResponse(BaseModel):
     schedule_lessons: int
     trainee_count: int
     processing_status: str
+    workload_status: str = "pending"
+    workload_message: str | None = None
+    workload_processed_at: datetime | None = None
+    workload_year: int | None = None
+    workload_hours: float = 0.0
     drive_modified_at: datetime | None = None
     last_seen_at: datetime
 
