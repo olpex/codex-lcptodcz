@@ -20,6 +20,7 @@ from app.services.journal_monitor import (
     requeue_journal_workload_for_year,
     save_journal_monitor_export,
     section_to_response_payload,
+    process_journal_monitor_section_step,
     process_next_journal_workload,
     sync_journal_monitor_section,
 )
@@ -202,13 +203,7 @@ def _process_section_once(
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
     try:
-        section = sync_journal_monitor_section(
-            db,
-            section,
-            folder_lister=list_drive_child_folders,
-            process_workload=True,
-            process_trainees=True,
-        )
+        process_journal_monitor_section_step(db, section, process_workload=True, process_trainees=True)
         db.commit()
     except Exception as exc:
         db.rollback()

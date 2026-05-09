@@ -932,6 +932,60 @@ def _section_auto_processing_complete(section: JournalMonitorSection) -> bool:
     return has_target_entry
 
 
+def process_journal_monitor_section_step(
+    db: Session,
+    section: JournalMonitorSection,
+    *,
+    process_workload: bool = True,
+    process_trainees: bool = True,
+) -> dict[str, Any]:
+    message_parts: list[str] = []
+    result: dict[str, Any] = {
+        "workload": {"processed": 0, "failed": 0, "skipped_year": 0},
+        "trainees": {"processed": 0, "no_data": 0, "failed": 0},
+    }
+    if process_workload and section.workload_auto_enabled:
+        workload_result = process_next_journal_workload(
+            db,
+            section,
+            limit=1,
+            target_year=section.workload_auto_year,
+            retry_failed=True,
+        )
+        result["workload"] = workload_result
+        if workload_result.get("processed") or workload_result.get("failed") or workload_result.get("skipped_year"):
+            message_parts.append(
+                f"педнавантаження: опрацьовано {workload_result['processed']}, "
+                f"помилок {workload_result['failed']}"
+            )
+    if process_trainees:
+        trainees_result = process_journal_trainees_for_section(
+            db,
+            section,
+            limit=1,
+            target_year=section.workload_auto_year if section.workload_auto_enabled else None,
+            retry_failed=True,
+        )
+        result["trainees"] = trainees_result
+        if trainees_result.get("processed") or trainees_result.get("failed") or trainees_result.get("no_data"):
+            message_parts.append(
+                f"слухачі: опрацьовано {trainees_result['processed']}, "
+                f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
+            )
+        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
+        for entry in section.entries:
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+    if section.workload_auto_enabled and _section_auto_processing_complete(section):
+        section.workload_auto_enabled = False
+        message_parts.append("опрацювання завершено")
+    if message_parts:
+        prefix = section.last_sync_message or ""
+        section.last_sync_message = f"{prefix}; {'; '.join(message_parts)}" if prefix else "; ".join(message_parts)
+    db.flush()
+    db.refresh(section)
+    return result
+
+
 def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
     stats = {
         "total": len(entries),
@@ -1114,42 +1168,12 @@ def sync_journal_monitor_section(
     section.last_sync_message = f"Оновлено папок журналів: {len(seen_drive_ids)}"
     db.flush()
     db.refresh(section)
-    if process_workload and section.workload_auto_enabled:
-        workload_result = process_next_journal_workload(
-            db,
-            section,
-            limit=1,
-            target_year=section.workload_auto_year,
-            retry_failed=True,
-        )
-        if workload_result.get("processed") or workload_result.get("failed") or workload_result.get("skipped_year"):
-            section.last_sync_message += (
-                f"; педнавантаження: опрацьовано {workload_result['processed']}, "
-                f"помилок {workload_result['failed']}"
-            )
-    if process_trainees:
-        trainees_result = process_journal_trainees_for_section(
-            db,
-            section,
-            limit=1,
-            target_year=section.workload_auto_year if section.workload_auto_enabled else None,
-            retry_failed=True,
-        )
-        if trainees_result.get("processed") or trainees_result.get("failed") or trainees_result.get("no_data"):
-            section.last_sync_message += (
-                f"; слухачі: опрацьовано {trainees_result['processed']}, "
-                f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
-            )
-        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
-        for entry in section.entries:
-            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-    if section.workload_auto_enabled and _section_auto_processing_complete(section):
-        section.workload_auto_enabled = False
-        suffix = "; опрацювання завершено"
-        if section.last_sync_message:
-            section.last_sync_message += suffix
-        else:
-            section.last_sync_message = suffix.lstrip("; ")
+    process_journal_monitor_section_step(
+        db,
+        section,
+        process_workload=process_workload,
+        process_trainees=process_trainees,
+    )
     db.flush()
     db.refresh(section)
     return section

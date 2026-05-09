@@ -436,20 +436,14 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
 def test_journal_processing_start_processes_first_journal_immediately_and_queues_worker(
     client,
     auth_headers,
+    db_session,
     monkeypatch,
 ):
     queued = {"called": False}
 
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
-        lambda _folder_id, service_account_json=None: [
-            {
-                "id": "drive-46-26",
-                "name": "46-26 Журнал",
-                "url": "https://drive.google.com/drive/folders/drive-46-26",
-                "modified_time": "2026-03-02T10:00:00Z",
-            },
-        ],
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("processing/start must use existing journal entries")),
     )
     monkeypatch.setattr(
         journal_monitor,
@@ -476,6 +470,17 @@ def test_journal_processing_start_processes_first_journal_immediately_and_queues
         headers=auth_headers,
     )
     section_id = create_response.json()["id"]
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section_id,
+            branch_id="main",
+            drive_file_id="drive-46-26",
+            drive_url="https://drive.google.com/drive/folders/drive-46-26",
+            journal_name="46-26 Журнал",
+            group_code="46-26",
+        )
+    )
+    db_session.commit()
 
     response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
 
