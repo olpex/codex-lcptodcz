@@ -96,23 +96,22 @@ def _journal_combined_workbook_bytes() -> bytes:
     return stream.getvalue()
 
 
-def test_journal_sync_imports_trainees_from_zv_sheet_and_updates_group_status(
+def test_journal_worker_imports_trainees_from_zv_sheet_and_updates_group_status(
     client,
     auth_headers,
     db_session,
     monkeypatch,
 ):
-    monkeypatch.setattr(
-        "app.api.routes.journal_monitors.list_drive_child_folders",
-        lambda _folder_id, service_account_json=None: [
+    drive_folders = lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-46-26",
                 "name": "46-26 Журнал",
                 "url": "https://drive.google.com/drive/folders/drive-46-26",
                 "modified_time": "2026-03-02T10:00:00Z",
             },
-        ],
-    )
+        ]
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", drive_folders)
+    monkeypatch.setattr("app.tasks.worker.list_drive_child_folders", drive_folders)
     monkeypatch.setattr(
         journal_monitor,
         "list_drive_journal_workbook_files",
@@ -139,11 +138,19 @@ def test_journal_sync_imports_trainees_from_zv_sheet_and_updates_group_status(
         headers=auth_headers,
     )
     section_id = create_response.json()["id"]
+    section = db_session.get(journal_monitor.JournalMonitorSection, section_id)
+    section.workload_auto_enabled = True
+    section.workload_auto_year = 2026
+    db_session.add(section)
+    db_session.commit()
 
-    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    from app.tasks.worker import process_journal_monitor_auto_task
 
-    assert sync_response.status_code == 200
-    entry = sync_response.json()["entries"][0]
+    process_journal_monitor_auto_task.run()
+    detail_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
+
+    assert detail_response.status_code == 200
+    entry = detail_response.json()["entries"][0]
     assert entry["group_code"] == "46-26"
     assert entry["has_trainees"] is True
     assert entry["trainee_count"] == 2
@@ -161,22 +168,61 @@ def test_journal_sync_imports_trainees_from_zv_sheet_and_updates_group_status(
     assert cipher.decrypt(trainees[1].phone_encrypted) == "+380501112233"
 
 
-def test_journal_sync_marks_trainees_no_data_when_zv_sheet_has_no_rows(
-    client,
-    auth_headers,
-    monkeypatch,
-):
+def test_journal_sync_refreshes_folders_without_inline_processing(client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
         lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sync must not process trainees inline")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sync must not process workload inline")),
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entry = sync_response.json()["entries"][0]
+    assert entry["group_code"] == "46-26"
+    assert entry["trainees_status"] == "pending"
+    assert entry["workload_status"] == "pending"
+
+
+def test_journal_worker_marks_trainees_no_data_when_zv_sheet_has_no_rows(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    drive_folders = lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-47-26",
                 "name": "47-26 Журнал",
                 "url": "https://drive.google.com/drive/folders/drive-47-26",
                 "modified_time": "2026-03-02T10:00:00Z",
             },
-        ],
-    )
+        ]
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", drive_folders)
+    monkeypatch.setattr("app.tasks.worker.list_drive_child_folders", drive_folders)
     monkeypatch.setattr(
         journal_monitor,
         "list_drive_journal_workbook_files",
@@ -198,11 +244,19 @@ def test_journal_sync_marks_trainees_no_data_when_zv_sheet_has_no_rows(
         headers=auth_headers,
     )
     section_id = create_response.json()["id"]
+    section = db_session.get(journal_monitor.JournalMonitorSection, section_id)
+    section.workload_auto_enabled = True
+    section.workload_auto_year = 2026
+    db_session.add(section)
+    db_session.commit()
 
-    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    from app.tasks.worker import process_journal_monitor_auto_task
 
-    assert sync_response.status_code == 200
-    entry = sync_response.json()["entries"][0]
+    process_journal_monitor_auto_task.run()
+    detail_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
+
+    assert detail_response.status_code == 200
+    entry = detail_response.json()["entries"][0]
     assert entry["has_trainees"] is False
     assert entry["trainee_count"] == 0
     assert entry["processing_status"] == "not_processed"
@@ -301,9 +355,41 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     assert refreshed_summary["Шевченко Марія Іванівна"]["total_hours"] == 16
 
 
-def test_journal_processing_start_runs_trainees_and_workload_together(client, auth_headers, db_session, monkeypatch):
+def test_journal_processing_start_queues_background_processing_without_inline_drive_work(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    queued = {"called": False}
+
     monkeypatch.setattr(
-        "app.api.routes.journal_monitors.list_drive_child_folders",
+        "app.api.routes.journal_monitors.sync_journal_monitor_section",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("processing/start must not do Drive work inline")),
+    )
+    monkeypatch.setattr(
+        "app.tasks.worker.process_journal_monitor_auto_task.delay",
+        lambda: queued.update(called=True),
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["workload_auto_enabled"] is True
+    assert response.json()["workload_auto_year"] == 2026
+    assert response.json()["last_sync_message"] == "Опрацювання журналів поставлено в чергу: слухачі та години"
+    assert queued["called"] is True
+
+
+def test_journal_auto_worker_processes_trainees_and_workload_together(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.tasks.worker.list_drive_child_folders",
         lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-46-26",
@@ -327,23 +413,27 @@ def test_journal_processing_start_runs_trainees_and_workload_together(client, au
         lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
         raising=False,
     )
-
-    create_response = client.post(
-        "/api/v1/journal-monitors",
-        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
-        headers=auth_headers,
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
     )
-    section_id = create_response.json()["id"]
+    db_session.add(section)
+    db_session.commit()
 
-    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
+    from app.tasks.worker import process_journal_monitor_auto_task
 
-    assert response.status_code == 200
-    assert response.json()["workload_auto_enabled"] is True
-    entry = response.json()["entries"][0]
-    assert entry["trainees_status"] == "processed"
-    assert entry["trainee_count"] == 1
-    assert entry["workload_status"] == "processed"
-    assert entry["workload_hours"] == 8
+    result = process_journal_monitor_auto_task.run()
+
+    assert result == {"processed_sections": 1, "failed_sections": 0}
+    entry = section.entries[0]
+    assert entry.trainees_status == "processed"
+    assert entry.trainee_count == 1
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 8
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
@@ -470,17 +560,16 @@ def test_journal_workload_parses_two_workbooks_lowercase_sheet_and_splits_multip
 
 
 def test_auto_sync_retries_failed_journal_after_access_is_fixed(client, auth_headers, db_session, monkeypatch):
-    monkeypatch.setattr(
-        "app.api.routes.journal_monitors.list_drive_child_folders",
-        lambda _folder_id, service_account_json=None: [
+    drive_folders = lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-82-26",
                 "name": "82-26 Журнал з тимчасово закритим доступом",
                 "url": "https://drive.google.com/drive/folders/drive-82-26",
                 "modified_time": "2026-03-03T10:00:00Z",
             },
-        ],
-    )
+        ]
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", drive_folders)
+    monkeypatch.setattr("app.tasks.worker.list_drive_child_folders", drive_folders)
     monkeypatch.setattr(
         journal_monitor,
         "list_drive_journal_workbook_files",
@@ -509,7 +598,10 @@ def test_auto_sync_retries_failed_journal_after_access_is_fixed(client, auth_hea
     assert first_response.json()["entries"][0]["workload_source_names"] == ["82-26 Трактористи виробн"]
 
     access_fixed["value"] = True
-    retry_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    from app.tasks.worker import process_journal_monitor_auto_task
+
+    process_journal_monitor_auto_task.run()
+    retry_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
 
     entry = retry_response.json()["entries"][0]
     assert entry["workload_status"] == "processed"

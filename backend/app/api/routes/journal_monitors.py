@@ -147,7 +147,13 @@ def delete_section(section_id: int, db: DbSession, current_user: CurrentUser) ->
 def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
     try:
-        section = sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders)
+        section = sync_journal_monitor_section(
+            db,
+            section,
+            folder_lister=list_drive_child_folders,
+            process_workload=False,
+            process_trainees=False,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -162,6 +168,33 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
 
 
 def _start_section_processing(
+    section: JournalMonitorSection,
+    db: DbSession,
+    year: int,
+    *,
+    error_prefix: str,
+) -> JournalMonitorDetailResponse:
+    section.workload_auto_enabled = True
+    section.workload_auto_year = year
+    section.last_sync_message = "Опрацювання журналів поставлено в чергу: слухачі та години"
+    db.add(section)
+    requeue_journal_workload_for_year(db, section, year)
+    db.commit()
+
+    try:
+        from app.tasks.worker import process_journal_monitor_auto_task
+
+        process_journal_monitor_auto_task.delay()
+    except Exception:
+        section.last_sync_message = "Опрацювання журналів увімкнено; worker виконає його за плановим запуском"
+        db.add(section)
+        db.commit()
+
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+def _start_section_workload_inline(
     section: JournalMonitorSection,
     db: DbSession,
     year: int,
@@ -233,7 +266,7 @@ def start_section_workload_auto(
     year: int = Query(default=2026, ge=2025, le=2100),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    return _start_section_processing(section, db, year, error_prefix="Не вдалося запустити обробку педнавантаження")
+    return _start_section_workload_inline(section, db, year, error_prefix="Не вдалося запустити обробку педнавантаження")
 
 
 @router.post(

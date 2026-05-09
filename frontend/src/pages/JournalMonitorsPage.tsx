@@ -417,7 +417,7 @@ export function JournalMonitorsPage() {
       );
       setDetail(data);
       await loadSections();
-      showSuccess(`Опрацювання журналів для ${year} року запущено: слухачі та години`);
+      showSuccess(`Опрацювання журналів для ${year} року поставлено в чергу: слухачі та години`);
     } catch (error) {
       showError((error as Error).message);
     } finally {
