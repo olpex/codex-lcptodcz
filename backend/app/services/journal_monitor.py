@@ -518,7 +518,7 @@ def process_next_journal_workload(
     db: Session,
     section: JournalMonitorSection,
     *,
-    limit: int = 1,
+    limit: int | None = 1,
     start_year: int = JOURNAL_WORKLOAD_START_YEAR,
     target_year: int | None = None,
     retry_failed: bool = False,
@@ -535,7 +535,7 @@ def process_next_journal_workload(
         key=lambda item: (_infer_journal_year(item, section) or 9999, (item.group_code or "~~~~").casefold(), item.journal_name.casefold()),
     )
     for entry in entries:
-        if processed >= limit:
+        if limit is not None and processed >= limit:
             break
         if entry.workload_status == "processed":
             continue
@@ -761,7 +761,7 @@ def sync_journal_monitor_section(
         workload_result = process_next_journal_workload(
             db,
             section,
-            limit=1,
+            limit=None,
             target_year=section.workload_auto_year,
             retry_failed=True,
         )

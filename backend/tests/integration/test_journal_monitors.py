@@ -121,12 +121,12 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     entries = {item["drive_file_id"]: item for item in sync_response.json()["entries"]}
     assert entries["drive-73-26"]["workload_status"] == "processed"
     assert entries["drive-73-26"]["workload_hours"] == 20
-    assert entries["drive-74-26"]["workload_status"] == "pending"
+    assert entries["drive-74-26"]["workload_status"] == "processed"
     assert entries["drive-10-25"]["workload_status"] == "skipped_year"
 
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
-    assert summary["Коваль Олена Петрівна"]["total_hours"] == 12
-    assert summary["Шевченко Марія Іванівна"]["total_hours"] == 8
+    assert summary["Коваль Олена Петрівна"]["total_hours"] == 24
+    assert summary["Шевченко Марія Іванівна"]["total_hours"] == 16
 
     second_sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
     assert second_sync_response.status_code == 200
