@@ -193,7 +193,8 @@ def _start_section_processing(
         db.add(section)
         db.commit()
 
-    return _process_section_once(section, db, error_prefix=error_prefix)
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
 def _process_section_once(
@@ -203,7 +204,7 @@ def _process_section_once(
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
     try:
-        process_journal_monitor_section_step(db, section, process_workload=True, process_trainees=True)
+        process_journal_monitor_section_step(db, section, process_workload=False, process_trainees=True)
         db.commit()
     except Exception as exc:
         db.rollback()

@@ -433,7 +433,7 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     assert refreshed_summary["Шевченко Марія Іванівна"]["total_hours"] == 16
 
 
-def test_journal_processing_start_processes_first_journal_immediately_and_queues_worker(
+def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     client,
     auth_headers,
     db_session,
@@ -456,7 +456,9 @@ def test_journal_processing_start_processes_first_journal_immediately_and_queues
     monkeypatch.setattr(
         journal_monitor,
         "download_drive_file_bytes",
-        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [(1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", "+380501112233")]
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -478,6 +480,9 @@ def test_journal_processing_start_processes_first_journal_immediately_and_queues
             drive_url="https://drive.google.com/drive/folders/drive-46-26",
             journal_name="46-26 Журнал",
             group_code="46-26",
+            workload_status="processed",
+            workload_year=2026,
+            workload_hours=8,
         )
     )
     db_session.commit()
@@ -485,14 +490,21 @@ def test_journal_processing_start_processes_first_journal_immediately_and_queues
     response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json()["workload_auto_enabled"] is False
+    assert response.json()["workload_auto_enabled"] is True
     assert response.json()["workload_auto_year"] == 2026
     entry = response.json()["entries"][0]
     assert entry["workload_status"] == "processed"
-    assert entry["trainees_status"] == "processed"
-    assert entry["trainee_count"] == 1
-    assert "опрацювання завершено" in response.json()["last_sync_message"]
+    assert entry["trainees_status"] == "pending"
     assert queued["called"] is True
+
+    tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/tick", headers=auth_headers)
+
+    assert tick_response.status_code == 200
+    assert tick_response.json()["workload_auto_enabled"] is False
+    tick_entry = tick_response.json()["entries"][0]
+    assert tick_entry["trainees_status"] == "processed"
+    assert tick_entry["trainee_count"] == 1
+    assert "опрацювання завершено" in tick_response.json()["last_sync_message"]
 
 
 def test_journal_auto_worker_processes_trainees_and_workload_together(db_session, monkeypatch):
