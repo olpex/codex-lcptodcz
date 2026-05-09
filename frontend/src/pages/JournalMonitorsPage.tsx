@@ -772,13 +772,6 @@ export function JournalMonitorsPage() {
                               ))}
                             </div>
                           )}
-                          {row.trainees_source_names?.length > 0 && (
-                            <div className="mt-1 space-y-0.5 text-xs font-medium text-slate-500">
-                              {row.trainees_source_names.map((sourceName) => (
-                                <div key={`zv-${sourceName}`}>ЗВ: {sourceName}</div>
-                              ))}
-                            </div>
-                          )}
                         </td>
                         <td className="px-3 py-2">
                           <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>

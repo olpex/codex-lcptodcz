@@ -16,6 +16,7 @@ from app.services.journal_monitor import (
     EXPORT_FORMATS,
     extract_drive_folder_id,
     list_drive_child_folders,
+    requeue_journal_trainees_for_year,
     requeue_journal_workload_for_year,
     save_journal_monitor_export,
     section_to_response_payload,
@@ -179,6 +180,7 @@ def _start_section_processing(
     section.last_sync_message = "Опрацювання журналів поставлено в чергу: слухачі та години"
     db.add(section)
     requeue_journal_workload_for_year(db, section, year)
+    requeue_journal_trainees_for_year(db, section, year)
     db.commit()
 
     try:

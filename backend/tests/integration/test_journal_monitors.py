@@ -71,6 +71,20 @@ def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, st
     return stream.getvalue()
 
 
+def _journal_zv_workbook_with_title_bytes(rows: list[tuple[int, str, str, str, str, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "ЗВ"
+    sheet = workbook.active
+    sheet.merge_cells("A1:G1")
+    sheet["A1"] = "ЗАГАЛЬНІ ВІДОМОСТІ ПРО СЛУХАЧІВ"
+    sheet.append(["№ п/п", "№ договору", "Прізвище, ім'я, по батькові", "Стать", "Дата народження", "ІПН", "Адреса"])
+    for row in rows:
+        sheet.append(list(row))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_combined_workbook_bytes() -> bytes:
     workbook = Workbook()
     workbook.active.title = "Загальні"
@@ -94,6 +108,69 @@ def _journal_combined_workbook_bytes() -> bytes:
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def test_journal_zv_parser_skips_title_and_imports_all_real_trainees():
+    surnames = [
+        "Андрущенко",
+        "Бойко",
+        "Василенко",
+        "Гнатюк",
+        "Данилюк",
+        "Єфименко",
+        "Жук",
+        "Захаренко",
+        "Іванчук",
+        "Климчук",
+        "Левченко",
+        "Мельник",
+        "Назаренко",
+        "Онищенко",
+        "Петренко",
+        "Романюк",
+        "Савчук",
+        "Ткаченко",
+        "Удовенко",
+        "Федоренко",
+        "Хоменко",
+        "Цимбалюк",
+        "Чорний",
+        "Шевченко",
+        "Юрченко",
+        "Яценко",
+        "Коваль",
+        "Марченко",
+        "Лисенко",
+        "Мороз",
+        "Поліщук",
+        "Руденко",
+        "Семенюк",
+    ]
+    rows = [
+        (
+            index,
+            "1(З-СНН) від 02.01.2026",
+            f"{surname} Наталія Іванівна",
+            "ж" if index % 2 else "ч",
+            "02.01.1990",
+            f"10000000{index:02d}",
+            f"Адреса {index}",
+        )
+        for index, surname in enumerate(surnames, start=1)
+    ]
+
+    parsed = journal_monitor.parse_journal_zv_trainees_xlsx(
+        _journal_zv_workbook_with_title_bytes(rows),
+        group_code="1-26",
+        group_name="1-26 Організація трудових відносин",
+    )
+
+    assert parsed["rows"] == 33
+    assert parsed["data"][0]["Прізвище"] == "Андрущенко"
+    assert parsed["data"][0]["Ідентифікаційний номер"] == "1000000001"
+    assert parsed["data"][0]["№ договору"] == "1(З-СНН) від 02.01.2026"
+    assert parsed["data"][-1]["Номер за порядком"] == 33
+    assert all(row["Прізвище"] != "№" for row in parsed["data"])
 
 
 def test_journal_worker_imports_trainees_from_zv_sheet_and_updates_group_status(
@@ -493,7 +570,7 @@ def test_journal_auto_worker_continues_with_one_pending_trainees_after_workloads
     def fake_download(file_id, mime_type=None, service_account_json=None):
         downloaded.append(file_id)
         return _journal_zv_workbook_bytes(
-            [(1, "З-СНН-001", f"Слухач {file_id} Тестовий", "ч", "01.02.1990", "", "", "")]
+            [(1, "З-СНН-001", f"Петренко Іван {file_id}", "ч", "01.02.1990", "", "", "")]
         )
 
     monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", fake_download, raising=False)

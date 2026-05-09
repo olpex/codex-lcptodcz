@@ -351,12 +351,48 @@ def _find_zv_rows(workbook) -> list[list[Any]]:
     for sheet in workbook.worksheets:
         rows = [list(row) for row in sheet.iter_rows(values_only=True)]
         for raw_row in rows[:30]:
-            headers = [_norm(value) for value in raw_row]
-            full_name_candidate = _find_header_column(headers, ("прізв", "піб", "слухач"), ("виклада",))
-            birth_date_candidate = _find_header_column(headers, ("дата народ",))
-            if full_name_candidate is not None and birth_date_candidate is not None:
+            if _zv_header_columns(raw_row)[0] is not None:
                 return rows
     raise JournalNoDataError("У файлі журналу не знайдено аркуш «ЗВ»")
+
+
+def _zv_header_columns(raw_row: list[Any]) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None, int | None]:
+    headers = [_norm(value) for value in raw_row]
+    full_name_col = _find_header_column(headers, ("прізв", "піб", "слухач"), ("виклада",))
+    if full_name_col is None:
+        return None, None, None, None, None, None, None
+    row_number_col = _find_header_column(headers, ("номер за поряд", "№", "п/п"), ("журнал", "з-снн", "догов"))
+    journal_number_col = _find_header_column(headers, ("з-снн", "номер в журналі", "догов"))
+    birth_date_col = _find_header_column(headers, ("дата народ",))
+    tax_id_col = _find_header_column(headers, ("ідентиф", "рнокпп", "інн", "іпн"))
+    address_col = _find_header_column(headers, ("адрес",))
+    phone_col = _find_header_column(headers, ("тел",))
+    supporting_columns = [birth_date_col, tax_id_col, address_col, phone_col, journal_number_col]
+    if sum(1 for column in supporting_columns if column is not None) < 2:
+        return None, None, None, None, None, None, None
+    return full_name_col, row_number_col, birth_date_col, tax_id_col, address_col, phone_col, journal_number_col
+
+
+def _looks_like_trainee_full_name(value: str) -> bool:
+    text = _norm(value)
+    if not text:
+        return False
+    normalized = text.casefold()
+    blocked_fragments = (
+        "прізв",
+        "слухач",
+        "п/п",
+        "№",
+        "номер",
+        "загальні",
+        "відомості",
+    )
+    if any(fragment in normalized for fragment in blocked_fragments):
+        return False
+    if not re.search(r"[A-Za-zА-Яа-яІіЇїЄєҐґ]", text):
+        return False
+    name_parts = [part for part in text.split(" ") if re.search(r"[A-Za-zА-Яа-яІіЇїЄєҐґ]", part)]
+    return len(name_parts) >= 2
 
 
 def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
@@ -427,17 +463,20 @@ def parse_journal_zv_trainees_xlsx(payload: bytes, group_code: str | None = None
     phone_col: int | None = None
     journal_number_col: int | None = None
     for index, raw_row in enumerate(rows[:30]):
-        headers = [_norm(value) for value in raw_row]
-        full_name_candidate = _find_header_column(headers, ("прізв", "піб", "слухач"), ("виклада",))
-        birth_date_candidate = _find_header_column(headers, ("дата народ",))
-        tax_id_candidate = _find_header_column(headers, ("ідентиф", "рнокпп", "інн"))
-        address_candidate = _find_header_column(headers, ("адрес",))
-        phone_candidate = _find_header_column(headers, ("тел",))
+        (
+            full_name_candidate,
+            row_number_candidate,
+            birth_date_candidate,
+            tax_id_candidate,
+            address_candidate,
+            phone_candidate,
+            journal_number_candidate,
+        ) = _zv_header_columns(raw_row)
         if full_name_candidate is not None:
             header_index = index
             full_name_col = full_name_candidate
-            row_number_col = _find_header_column(headers, ("номер за поряд", "№", "п/п"), ("журнал", "з-снн"))
-            journal_number_col = _find_header_column(headers, ("з-снн", "номер в журналі"))
+            row_number_col = row_number_candidate
+            journal_number_col = journal_number_candidate
             birth_date_col = birth_date_candidate
             tax_id_col = tax_id_candidate
             address_col = address_candidate
@@ -450,17 +489,18 @@ def parse_journal_zv_trainees_xlsx(payload: bytes, group_code: str | None = None
     data: list[dict[str, Any]] = []
     for raw_row in rows[header_index + 1 :]:
         full_name = _norm(raw_row[full_name_col] if full_name_col < len(raw_row) else "")
-        if not full_name:
+        if not _looks_like_trainee_full_name(full_name):
             continue
         name_parts = full_name.split(" ")
         last_name = name_parts[0] if name_parts else ""
         first_name = name_parts[1] if len(name_parts) > 1 else ""
         middle_name = " ".join(name_parts[2:]) if len(name_parts) > 2 else ""
         data.append(
-            {
-                "Номер за порядком": raw_row[row_number_col] if row_number_col is not None and row_number_col < len(raw_row) else None,
-                "Номер в журналі З-СНН": raw_row[journal_number_col] if journal_number_col is not None and journal_number_col < len(raw_row) else None,
-                "Прізвище": last_name,
+                {
+                    "Номер за порядком": raw_row[row_number_col] if row_number_col is not None and row_number_col < len(raw_row) else None,
+                    "Номер в журналі З-СНН": raw_row[journal_number_col] if journal_number_col is not None and journal_number_col < len(raw_row) else None,
+                    "№ договору": raw_row[journal_number_col] if journal_number_col is not None and journal_number_col < len(raw_row) else None,
+                    "Прізвище": last_name,
                 "Ім'я": first_name,
                 "По батькові": middle_name,
                 "Дата народження": raw_row[birth_date_col] if birth_date_col is not None and birth_date_col < len(raw_row) else None,
@@ -844,6 +884,25 @@ def requeue_journal_workload_for_year(db: Session, section: JournalMonitorSectio
             db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
                 synchronize_session=False
             )
+            db.add(entry)
+            changed += 1
+    db.flush()
+    return changed
+
+
+def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSection, year: int) -> int:
+    changed = 0
+    for entry in section.entries:
+        entry_year = _infer_journal_year(entry, section)
+        if entry_year is not None and entry_year != year:
+            continue
+        if not entry.group_code:
+            continue
+        if entry.trainees_status in {"pending", "failed", "no_data", "processed"}:
+            entry.trainees_status = "pending"
+            entry.trainees_message = "Поставлено в чергу повторної обробки слухачів"
+            entry.trainees_processed_at = None
+            entry.trainees_source_names = None
             db.add(entry)
             changed += 1
     db.flush()
