@@ -699,16 +699,29 @@ def process_next_journal_workload(
     processed = 0
     failed = 0
     skipped_year = 0
+    handled = 0
     section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
+
+    def status_priority(entry: JournalMonitorEntry) -> int:
+        if entry.workload_status in {"pending", "needs_regeneration"}:
+            return 0
+        if retry_failed and entry.workload_status == "failed":
+            return 1
+        return 9
 
     entries = sorted(
         section.entries,
-        key=lambda item: (_infer_journal_year(item, section) or 9999, (item.group_code or "~~~~").casefold(), item.journal_name.casefold()),
+        key=lambda item: (
+            status_priority(item),
+            _infer_journal_year(item, section) or 9999,
+            (item.group_code or "~~~~").casefold(),
+            item.journal_name.casefold(),
+        ),
     )
     for entry in entries:
-        if limit is not None and processed >= limit:
+        if limit is not None and handled >= limit:
             break
-        if entry.workload_status == "processed":
+        if entry.workload_status in {"processed", "no_data", "skipped_year"}:
             continue
         if entry.workload_status == "failed" and not retry_failed:
             continue
@@ -728,6 +741,7 @@ def process_next_journal_workload(
         try:
             process_journal_workload_entry(db, entry, service_account_json=section_service_account_json)
             processed += 1
+            handled += 1
         except JournalNoDataError as exc:
             entry.workload_status = "no_data"
             entry.workload_message = str(exc)[:500]
@@ -735,49 +749,81 @@ def process_next_journal_workload(
             entry.workload_hours = 0.0
             db.add(entry)
             failed += 1
+            handled += 1
         except Exception as exc:
             entry.workload_status = "failed"
             entry.workload_message = str(exc)[:500]
             entry.workload_processed_at = datetime.now(timezone.utc)
             db.add(entry)
             failed += 1
+            handled += 1
             continue
 
     db.flush()
     return {"processed": processed, "failed": failed, "skipped_year": skipped_year}
 
 
-def process_journal_trainees_for_section(db: Session, section: JournalMonitorSection) -> dict[str, Any]:
+def process_journal_trainees_for_section(
+    db: Session,
+    section: JournalMonitorSection,
+    *,
+    limit: int | None = 1,
+    target_year: int | None = None,
+    retry_failed: bool = True,
+) -> dict[str, Any]:
     from app.core.crypto import cipher
 
     processed = 0
     no_data = 0
     failed = 0
+    handled = 0
     section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
+
+    def status_priority(entry: JournalMonitorEntry) -> int:
+        if entry.trainees_status == "pending":
+            return 0
+        if retry_failed and entry.trainees_status == "failed":
+            return 1
+        return 9
+
     entries = sorted(
         section.entries,
-        key=lambda item: (_infer_journal_year(item, section) or 9999, (item.group_code or "~~~~").casefold(), item.journal_name.casefold()),
+        key=lambda item: (
+            status_priority(item),
+            _infer_journal_year(item, section) or 9999,
+            (item.group_code or "~~~~").casefold(),
+            item.journal_name.casefold(),
+        ),
     )
     for entry in entries:
+        if limit is not None and handled >= limit:
+            break
         if not entry.group_code:
             continue
-        if entry.trainees_status == "processed":
+        if entry.trainees_status in {"processed", "no_data"}:
+            continue
+        if entry.trainees_status == "failed" and not retry_failed:
+            continue
+        if target_year is not None and _infer_journal_year(entry, section) != target_year:
             continue
         try:
             process_journal_trainees_entry(db, entry, service_account_json=section_service_account_json)
             processed += 1
+            handled += 1
         except JournalNoDataError as exc:
             entry.trainees_status = "no_data"
             entry.trainees_message = str(exc)[:500]
             entry.trainees_processed_at = datetime.now(timezone.utc)
             db.add(entry)
             no_data += 1
+            handled += 1
         except Exception as exc:
             entry.trainees_status = "failed"
             entry.trainees_message = str(exc)[:500]
             entry.trainees_processed_at = datetime.now(timezone.utc)
             db.add(entry)
             failed += 1
+            handled += 1
     db.flush()
     return {"processed": processed, "no_data": no_data, "failed": failed}
 
@@ -985,21 +1031,11 @@ def sync_journal_monitor_section(
     section.last_sync_message = f"Оновлено папок журналів: {len(seen_drive_ids)}"
     db.flush()
     db.refresh(section)
-    if process_trainees:
-        trainees_result = process_journal_trainees_for_section(db, section)
-        if trainees_result.get("processed") or trainees_result.get("failed") or trainees_result.get("no_data"):
-            section.last_sync_message += (
-                f"; слухачі: опрацьовано {trainees_result['processed']}, "
-                f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
-            )
-        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
-        for entry in section.entries:
-            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
     if process_workload and section.workload_auto_enabled:
         workload_result = process_next_journal_workload(
             db,
             section,
-            limit=None,
+            limit=1,
             target_year=section.workload_auto_year,
             retry_failed=True,
         )
@@ -1008,6 +1044,22 @@ def sync_journal_monitor_section(
                 f"; педнавантаження: опрацьовано {workload_result['processed']}, "
                 f"помилок {workload_result['failed']}"
             )
+    if process_trainees:
+        trainees_result = process_journal_trainees_for_section(
+            db,
+            section,
+            limit=1,
+            target_year=section.workload_auto_year if section.workload_auto_enabled else None,
+            retry_failed=True,
+        )
+        if trainees_result.get("processed") or trainees_result.get("failed") or trainees_result.get("no_data"):
+            section.last_sync_message += (
+                f"; слухачі: опрацьовано {trainees_result['processed']}, "
+                f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
+            )
+        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
+        for entry in section.entries:
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
     db.flush()
     db.refresh(section)
     return section

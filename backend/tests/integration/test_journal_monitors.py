@@ -280,9 +280,7 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     db_session.add(existing_teacher)
     db_session.commit()
 
-    monkeypatch.setattr(
-        "app.api.routes.journal_monitors.list_drive_child_folders",
-        lambda _folder_id, service_account_json=None: [
+    drive_folders = lambda _folder_id, service_account_json=None: [
             {
                 "id": "drive-73-26",
                 "name": "73-26 Журнал з кібербезпеки",
@@ -301,8 +299,9 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
                 "url": "https://drive.google.com/drive/folders/drive-10-25",
                 "modified_time": "2025-02-01T10:00:00Z",
             },
-        ],
-    )
+        ]
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", drive_folders)
+    monkeypatch.setattr("app.tasks.worker.list_drive_child_folders", drive_folders)
     monkeypatch.setattr(
         journal_monitor,
         "list_drive_journal_workbook_files",
@@ -338,16 +337,18 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     entries = {item["drive_file_id"]: item for item in sync_response.json()["entries"]}
     assert entries["drive-73-26"]["workload_status"] == "processed"
     assert entries["drive-73-26"]["workload_hours"] == 20
-    assert entries["drive-74-26"]["workload_status"] == "processed"
+    assert entries["drive-74-26"]["workload_status"] == "pending"
     assert entries["drive-10-25"]["workload_status"] == "skipped_year"
 
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
-    assert summary["Коваль Олена Петрівна"]["total_hours"] == 24
-    assert summary["Шевченко Марія Іванівна"]["total_hours"] == 16
+    assert summary["Коваль Олена Петрівна"]["total_hours"] == 12
+    assert summary["Шевченко Марія Іванівна"]["total_hours"] == 8
 
-    second_sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
-    assert second_sync_response.status_code == 200
-    second_entries = {item["drive_file_id"]: item for item in second_sync_response.json()["entries"]}
+    from app.tasks.worker import process_journal_monitor_auto_task
+
+    process_journal_monitor_auto_task.run()
+    second_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
+    second_entries = {item["drive_file_id"]: item for item in second_response.json()["entries"]}
     assert second_entries["drive-74-26"]["workload_status"] == "processed"
 
     refreshed_summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
@@ -436,6 +437,78 @@ def test_journal_auto_worker_processes_trainees_and_workload_together(db_session
     assert entry.workload_hours == 8
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
+
+
+def test_journal_auto_worker_continues_with_one_pending_trainees_after_workloads_processed(db_session, monkeypatch):
+    drive_folders = lambda _folder_id, service_account_json=None: [
+        {
+            "id": "drive-51-26",
+            "name": "51-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-51-26",
+            "modified_time": "2026-03-02T10:00:00Z",
+        },
+        {
+            "id": "drive-52-26",
+            "name": "52-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-52-26",
+            "modified_time": "2026-03-03T10:00:00Z",
+        },
+    ]
+    monkeypatch.setattr("app.tasks.worker.list_drive_child_folders", drive_folders)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    downloaded: list[str] = []
+
+    def fake_download(file_id, mime_type=None, service_account_json=None):
+        downloaded.append(file_id)
+        return _journal_zv_workbook_bytes(
+            [(1, "З-СНН-001", f"Слухач {file_id} Тестовий", "ч", "01.02.1990", "", "", "")]
+        )
+
+    monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", fake_download, raising=False)
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    for code, drive_id in (("51-26", "drive-51-26"), ("52-26", "drive-52-26")):
+        db_session.add(
+            journal_monitor.JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id=drive_id,
+                drive_url=f"https://drive.google.com/drive/folders/{drive_id}",
+                journal_name=f"{code} Журнал",
+                group_code=code,
+                workload_status="processed",
+                workload_year=2026,
+                workload_hours=8,
+                trainees_status="pending",
+            )
+        )
+    db_session.commit()
+
+    from app.tasks.worker import process_journal_monitor_auto_task
+
+    result = process_journal_monitor_auto_task.run()
+
+    assert result == {"processed_sections": 1, "failed_sections": 0}
+    entries = {entry.group_code: entry for entry in section.entries}
+    assert entries["51-26"].trainees_status == "processed"
+    assert entries["52-26"].trainees_status == "pending"
+    assert downloaded == ["drive-51-26-xlsx"]
+    assert db_session.query(Trainee).filter(Trainee.group_code == "51-26").count() == 1
 
 
 def test_journal_workload_can_be_run_for_2025_on_demand(client, auth_headers, monkeypatch):

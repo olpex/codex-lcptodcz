@@ -23,9 +23,21 @@ from app.services.ocr import extract_group_code_hint, guess_draft_from_text
 from app.services.schedule_import import import_schedule_docx
 
 logger = get_task_logger(__name__)
+_runtime_schema_checked = False
+
+
+def _ensure_runtime_schema_once() -> None:
+    global _runtime_schema_checked
+    if _runtime_schema_checked:
+        return
+    from app.main import ensure_runtime_schema
+
+    ensure_runtime_schema()
+    _runtime_schema_checked = True
 
 
 def _get_db() -> Session:
+    _ensure_runtime_schema_once()
     return SessionLocal()
 
 

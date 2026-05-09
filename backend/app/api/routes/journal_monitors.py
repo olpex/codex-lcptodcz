@@ -206,9 +206,15 @@ def _start_section_workload_inline(
     db.add(section)
     db.flush()
     try:
-        section = sync_journal_monitor_section(db, section, folder_lister=list_drive_child_folders, process_workload=False)
+        section = sync_journal_monitor_section(
+            db,
+            section,
+            folder_lister=list_drive_child_folders,
+            process_workload=False,
+            process_trainees=False,
+        )
         requeue_journal_workload_for_year(db, section, year)
-        process_next_journal_workload(db, section, limit=None, target_year=year, retry_failed=True)
+        process_next_journal_workload(db, section, limit=1, target_year=year, retry_failed=True)
         db.commit()
     except Exception as exc:
         db.rollback()
