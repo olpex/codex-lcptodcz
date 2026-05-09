@@ -55,6 +55,10 @@ def ensure_runtime_schema() -> None:
             ("journal_monitor_entries", "workload_year", "INTEGER NULL"),
             ("journal_monitor_entries", "workload_hours", "FLOAT NOT NULL DEFAULT 0.0"),
             ("journal_monitor_entries", "workload_source_names", "JSON NULL"),
+            ("journal_monitor_entries", "trainees_status", "VARCHAR(50) NOT NULL DEFAULT 'pending'"),
+            ("journal_monitor_entries", "trainees_message", "VARCHAR(500) NULL"),
+            ("journal_monitor_entries", "trainees_processed_at", "TIMESTAMP NULL"),
+            ("journal_monitor_entries", "trainees_source_names", "JSON NULL"),
         ]
         for table_name, column_name, ddl in column_plan:
             if table_name not in existing_tables:

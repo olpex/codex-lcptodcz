@@ -12,6 +12,7 @@ from app.models import (
     Group,
     GroupStatus,
     ImportJob,
+    JournalMonitorEntry,
     JobStatus,
     OCRResult,
     Performance,
@@ -201,6 +202,14 @@ def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentio
         .all()
     }
     groups_without_schedule = sum(1 for group in active_groups if group.id not in scheduled_group_ids)
+    journal_no_data = (
+        db.query(JournalMonitorEntry)
+        .filter(
+            JournalMonitorEntry.branch_id == branch_id,
+            or_(JournalMonitorEntry.workload_status == "no_data", JournalMonitorEntry.trainees_status == "no_data"),
+        )
+        .count()
+    )
 
     raw_items = [
         _attention_item(
@@ -242,6 +251,14 @@ def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentio
             "info",
             "Активні групи ще не мають жодного заняття у розкладі.",
             "/schedule",
+        ),
+        _attention_item(
+            "journal_no_data",
+            "Журнали без даних",
+            journal_no_data,
+            "warning",
+            "У частині журналів поки немає даних на аркушах «Дисципліни» або «ЗВ».",
+            "/journal-monitors",
         ),
     ]
     items = [item for item in raw_items if item is not None]

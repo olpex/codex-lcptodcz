@@ -31,6 +31,7 @@ const WORKLOAD_STATUS_LABELS: Record<string, string> = {
   pending: "Очікує",
   processed: "Додано",
   failed: "Помилка",
+  no_data: "н/даних",
   skipped_year: "Пропущено за роком",
   needs_regeneration: "Повторити"
 };
@@ -39,8 +40,23 @@ const WORKLOAD_STATUS_CLASSES: Record<string, string> = {
   pending: "bg-slate-100 text-slate-700",
   processed: "bg-emerald-100 text-emerald-800",
   failed: "bg-rose-100 text-rose-800",
+  no_data: "bg-rose-100 text-rose-800",
   skipped_year: "bg-amber-100 text-amber-800",
   needs_regeneration: "bg-violet-100 text-violet-800"
+};
+
+const TRAINEES_STATUS_LABELS: Record<string, string> = {
+  pending: "Очікує",
+  processed: "Так",
+  failed: "Помилка",
+  no_data: "н/даних"
+};
+
+const TRAINEES_STATUS_CLASSES: Record<string, string> = {
+  pending: "text-slate-400",
+  processed: "text-emerald-700",
+  failed: "text-rose-700",
+  no_data: "text-rose-700"
 };
 
 const PROGRESS_CARDS = [
@@ -102,6 +118,10 @@ function formatStatus(value: string): string {
 
 function formatWorkloadStatus(value: string): string {
   return WORKLOAD_STATUS_LABELS[value] || value;
+}
+
+function formatTraineesStatus(value: string): string {
+  return TRAINEES_STATUS_LABELS[value] || value;
 }
 
 function formatPercent(count = 0, total = 0): string {
@@ -433,6 +453,21 @@ export function JournalMonitorsPage() {
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
 
+  const renderTraineesState = (row: JournalMonitorEntry) => {
+    const value = row.has_trainees ? "processed" : row.trainees_status || "pending";
+    if (value === "pending") {
+      return <span className="font-semibold text-slate-400">Ні</span>;
+    }
+    return (
+      <span
+        className={clsx("font-semibold", TRAINEES_STATUS_CLASSES[value] || TRAINEES_STATUS_CLASSES.pending)}
+        title={row.trainees_message || undefined}
+      >
+        {formatTraineesStatus(value)}
+      </span>
+    );
+  };
+
   const changeSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
@@ -714,6 +749,13 @@ export function JournalMonitorsPage() {
                               ))}
                             </div>
                           )}
+                          {row.trainees_source_names?.length > 0 && (
+                            <div className="mt-1 space-y-0.5 text-xs font-medium text-slate-500">
+                              {row.trainees_source_names.map((sourceName) => (
+                                <div key={`zv-${sourceName}`}>ЗВ: {sourceName}</div>
+                              ))}
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-2">
                           <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
@@ -733,7 +775,7 @@ export function JournalMonitorsPage() {
                         </td>
                         <td className="px-3 py-2">{row.workload_hours || 0}</td>
                         <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
-                        <td className="px-3 py-2">{renderBoolean(row.has_trainees)}</td>
+                        <td className="px-3 py-2">{renderTraineesState(row)}</td>
                         <td className="px-3 py-2">{row.schedule_lessons}</td>
                         <td className="px-3 py-2">{row.trainee_count}</td>
                         <td className="px-3 py-2">

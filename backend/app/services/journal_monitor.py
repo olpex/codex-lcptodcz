@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import Group, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
-from app.services.import_export import save_report_file
+from app.services.import_export import save_report_file, try_import_trainees
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 GOOGLE_DRIVE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
@@ -37,6 +37,10 @@ GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄ�
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 JOURNAL_WORKLOAD_START_YEAR = 2026
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
+
+
+class JournalNoDataError(ValueError):
+    pass
 
 
 def normalize_group_code(value: str | None) -> str:
@@ -337,7 +341,22 @@ def _find_disciplines_rows(workbook) -> list[list[Any]]:
             teacher_candidate = _find_header_column(headers, ("виклада", "піб", "прізвищ"))
             if subject_candidate is not None and hours_candidate is not None and teacher_candidate is not None:
                 return rows
-    raise ValueError("У файлі журналу не знайдено аркуш «Дисципліни»")
+    raise JournalNoDataError("У файлі журналу не знайдено аркуш «Дисципліни»")
+
+
+def _find_zv_rows(workbook) -> list[list[Any]]:
+    for sheet in workbook.worksheets:
+        if sheet.title.strip().casefold() == "зв":
+            return [list(row) for row in sheet.iter_rows(values_only=True)]
+    for sheet in workbook.worksheets:
+        rows = [list(row) for row in sheet.iter_rows(values_only=True)]
+        for raw_row in rows[:30]:
+            headers = [_norm(value) for value in raw_row]
+            full_name_candidate = _find_header_column(headers, ("прізв", "піб", "слухач"), ("виклада",))
+            birth_date_candidate = _find_header_column(headers, ("дата народ",))
+            if full_name_candidate is not None and birth_date_candidate is not None:
+                return rows
+    raise JournalNoDataError("У файлі журналу не знайдено аркуш «ЗВ»")
 
 
 def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
@@ -366,7 +385,7 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
             break
 
     if header_index < 0 or subject_col is None or hours_col is None or teacher_col is None:
-        raise ValueError("На аркуші «Дисципліни» не знайдено колонки дисципліни, годин і викладача")
+        raise JournalNoDataError("На аркуші «Дисципліни» не знайдено колонки дисципліни, годин і викладача")
 
     parsed: dict[tuple[str, str], dict[str, Any]] = {}
     for raw_row in rows[header_index + 1 :]:
@@ -390,6 +409,77 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
                 parsed[key]["pages"] = pages[:255]
 
     return list(parsed.values())
+
+
+def parse_journal_zv_trainees_xlsx(payload: bytes, group_code: str | None = None, group_name: str | None = None) -> dict[str, Any]:
+    workbook = load_workbook(BytesIO(payload), data_only=True, read_only=True)
+    try:
+        rows = _find_zv_rows(workbook)
+    finally:
+        workbook.close()
+
+    header_index = -1
+    full_name_col: int | None = None
+    row_number_col: int | None = None
+    birth_date_col: int | None = None
+    tax_id_col: int | None = None
+    address_col: int | None = None
+    phone_col: int | None = None
+    journal_number_col: int | None = None
+    for index, raw_row in enumerate(rows[:30]):
+        headers = [_norm(value) for value in raw_row]
+        full_name_candidate = _find_header_column(headers, ("прізв", "піб", "слухач"), ("виклада",))
+        birth_date_candidate = _find_header_column(headers, ("дата народ",))
+        tax_id_candidate = _find_header_column(headers, ("ідентиф", "рнокпп", "інн"))
+        address_candidate = _find_header_column(headers, ("адрес",))
+        phone_candidate = _find_header_column(headers, ("тел",))
+        if full_name_candidate is not None:
+            header_index = index
+            full_name_col = full_name_candidate
+            row_number_col = _find_header_column(headers, ("номер за поряд", "№", "п/п"), ("журнал", "з-снн"))
+            journal_number_col = _find_header_column(headers, ("з-снн", "номер в журналі"))
+            birth_date_col = birth_date_candidate
+            tax_id_col = tax_id_candidate
+            address_col = address_candidate
+            phone_col = phone_candidate
+            break
+
+    if header_index < 0 or full_name_col is None:
+        raise JournalNoDataError("На аркуші «ЗВ» не знайдено колонку ПІБ слухача")
+
+    data: list[dict[str, Any]] = []
+    for raw_row in rows[header_index + 1 :]:
+        full_name = _norm(raw_row[full_name_col] if full_name_col < len(raw_row) else "")
+        if not full_name:
+            continue
+        name_parts = full_name.split(" ")
+        last_name = name_parts[0] if name_parts else ""
+        first_name = name_parts[1] if len(name_parts) > 1 else ""
+        middle_name = " ".join(name_parts[2:]) if len(name_parts) > 2 else ""
+        data.append(
+            {
+                "Номер за порядком": raw_row[row_number_col] if row_number_col is not None and row_number_col < len(raw_row) else None,
+                "Номер в журналі З-СНН": raw_row[journal_number_col] if journal_number_col is not None and journal_number_col < len(raw_row) else None,
+                "Прізвище": last_name,
+                "Ім'я": first_name,
+                "По батькові": middle_name,
+                "Дата народження": raw_row[birth_date_col] if birth_date_col is not None and birth_date_col < len(raw_row) else None,
+                "Ідентифікаційний номер": raw_row[tax_id_col] if tax_id_col is not None and tax_id_col < len(raw_row) else None,
+                "Домашня адреса": raw_row[address_col] if address_col is not None and address_col < len(raw_row) else None,
+                "Телефон": raw_row[phone_col] if phone_col is not None and phone_col < len(raw_row) else None,
+            }
+        )
+    if not data:
+        raise JournalNoDataError("На аркуші «ЗВ» не знайдено рядків зі слухачами")
+
+    return {
+        "rows": len(data),
+        "headers": list(data[0].keys()),
+        "data": data,
+        "sheet_name": "ЗВ",
+        "default_group_code": group_code,
+        "default_group_name": group_name,
+    }
 
 
 def _find_or_create_teacher(db: Session, branch_id: str, full_name: str) -> Teacher:
@@ -462,6 +552,7 @@ def process_journal_workload_entry(
     db.flush()
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    no_data_messages: list[str] = []
     for workbook_file in sorted(files, key=lambda item: str(item.get("name") or "").casefold()):
         try:
             payload = workbook_downloader(
@@ -470,12 +561,16 @@ def process_journal_workload_entry(
                 service_account_json=service_account_json,
             )
             rows.extend(parse_journal_disciplines_xlsx(payload))
+        except JournalNoDataError as exc:
+            no_data_messages.append(str(exc))
         except Exception as exc:
             errors.append(f"{workbook_file.get('name') or workbook_file.get('id')}: {exc}")
     if not rows:
-        detail = "; ".join(errors[:3])
+        if errors and not no_data_messages:
+            raise ValueError("; ".join(errors[:3]))
+        detail = "; ".join(no_data_messages[:3])
         suffix = f": {detail}" if detail else ""
-        raise ValueError(f"На аркушах «Дисципліни» не знайдено рядків з годинами викладачів{suffix}")
+        raise JournalNoDataError(f"На аркушах «Дисципліни» не знайдено рядків з годинами викладачів{suffix}")
 
     db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
         synchronize_session=False
@@ -512,6 +607,82 @@ def process_journal_workload_entry(
     db.add(entry)
     db.flush()
     return {"entries": len(rows), "hours": round(total_hours, 2)}
+
+
+def process_journal_trainees_entry(
+    db: Session,
+    entry: JournalMonitorEntry,
+    *,
+    service_account_json: str | None = None,
+    workbook_lister=None,
+    workbook_downloader=None,
+) -> dict[str, Any]:
+    if workbook_lister is None:
+        workbook_lister = list_drive_journal_workbook_files
+    if workbook_downloader is None:
+        workbook_downloader = download_drive_file_bytes
+    files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
+    if not files:
+        raise JournalNoDataError("У папці журналу не знайдено Google Sheet або Excel-файл")
+    source_names = [
+        display_name
+        for display_name in (_workbook_display_name(str(file.get("name") or "")) for file in files)
+        if display_name
+    ]
+    entry.trainees_source_names = source_names
+    db.add(entry)
+    db.flush()
+
+    combined_data: list[dict[str, Any]] = []
+    headers: list[str] = []
+    no_data_messages: list[str] = []
+    errors: list[str] = []
+    for workbook_file in sorted(files, key=lambda item: str(item.get("name") or "").casefold()):
+        try:
+            payload = workbook_downloader(
+                str(workbook_file.get("id") or ""),
+                mime_type=str(workbook_file.get("mimeType") or ""),
+                service_account_json=service_account_json,
+            )
+            parsed = parse_journal_zv_trainees_xlsx(payload, group_code=entry.group_code, group_name=entry.journal_name)
+            if not headers:
+                headers = list(parsed.get("headers") or [])
+            combined_data.extend(parsed.get("data") or [])
+        except JournalNoDataError as exc:
+            no_data_messages.append(str(exc))
+        except Exception as exc:
+            errors.append(f"{workbook_file.get('name') or workbook_file.get('id')}: {exc}")
+
+    if not combined_data:
+        if errors and not no_data_messages:
+            raise ValueError("; ".join(errors[:3]))
+        message = no_data_messages[0] if no_data_messages else "На аркуші «ЗВ» не знайдено рядків зі слухачами"
+        raise JournalNoDataError(message)
+
+    import_result = try_import_trainees(
+        db,
+        {
+            "rows": len(combined_data),
+            "headers": headers,
+            "data": combined_data,
+            "sheet_name": "ЗВ",
+            "default_group_code": entry.group_code,
+            "default_group_name": entry.journal_name,
+        },
+        entry.branch_id,
+        update_existing_mode="missing_only",
+        commit=False,
+    )
+    changed_count = int(import_result.get("inserted") or 0) + int(import_result.get("updated_existing") or 0)
+    total_seen = len(combined_data)
+    entry.trainees_status = "processed"
+    entry.trainees_message = f"Додано/оновлено слухачів із журналу: {total_seen}"
+    if errors:
+        entry.trainees_message = f"{entry.trainees_message}; частину файлів пропущено: {'; '.join(errors[:2])}"
+    entry.trainees_processed_at = datetime.now(timezone.utc)
+    db.add(entry)
+    db.flush()
+    return {"entries": total_seen, "changed": changed_count, "import_result": import_result}
 
 
 def process_next_journal_workload(
@@ -557,6 +728,13 @@ def process_next_journal_workload(
         try:
             process_journal_workload_entry(db, entry, service_account_json=section_service_account_json)
             processed += 1
+        except JournalNoDataError as exc:
+            entry.workload_status = "no_data"
+            entry.workload_message = str(exc)[:500]
+            entry.workload_processed_at = datetime.now(timezone.utc)
+            entry.workload_hours = 0.0
+            db.add(entry)
+            failed += 1
         except Exception as exc:
             entry.workload_status = "failed"
             entry.workload_message = str(exc)[:500]
@@ -567,6 +745,41 @@ def process_next_journal_workload(
 
     db.flush()
     return {"processed": processed, "failed": failed, "skipped_year": skipped_year}
+
+
+def process_journal_trainees_for_section(db: Session, section: JournalMonitorSection) -> dict[str, Any]:
+    from app.core.crypto import cipher
+
+    processed = 0
+    no_data = 0
+    failed = 0
+    section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
+    entries = sorted(
+        section.entries,
+        key=lambda item: (_infer_journal_year(item, section) or 9999, (item.group_code or "~~~~").casefold(), item.journal_name.casefold()),
+    )
+    for entry in entries:
+        if not entry.group_code:
+            continue
+        if entry.trainees_status == "processed":
+            continue
+        try:
+            process_journal_trainees_entry(db, entry, service_account_json=section_service_account_json)
+            processed += 1
+        except JournalNoDataError as exc:
+            entry.trainees_status = "no_data"
+            entry.trainees_message = str(exc)[:500]
+            entry.trainees_processed_at = datetime.now(timezone.utc)
+            db.add(entry)
+            no_data += 1
+        except Exception as exc:
+            entry.trainees_status = "failed"
+            entry.trainees_message = str(exc)[:500]
+            entry.trainees_processed_at = datetime.now(timezone.utc)
+            db.add(entry)
+            failed += 1
+    db.flush()
+    return {"processed": processed, "no_data": no_data, "failed": failed}
 
 
 def requeue_journal_workload_for_year(db: Session, section: JournalMonitorSection, year: int) -> int:
@@ -646,6 +859,10 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "workload_year": entry.workload_year,
         "workload_hours": entry.workload_hours,
         "workload_source_names": entry.workload_source_names or [],
+        "trainees_status": entry.trainees_status,
+        "trainees_message": entry.trainees_message,
+        "trainees_processed_at": entry.trainees_processed_at,
+        "trainees_source_names": entry.trainees_source_names or [],
         "drive_modified_at": entry.drive_modified_at,
         "last_seen_at": entry.last_seen_at,
     }
@@ -696,11 +913,34 @@ def _group_maps(db: Session, branch_id: str) -> tuple[dict[str, Group], dict[str
     return groups_by_code, schedule_counts, trainee_counts
 
 
+def _refresh_entry_project_state(
+    db: Session,
+    entry: JournalMonitorEntry,
+    groups_by_code: dict[str, Group] | None = None,
+    schedule_counts: dict[str, int] | None = None,
+    trainee_counts: dict[str, int] | None = None,
+) -> None:
+    if groups_by_code is None or schedule_counts is None or trainee_counts is None:
+        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, entry.branch_id)
+    normalized_code = normalize_group_code(entry.group_code)
+    matched_group = groups_by_code.get(normalized_code) if normalized_code else None
+    schedule_lessons = schedule_counts.get(normalized_code, 0)
+    trainee_count = trainee_counts.get(normalized_code, 0)
+    entry.matched_group_id = matched_group.id if matched_group else None
+    entry.has_group = matched_group is not None
+    entry.has_schedule = schedule_lessons > 0
+    entry.has_trainees = trainee_count > 0
+    entry.schedule_lessons = schedule_lessons
+    entry.trainee_count = trainee_count
+    entry.processing_status = _status(entry.has_schedule, entry.has_trainees, entry.group_code)
+
+
 def sync_journal_monitor_section(
     db: Session,
     section: JournalMonitorSection,
     folder_lister=list_drive_child_folders,
     process_workload: bool = True,
+    process_trainees: bool = True,
 ) -> JournalMonitorSection:
     now = datetime.now(timezone.utc)
     from app.core.crypto import cipher
@@ -718,12 +958,6 @@ def sync_journal_monitor_section(
             continue
         seen_drive_ids.add(drive_id)
         group_code = extract_group_code(name)
-        normalized_code = normalize_group_code(group_code)
-        matched_group = groups_by_code.get(normalized_code) if normalized_code else None
-        schedule_lessons = schedule_counts.get(normalized_code, 0)
-        trainee_count = trainee_counts.get(normalized_code, 0)
-        has_schedule = schedule_lessons > 0
-        has_trainees = trainee_count > 0
 
         entry = entries_by_drive_id.get(drive_id)
         if not entry:
@@ -738,13 +972,7 @@ def sync_journal_monitor_section(
         entry.drive_url = str(folder.get("url") or f"https://drive.google.com/drive/folders/{drive_id}")
         entry.journal_name = name
         entry.group_code = group_code
-        entry.matched_group_id = matched_group.id if matched_group else None
-        entry.has_group = matched_group is not None
-        entry.has_schedule = has_schedule
-        entry.has_trainees = has_trainees
-        entry.schedule_lessons = schedule_lessons
-        entry.trainee_count = trainee_count
-        entry.processing_status = _status(has_schedule, has_trainees, group_code)
+        _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
         entry.drive_modified_at = _parse_datetime(folder.get("modified_time"))
         entry.last_seen_at = now
 
@@ -757,6 +985,16 @@ def sync_journal_monitor_section(
     section.last_sync_message = f"Оновлено папок журналів: {len(seen_drive_ids)}"
     db.flush()
     db.refresh(section)
+    if process_trainees:
+        trainees_result = process_journal_trainees_for_section(db, section)
+        if trainees_result.get("processed") or trainees_result.get("failed") or trainees_result.get("no_data"):
+            section.last_sync_message += (
+                f"; слухачі: опрацьовано {trainees_result['processed']}, "
+                f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
+            )
+        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
+        for entry in section.entries:
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
     if process_workload and section.workload_auto_enabled:
         workload_result = process_next_journal_workload(
             db,
@@ -790,8 +1028,11 @@ def collect_export_rows(
             "Статус педнавантаження": format_workload_status(entry.workload_status),
             "Годин із журналу": entry.workload_hours,
             "Файли журналів": "; ".join(entry.workload_source_names or []),
+            "Статус слухачів": format_trainees_status(entry.trainees_status),
+            "Файли ЗВ": "; ".join(entry.trainees_source_names or []),
             "Рік педнавантаження": entry.workload_year or "",
             "Повідомлення педнавантаження": entry.workload_message or "",
+            "Повідомлення слухачів": entry.trainees_message or "",
             "Є група в системі": "Так" if entry.has_group else "Ні",
             "Є розклад": "Так" if entry.has_schedule else "Ні",
             "Занять у розкладі": entry.schedule_lessons,
@@ -821,6 +1062,16 @@ def format_workload_status(value: str) -> str:
         "failed": "Помилка обробки",
         "skipped_year": "Пропущено за роком",
         "needs_regeneration": "Потребує повторної обробки",
+        "no_data": "н/даних",
+    }.get(value, value)
+
+
+def format_trainees_status(value: str) -> str:
+    return {
+        "pending": "Очікує обробки",
+        "processed": "Додано",
+        "failed": "Помилка обробки",
+        "no_data": "н/даних",
     }.get(value, value)
 
 

@@ -3,6 +3,7 @@ from io import BytesIO
 
 from openpyxl import Workbook
 
+from app.core.crypto import cipher
 from app.models import Group, GroupStatus, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.services.import_export import collect_teacher_workload_summary
 from app.services import journal_monitor
@@ -45,6 +46,143 @@ def _journal_workbook_bytes(
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Дисципліни"
+    sheet = workbook.create_sheet("ЗВ")
+    sheet.append(
+        [
+            "Номер за порядком",
+            "Номер в журналі З-СНН",
+            "Прізвище, ім'я та по батькові слухача",
+            "Стать",
+            "Дата народження",
+            "Ідентифікаційний номер",
+            "Домашня адреса",
+            "Телефон",
+        ]
+    )
+    for row in rows:
+        sheet.append(list(row))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def test_journal_sync_imports_trainees_from_zv_sheet_and_updates_group_status(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "zv-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів, вул. Зелена 1", "+380501112233"),
+                (2, "З-СНН-002", "Коваль Олена Петрівна", "ж", "03.04.1992", "0987654321", "м. Львів, вул. Шевченка 2", "+380672223344"),
+            ]
+        ),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entry = sync_response.json()["entries"][0]
+    assert entry["group_code"] == "46-26"
+    assert entry["has_trainees"] is True
+    assert entry["trainee_count"] == 2
+    assert entry["processing_status"] == "trainees_only"
+    assert entry["trainees_status"] == "processed"
+    assert entry["trainees_message"] == "Додано/оновлено слухачів із журналу: 2"
+
+    trainees = db_session.query(Trainee).order_by(Trainee.last_name).all()
+    assert [(trainee.last_name, trainee.first_name, trainee.group_code) for trainee in trainees] == [
+        ("Коваль", "Олена Петрівна", "46-26"),
+        ("Петренко", "Іван Іванович", "46-26"),
+    ]
+    assert cipher.decrypt(trainees[1].tax_id_encrypted) == "1234567890"
+    assert cipher.decrypt(trainees[1].address_encrypted) == "м. Львів, вул. Зелена 1"
+    assert cipher.decrypt(trainees[1].phone_encrypted) == "+380501112233"
+
+
+def test_journal_sync_marks_trainees_no_data_when_zv_sheet_has_no_rows(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-47-26",
+                "name": "47-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-47-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "empty-zv-xlsx", "name": "47-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes([]),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entry = sync_response.json()["entries"][0]
+    assert entry["has_trainees"] is False
+    assert entry["trainee_count"] == 0
+    assert entry["processing_status"] == "not_processed"
+    assert entry["trainees_status"] == "no_data"
+    assert entry["trainees_message"] == "На аркуші «ЗВ» не знайдено рядків зі слухачами"
 
 
 def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teacher_workload(

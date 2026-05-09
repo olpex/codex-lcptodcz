@@ -101,7 +101,10 @@ FULL_NAME_ALIASES = {
     "піб безробітного",
     "пiб безробітного",
     "прізвище ім'я по батькові",
+    "прізвище ім'я та по батькові",
     "прізвище, ім'я, по батькові",
+    "прізвище, ім'я та по батькові",
+    "прізвище, ім'я та по батькові слухача",
     "фио",
     "full_name",
     "full name",
@@ -723,6 +726,7 @@ def try_import_trainees(
     parsed: dict,
     branch_id: str,
     update_existing_mode: str = "missing_only",
+    commit: bool = True,
 ) -> dict:
     if update_existing_mode not in IMPORT_UPDATE_MODES:
         update_existing_mode = "missing_only"
@@ -862,7 +866,10 @@ def try_import_trainees(
         )
         memberships_created += memberships_added
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return {
         "inserted": inserted,
         "updated_existing": updated_existing,
