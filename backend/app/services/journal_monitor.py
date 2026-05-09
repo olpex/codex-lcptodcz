@@ -37,6 +37,7 @@ GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄ�
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 JOURNAL_WORKLOAD_START_YEAR = 2026
 JOURNAL_MONITOR_MESSAGE_LIMIT = 500
+GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 8
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -225,7 +226,7 @@ def _get_service_account_access_token(raw_json: str | None = None) -> str:
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=20) as response:
+    with urlopen(request, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
         payload = json.loads(response.read().decode("utf-8"))
     access_token = payload.get("access_token")
     if not access_token:
@@ -261,7 +262,7 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
         request_or_url: str | Request = url
         if access_token:
             request_or_url = Request(url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
-        with urlopen(request_or_url, timeout=20) as response:
+        with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
         for item in payload.get("files", []):
             folders.append(
@@ -309,7 +310,7 @@ def list_drive_journal_workbook_files(folder_id: str, service_account_json: str 
         )
         if page_token:
             url += f"&pageToken={quote(page_token)}"
-        with urlopen(_drive_request_url(url, service_account_json), timeout=20) as response:
+        with urlopen(_drive_request_url(url, service_account_json), timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
         files.extend(payload.get("files", []))
         page_token = payload.get("nextPageToken") or ""
@@ -332,7 +333,7 @@ def download_drive_file_bytes(
     request_or_url = _drive_request_url(url, service_account_json)
     if isinstance(request_or_url, Request) and mime_type == GOOGLE_DRIVE_SHEETS_MIME:
         request_or_url.add_header("Accept", GOOGLE_DRIVE_XLSX_MIME)
-    with urlopen(request_or_url, timeout=30) as response:
+    with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
         return response.read()
 
 

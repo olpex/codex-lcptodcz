@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +28,7 @@ from app.services.journal_monitor import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:
@@ -184,15 +187,6 @@ def _start_section_processing(
     requeue_journal_trainees_for_year(db, section, year)
     db.commit()
 
-    try:
-        from app.tasks.worker import process_journal_monitor_auto_task
-
-        process_journal_monitor_auto_task.delay()
-    except Exception:
-        section.last_sync_message = "Опрацювання журналів увімкнено; worker виконає його за плановим запуском"
-        db.add(section)
-        db.commit()
-
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
@@ -207,6 +201,7 @@ def _process_section_once(
         process_journal_monitor_section_step(db, section, process_workload=False, process_trainees=True)
         db.commit()
     except Exception as exc:
+        logger.exception("Journal processing tick failed for section %s", section.id)
         db.rollback()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)

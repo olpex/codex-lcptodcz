@@ -439,8 +439,6 @@ def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     db_session,
     monkeypatch,
 ):
-    queued = {"called": False}
-
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("processing/start must use existing journal entries")),
@@ -463,7 +461,7 @@ def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     )
     monkeypatch.setattr(
         "app.tasks.worker.process_journal_monitor_auto_task.delay",
-        lambda: queued.update(called=True),
+        lambda: (_ for _ in ()).throw(AssertionError("processing/start must not call Celery in the web request")),
     )
 
     create_response = client.post(
@@ -495,7 +493,6 @@ def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     entry = response.json()["entries"][0]
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "pending"
-    assert queued["called"] is True
 
     tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/tick", headers=auth_headers)
 
