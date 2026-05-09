@@ -29,6 +29,7 @@ def ensure_runtime_schema() -> None:
             ("ocr_results", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("performances", "branch_id", "VARCHAR(50) NOT NULL DEFAULT 'main'"),
             ("teachers", "annual_load_hours", "FLOAT NOT NULL DEFAULT 0.0"),
+            ("groups", "hidden_from_registry", "BOOLEAN NOT NULL DEFAULT FALSE"),
             ("schedule_slots", "pair_number", "INTEGER NULL"),
             ("schedule_slots", "academic_hours", "FLOAT NOT NULL DEFAULT 2.0"),
             ("trainees", "source_row_number", "INTEGER NULL"),

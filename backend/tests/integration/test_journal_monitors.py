@@ -1257,3 +1257,91 @@ def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_head
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"
     assert entry["trainee_count"] == 1
+
+
+def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, auth_headers, db_session, monkeypatch):
+    group = Group(branch_id="main", code="46-26", name="Журнал із листів", status=GroupStatus.ACTIVE)
+    db_session.add(group)
+    db_session.flush()
+    _seed_schedule(db_session, group, "46")
+    db_session.add(Trainee(branch_id="main", first_name="Іван", last_name="Петренко", status="active", group_code="46-26"))
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал із листів",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            }
+        ],
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    entry_id = sync_response.json()["entries"][0]["id"]
+
+    delete_response = client.delete(f"/api/v1/journal-monitors/{section_id}/entries/{entry_id}", headers=auth_headers)
+
+    assert delete_response.status_code == 204
+    assert "46-26" not in {item["code"] for item in client.get("/api/v1/groups", headers=auth_headers).json()}
+    db_session.refresh(group)
+    assert group.hidden_from_registry is True
+    assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 1
+    assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 1
+
+    resync_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        headers=auth_headers,
+    )
+
+    assert resync_response.status_code == 200
+    db_session.refresh(group)
+    assert group.hidden_from_registry is False
+    groups_payload = {item["code"]: item for item in client.get("/api/v1/groups", headers=auth_headers).json()}
+    assert groups_payload["46-26"]["year"] == 2026
+
+
+def test_bulk_delete_journal_entries_hides_related_groups(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-31-26",
+                "name": "31-26 Перша група",
+                "url": "https://drive.google.com/drive/folders/drive-31-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            },
+            {
+                "id": "drive-32-26",
+                "name": "32-26 Друга група",
+                "url": "https://drive.google.com/drive/folders/drive-32-26",
+                "modified_time": "2026-05-01T11:00:00Z",
+            },
+        ],
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    entry_ids = [item["id"] for item in sync_response.json()["entries"]]
+
+    delete_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/entries/bulk-delete",
+        json={"entry_ids": entry_ids},
+        headers=auth_headers,
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted_count"] == 2
+    assert set(delete_response.json()["deleted_ids"]) == set(entry_ids)
+    assert {group.code for group in db_session.query(Group).filter(Group.hidden_from_registry.is_(True)).all()} == {"31-26", "32-26"}
+    assert client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers).json()["entries"] == []

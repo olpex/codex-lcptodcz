@@ -166,7 +166,12 @@ def _delete_group_rows(db: DbSession, group: Group, delete_trainees: bool) -> di
 
 @router.get("", response_model=list[GroupResponse])
 def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]:
-    groups = apply_branch_scope(db.query(Group), Group, current_user.branch_id).order_by(Group.created_at.desc()).all()
+    groups = (
+        apply_branch_scope(db.query(Group), Group, current_user.branch_id)
+        .filter(Group.hidden_from_registry.is_(False))
+        .order_by(Group.created_at.desc())
+        .all()
+    )
     schedule_ranges = _schedule_date_ranges(db, [group.id for group in groups])
     return [_group_response(group, schedule_ranges) for group in groups]
 
@@ -194,6 +199,7 @@ def _active_groups_between_dates(
 ) -> list[ActiveGroupBetweenDatesResponse]:
     _validate_period(date_from, date_to)
     filters = [Group.branch_id == branch_id]
+    filters.append(Group.hidden_from_registry.is_(False))
     if date_from:
         window_start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
         filters.append(ScheduleSlot.starts_at >= window_start)

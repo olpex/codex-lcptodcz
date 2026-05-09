@@ -172,6 +172,7 @@ class Group(Base):
         default=GroupStatus.PLANNED,
         nullable=False,
     )
+    hidden_from_registry: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

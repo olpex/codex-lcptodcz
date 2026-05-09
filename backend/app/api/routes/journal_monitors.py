@@ -8,6 +8,8 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same
 from app.core.crypto import cipher
 from app.models import JournalMonitorEntry, JournalMonitorSection, RoleName
 from app.schemas.api import (
+    JournalMonitorEntryBulkDeleteRequest,
+    JournalMonitorEntryBulkDeleteResponse,
     JournalMonitorDetailResponse,
     JournalMonitorSectionCreate,
     JournalMonitorSectionResponse,
@@ -17,6 +19,7 @@ from app.services.audit import write_audit
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     extract_drive_folder_id,
+    hide_groups_for_deleted_journal_entries,
     list_drive_child_folders,
     requeue_journal_trainees_for_year,
     requeue_journal_workload_for_year,
@@ -145,6 +148,65 @@ def delete_section(section_id: int, db: DbSession, current_user: CurrentUser) ->
     db.commit()
 
 
+@router.post(
+    "/{section_id}/entries/bulk-delete",
+    response_model=JournalMonitorEntryBulkDeleteResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def bulk_delete_entries(
+    section_id: int,
+    payload: JournalMonitorEntryBulkDeleteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> JournalMonitorEntryBulkDeleteResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    requested_ids = list(dict.fromkeys(payload.entry_ids))
+    entries = (
+        db.query(JournalMonitorEntry)
+        .filter(
+            JournalMonitorEntry.section_id == section.id,
+            JournalMonitorEntry.id.in_(requested_ids),
+        )
+        .all()
+    )
+    entries_by_id = {entry.id: entry for entry in entries}
+    target_entries = [entries_by_id[entry_id] for entry_id in requested_ids if entry_id in entries_by_id]
+    if not target_entries:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнали для видалення не знайдено")
+
+    hidden_group_count = hide_groups_for_deleted_journal_entries(db, target_entries)
+    deleted_ids = [entry.id for entry in target_entries]
+    details = [
+        {"id": entry.id, "journal_name": entry.journal_name, "group_code": entry.group_code}
+        for entry in target_entries
+    ]
+    for entry in target_entries:
+        db.delete(entry)
+    missing_ids = [entry_id for entry_id in requested_ids if entry_id not in entries_by_id]
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="journal_monitor.entry_bulk_delete",
+        entity_type="journal_monitor_entry_batch",
+        entity_id=",".join(str(item) for item in deleted_ids[:20]),
+        details={
+            "section_id": section_id,
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+            "missing_ids": missing_ids,
+            "hidden_group_count": hidden_group_count,
+            "entries": details,
+        },
+    )
+    db.commit()
+    return JournalMonitorEntryBulkDeleteResponse(
+        deleted_count=len(deleted_ids),
+        deleted_ids=deleted_ids,
+        missing_ids=missing_ids,
+        hidden_group_count=hidden_group_count,
+    )
+
+
 @router.delete(
     "/{section_id}/entries/{entry_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -156,6 +218,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
     if not entry or entry.section_id != section.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнал не знайдено")
     details = {"section_id": section_id, "journal_name": entry.journal_name, "group_code": entry.group_code}
+    hidden_group_count = hide_groups_for_deleted_journal_entries(db, [entry])
     db.delete(entry)
     write_audit(
         db,
@@ -163,7 +226,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
         action="journal_monitor.entry_delete",
         entity_type="journal_monitor_entry",
         entity_id=str(entry_id),
-        details=details,
+        details={**details, "hidden_group_count": hidden_group_count},
     )
     db.commit()
 

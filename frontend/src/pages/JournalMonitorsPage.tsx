@@ -7,7 +7,7 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { JournalMonitorEntry, JournalMonitorSection } from "../types/api";
+import type { JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, JournalMonitorSection } from "../types/api";
 
 const EXPORT_FORMATS = ["xlsx", "pdf", "docx", "csv"] as const;
 
@@ -233,6 +233,9 @@ export function JournalMonitorsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [entryToDelete, setEntryToDelete] = useState<JournalMonitorEntry | null>(null);
   const [isDeletingEntry, setIsDeletingEntry] = useState(false);
+  const [selectedEntryIds, setSelectedEntryIds] = useState<Record<number, boolean>>({});
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [isBulkDeletingEntries, setIsBulkDeletingEntries] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [journalSearch, setJournalSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -272,6 +275,12 @@ export function JournalMonitorsPage() {
       return sortDirection === "asc" ? result : -result;
     });
   }, [journalSearch, rows, scheduleFilter, sortDirection, sortKey, statusFilter, traineesFilter]);
+  const selectedEntries = useMemo(
+    () => rows.filter((row) => selectedEntryIds[row.id]),
+    [rows, selectedEntryIds]
+  );
+  const selectedEntryCount = selectedEntries.length;
+  const allVisibleEntriesSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedEntryIds[row.id]);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -286,9 +295,17 @@ export function JournalMonitorsPage() {
   };
 
   const loadDetail = async (sectionId: number) => {
-    const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}`);
-    setDetail(data);
-    return data;
+      const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}`);
+      setDetail(data);
+      setSelectedEntryIds((prev) => {
+        const availableIds = new Set((data.entries || []).map((entry) => entry.id));
+        return Object.fromEntries(
+          Object.entries(prev)
+            .filter(([id, selected]) => selected && availableIds.has(Number(id)))
+            .map(([id]) => [Number(id), true])
+        );
+      });
+      return data;
   };
 
   const load = async () => {
@@ -523,6 +540,60 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const toggleEntrySelection = (entryId: number) => {
+    setSelectedEntryIds((prev) => {
+      const next = { ...prev };
+      if (next[entryId]) {
+        delete next[entryId];
+      } else {
+        next[entryId] = true;
+      }
+      return next;
+    });
+  };
+
+  const toggleVisibleEntrySelection = () => {
+    if (allVisibleEntriesSelected) {
+      setSelectedEntryIds((prev) => {
+        const next = { ...prev };
+        visibleRows.forEach((row) => delete next[row.id]);
+        return next;
+      });
+      return;
+    }
+    setSelectedEntryIds((prev) => ({
+      ...prev,
+      ...Object.fromEntries(visibleRows.map((row) => [row.id, true]))
+    }));
+  };
+
+  const bulkDeleteJournalEntries = async () => {
+    if (!selectedId || !selectedEntryCount) return;
+    setIsBulkDeletingEntries(true);
+    try {
+      const response = await request<JournalMonitorEntryBulkDeleteResponse>(
+        `/journal-monitors/${selectedId}/entries/bulk-delete`,
+        {
+          method: "POST",
+          body: JSON.stringify({ entry_ids: selectedEntries.map((entry) => entry.id) })
+        }
+      );
+      setSelectedEntryIds((prev) => {
+        const next = { ...prev };
+        response.deleted_ids.forEach((id) => delete next[id]);
+        return next;
+      });
+      await loadDetail(selectedId);
+      await loadSections();
+      setBulkDeleteDialogOpen(false);
+      showSuccess(`Видалено журналів: ${response.deleted_count}; приховано груп: ${response.hidden_group_count}`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsBulkDeletingEntries(false);
+    }
+  };
+
   const renderBoolean = (value: boolean) => (
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
@@ -742,6 +813,27 @@ export function JournalMonitorsPage() {
           {entriesExpanded && (
             <div id="journal-monitor-entries" className="border-t border-slate-200">
               <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                    onClick={toggleVisibleEntrySelection}
+                    disabled={!visibleRows.length}
+                  >
+                    {allVisibleEntriesSelected ? "Зняти вибір" : "Вибрати показані"}
+                  </button>
+                  <span className="rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+                    Вибрано: {selectedEntryCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                    onClick={() => setBulkDeleteDialogOpen(true)}
+                    disabled={!selectedEntryCount || isBulkDeletingEntries}
+                  >
+                    Видалити вибрані
+                  </button>
+                </div>
                 <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
                   <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Пошук журналів
@@ -800,6 +892,7 @@ export function JournalMonitorsPage() {
                 <table className="min-w-[58rem] w-full text-left text-sm xl:min-w-full">
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
+                      <th className="px-3 py-2">Вибір</th>
                       <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
                       <th className="px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
@@ -816,6 +909,14 @@ export function JournalMonitorsPage() {
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {visibleRows.map((row: JournalMonitorEntry) => (
                       <tr key={row.id}>
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedEntryIds[row.id])}
+                            onChange={() => toggleEntrySelection(row.id)}
+                            aria-label={`Вибрати журнал ${row.group_code || row.journal_name}`}
+                          />
+                        </td>
                         <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
                         <td className="px-3 py-2">
                           <div>{row.journal_name}</div>
@@ -871,21 +972,21 @@ export function JournalMonitorsPage() {
                     ))}
                     {!isLoading && rows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={12}>
                           Даних ще немає. Натисніть «Оновити» після створення розділу.
                         </td>
                       </tr>
                     )}
                     {!isLoading && rows.length > 0 && visibleRows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={12}>
                           За цим пошуком журналів не знайдено.
                         </td>
                       </tr>
                     )}
                     {isLoading && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={12}>
                           Завантаження...
                         </td>
                       </tr>
@@ -917,6 +1018,18 @@ export function JournalMonitorsPage() {
         onConfirm={deleteJournalEntry}
         onCancel={() => {
           if (!isDeletingEntry) setEntryToDelete(null);
+        }}
+      />
+      <ConfirmDialog
+        open={bulkDeleteDialogOpen}
+        title="Видалити вибрані журнали"
+        description={`Видалити вибрані журнали (${selectedEntryCount}) з моніторингу? Відповідні групи буде приховано з реєстру груп, але вже імпортовані слухачі та розклад залишаться в базі.`}
+        confirmLabel={isBulkDeletingEntries ? "Видаляємо..." : "Видалити"}
+        confirmDisabled={isBulkDeletingEntries || !selectedEntryCount}
+        confirmVariant="danger"
+        onConfirm={bulkDeleteJournalEntries}
+        onCancel={() => {
+          if (!isBulkDeletingEntries) setBulkDeleteDialogOpen(false);
         }}
       />
     </div>

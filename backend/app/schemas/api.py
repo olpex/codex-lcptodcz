@@ -228,6 +228,7 @@ class GroupResponse(ORMModel):
     name: str
     capacity: int
     status: GroupStatus
+    hidden_from_registry: bool = False
     start_date: date | None
     end_date: date | None
     year: int | None = None
@@ -454,6 +455,17 @@ class JournalMonitorStats(BaseModel):
     unknown_code: int = 0
     workload_and_trainees: int = 0
     workload_trainees_schedule: int = 0
+
+
+class JournalMonitorEntryBulkDeleteRequest(BaseModel):
+    entry_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class JournalMonitorEntryBulkDeleteResponse(BaseModel):
+    deleted_count: int
+    deleted_ids: list[int]
+    missing_ids: list[int]
+    hidden_group_count: int
 
 
 class JournalMonitorEntryResponse(BaseModel):

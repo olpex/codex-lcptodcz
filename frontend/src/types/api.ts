@@ -54,6 +54,7 @@ export interface Group {
   name: string;
   capacity: number;
   status: string;
+  hidden_from_registry: boolean;
   start_date: string | null;
   end_date: string | null;
   year: number | null;
@@ -223,6 +224,13 @@ export interface JournalMonitorSection {
   last_sync_message: string | null;
   stats: JournalMonitorStats;
   entries?: JournalMonitorEntry[];
+}
+
+export interface JournalMonitorEntryBulkDeleteResponse {
+  deleted_count: number;
+  deleted_ids: number[];
+  missing_ids: number[];
+  hidden_group_count: number;
 }
 
 export interface Job {

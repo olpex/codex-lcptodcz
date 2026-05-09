@@ -81,7 +81,12 @@ def ensure_groups_for_journal_entries(db: Session, section: JournalMonitorSectio
         if not group_code:
             continue
         cache_key = normalize_group_code(group_code)
-        if cache_key in existing:
+        existing_group = existing.get(cache_key)
+        if existing_group:
+            if existing_group.hidden_from_registry:
+                existing_group.hidden_from_registry = False
+                db.add(existing_group)
+                created += 1
             continue
         group = Group(
             branch_id=section.branch_id,
@@ -95,6 +100,41 @@ def ensure_groups_for_journal_entries(db: Session, section: JournalMonitorSectio
         existing[cache_key] = group
         created += 1
     return created
+
+
+def hide_groups_for_deleted_journal_entries(db: Session, entries: list[JournalMonitorEntry]) -> int:
+    hidden = 0
+    deleted_ids = {entry.id for entry in entries if entry.id is not None}
+    seen_codes: set[str] = set()
+    for entry in entries:
+        group_code = display_group_code(entry.group_code)
+        if not group_code:
+            continue
+        normalized_code = normalize_group_code(group_code)
+        if normalized_code in seen_codes:
+            continue
+        seen_codes.add(normalized_code)
+        remaining_entry = (
+            db.query(JournalMonitorEntry)
+            .filter(
+                JournalMonitorEntry.branch_id == entry.branch_id,
+                JournalMonitorEntry.group_code == group_code,
+                JournalMonitorEntry.id.notin_(deleted_ids),
+            )
+            .first()
+        )
+        if remaining_entry:
+            continue
+        group = (
+            db.query(Group)
+            .filter(Group.branch_id == entry.branch_id, Group.code == group_code)
+            .first()
+        )
+        if group and not group.hidden_from_registry:
+            group.hidden_from_registry = True
+            db.add(group)
+            hidden += 1
+    return hidden
 
 
 def extract_group_code(folder_name: str) -> str | None:
