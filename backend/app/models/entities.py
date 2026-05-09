@@ -353,6 +353,7 @@ class JournalMonitorEntry(Base):
     workload_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     workload_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     workload_hours: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    workload_source_names: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     drive_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 

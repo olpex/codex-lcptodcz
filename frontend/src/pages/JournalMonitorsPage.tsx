@@ -690,7 +690,7 @@ export function JournalMonitorsPage() {
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
-                      <th className="px-3 py-2">{renderSortButton("journal", "Папка журналу")}</th>
+                      <th className="px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
                       <th className="px-3 py-2">Години</th>
@@ -705,7 +705,16 @@ export function JournalMonitorsPage() {
                     {visibleRows.map((row: JournalMonitorEntry) => (
                       <tr key={row.id}>
                         <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
-                        <td className="px-3 py-2">{row.journal_name}</td>
+                        <td className="px-3 py-2">
+                          <div>{row.journal_name}</div>
+                          {row.workload_source_names?.length > 0 && (
+                            <div className="mt-1 space-y-0.5 text-xs font-medium text-slate-500">
+                              {row.workload_source_names.map((sourceName) => (
+                                <div key={sourceName}>{sourceName}</div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
                             {formatStatus(row.processing_status)}

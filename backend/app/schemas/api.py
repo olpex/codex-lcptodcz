@@ -464,6 +464,7 @@ class JournalMonitorEntryResponse(BaseModel):
     workload_processed_at: datetime | None = None
     workload_year: int | None = None
     workload_hours: float = 0.0
+    workload_source_names: list[str] = Field(default_factory=list)
     drive_modified_at: datetime | None = None
     last_seen_at: datetime
 

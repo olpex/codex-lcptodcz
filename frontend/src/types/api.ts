@@ -190,6 +190,7 @@ export interface JournalMonitorEntry {
   workload_processed_at: string | null;
   workload_year: number | null;
   workload_hours: number;
+  workload_source_names: string[];
   drive_modified_at: string | null;
   last_seen_at: string;
 }

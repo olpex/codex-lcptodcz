@@ -250,11 +250,60 @@ def test_journal_workload_parses_two_workbooks_lowercase_sheet_and_splits_multip
     response = client.post(f"/api/v1/journal-monitors/{section_id}/workload-auto/start?year=2026", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json()["entries"][0]["workload_status"] == "processed"
+    entry = response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["workload_source_names"] == ["Теорія", "Виробниче навчання"]
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Брикін Віктор Євгенович"]["total_hours"] == 9
     assert summary["Старожук Людмила Василівна"]["total_hours"] == 5
     assert "Брикін Віктор Євгенович, Старожук Людмила Василівна" not in summary
+
+
+def test_auto_sync_retries_failed_journal_after_access_is_fixed(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-82-26",
+                "name": "82-26 Журнал з тимчасово закритим доступом",
+                "url": "https://drive.google.com/drive/folders/drive-82-26",
+                "modified_time": "2026-03-03T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "restricted-xlsx", "name": "82-26 Трактористи виробн.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    access_fixed = {"value": False}
+
+    def fake_download(file_id, mime_type=None, service_account_json=None):
+        if not access_fixed["value"]:
+            raise PermissionError("Немає доступу до файлу")
+        return _journal_workbook_bytes([("Доступ відновлено", 7, "1-7", "Доступний Викладач")])
+
+    monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", fake_download, raising=False)
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    first_response = client.post(f"/api/v1/journal-monitors/{section_id}/workload-auto/start?year=2026", headers=auth_headers)
+    assert first_response.json()["entries"][0]["workload_status"] == "failed"
+    assert first_response.json()["entries"][0]["workload_source_names"] == ["82-26 Трактористи виробн"]
+
+    access_fixed["value"] = True
+    retry_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    entry = retry_response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["workload_hours"] == 7
 
 
 def test_deleting_teacher_marks_related_journal_for_regeneration(client, auth_headers, db_session, monkeypatch):

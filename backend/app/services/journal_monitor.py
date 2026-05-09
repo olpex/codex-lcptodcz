@@ -150,6 +150,13 @@ def _infer_journal_year(entry: JournalMonitorEntry, section: JournalMonitorSecti
     return None
 
 
+def _workbook_display_name(name: str | None) -> str:
+    value = _norm(name)
+    if not value:
+        return ""
+    return re.sub(r"\.(?:xlsx|xlsm|xls|csv)$", "", value, flags=re.IGNORECASE).strip()
+
+
 def _decode_service_account_json(raw_json: str | None = None) -> dict[str, Any]:
     raw_value = (raw_json if raw_json is not None else settings.google_drive_service_account_json).strip()
     if not raw_value:
@@ -445,6 +452,14 @@ def process_journal_workload_entry(
     files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
     if not files:
         raise ValueError("У папці журналу не знайдено Google Sheet або Excel-файл")
+    source_names = [
+        display_name
+        for display_name in (_workbook_display_name(str(file.get("name") or "")) for file in files)
+        if display_name
+    ]
+    entry.workload_source_names = source_names
+    db.add(entry)
+    db.flush()
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     for workbook_file in sorted(files, key=lambda item: str(item.get("name") or "").casefold()):
@@ -630,6 +645,7 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "workload_processed_at": entry.workload_processed_at,
         "workload_year": entry.workload_year,
         "workload_hours": entry.workload_hours,
+        "workload_source_names": entry.workload_source_names or [],
         "drive_modified_at": entry.drive_modified_at,
         "last_seen_at": entry.last_seen_at,
     }
@@ -747,6 +763,7 @@ def sync_journal_monitor_section(
             section,
             limit=1,
             target_year=section.workload_auto_year,
+            retry_failed=True,
         )
         if workload_result.get("processed") or workload_result.get("failed") or workload_result.get("skipped_year"):
             section.last_sync_message += (
@@ -772,6 +789,7 @@ def collect_export_rows(
             "Статус опрацювання": format_processing_status(entry.processing_status),
             "Статус педнавантаження": format_workload_status(entry.workload_status),
             "Годин із журналу": entry.workload_hours,
+            "Файли журналів": "; ".join(entry.workload_source_names or []),
             "Рік педнавантаження": entry.workload_year or "",
             "Повідомлення педнавантаження": entry.workload_message or "",
             "Є група в системі": "Так" if entry.has_group else "Ні",
