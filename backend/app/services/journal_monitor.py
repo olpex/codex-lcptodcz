@@ -1004,10 +1004,17 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
         "trainees_only": 0,
         "not_processed": 0,
         "unknown_code": 0,
+        "workload_and_trainees": 0,
+        "workload_trainees_schedule": 0,
     }
     for entry in entries:
         if entry.processing_status in stats:
             stats[entry.processing_status] += 1
+        has_workload = entry.workload_status == "processed"
+        if has_workload and entry.has_trainees:
+            stats["workload_and_trainees"] += 1
+            if entry.has_schedule:
+                stats["workload_trainees_schedule"] += 1
     return stats
 
 

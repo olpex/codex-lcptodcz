@@ -87,6 +87,20 @@ const PROGRESS_CARDS = [
     caption: "Немає розкладу і слухачів",
     barClass: "bg-rose-600",
     valueClass: "text-rose-700"
+  },
+  {
+    key: "workload_and_trainees",
+    title: "Педнавантаження і слухачі",
+    caption: "Є години з журналу і список слухачів",
+    barClass: "bg-teal-600",
+    valueClass: "text-teal-700"
+  },
+  {
+    key: "workload_trainees_schedule",
+    title: "Педнавантаження, слухачі і розклад",
+    caption: "Є всі три частини",
+    barClass: "bg-lime-600",
+    valueClass: "text-lime-700"
   }
 ] as const;
 
@@ -577,7 +591,7 @@ export function JournalMonitorsPage() {
         </div>
 
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {PROGRESS_CARDS.map((card) => {
             const value = detail?.stats[card.key] ?? 0;
             const percent = formatPercent(value, totalFolders);
@@ -602,12 +616,14 @@ export function JournalMonitorsPage() {
         </div>
 
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid gap-2 text-sm text-slate-600 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
             <span>Усього: <b className="text-ink">{detail?.stats.total ?? 0}</b></span>
             <span>Повністю: <b className="text-emerald-700">{detail?.stats.complete ?? 0}</b></span>
             <span>Тільки розклад: <b className="text-sky-700">{detail?.stats.schedule_only ?? 0}</b></span>
             <span>Тільки слухачі: <b className="text-amber-700">{detail?.stats.trainees_only ?? 0}</b></span>
             <span>Не опрацьовано: <b className="text-rose-700">{detail?.stats.not_processed ?? 0}</b></span>
+            <span>Пед. + слухачі: <b className="text-teal-700">{detail?.stats.workload_and_trainees ?? 0}</b></span>
+            <span>Пед. + слухачі + розклад: <b className="text-lime-700">{detail?.stats.workload_trainees_schedule ?? 0}</b></span>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             <label className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
