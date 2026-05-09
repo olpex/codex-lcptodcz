@@ -40,6 +40,7 @@ function splitTeacherName(value: string): { lastName: string; firstName: string 
 
 export function WorkloadPage() {
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<number[]>([]);
+  const [expandedTeacherIds, setExpandedTeacherIds] = useState<number[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [isPrintingSummary, setIsPrintingSummary] = useState(false);
   const { request, user, accessToken } = useAuth();
@@ -165,6 +166,12 @@ export function WorkloadPage() {
     }
     setMergeTargetFromRow(selectedRows[0]);
     setIsMergeDialogOpen(true);
+  };
+
+  const toggleGroupDetails = (teacherId: number) => {
+    setExpandedTeacherIds((current) =>
+      current.includes(teacherId) ? current.filter((id) => id !== teacherId) : [...current, teacherId]
+    );
   };
 
   const saveAnnualLoad = async (teacherId: number) => {
@@ -374,6 +381,48 @@ export function WorkloadPage() {
       sortAccessor: (row) => row.teacher_name
     },
     {
+      key: "groups",
+      header: "Групи",
+      render: (row) => {
+        const groups = row.groups || [];
+        const isExpanded = expandedTeacherIds.includes(row.teacher_id);
+        if (groups.length === 0) {
+          return <span className="text-slate-400">-</span>;
+        }
+        return (
+          <div className="min-w-[170px]">
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-300 bg-white text-sm font-bold text-pine hover:bg-emerald-50"
+              aria-expanded={isExpanded}
+              aria-label={`${isExpanded ? "Сховати" : "Показати"} групи викладача ${row.teacher_name}`}
+              title={`${isExpanded ? "Сховати" : "Показати"} групи`}
+              onClick={() => toggleGroupDetails(row.teacher_id)}
+            >
+              {isExpanded ? "-" : "+"}
+            </button>
+            {isExpanded && (
+              <div className="mt-2 max-h-48 w-64 overflow-auto rounded border border-slate-200 bg-white p-2 shadow-sm">
+                <ul className="space-y-1">
+                  {groups.map((group) => (
+                    <li
+                      key={`${group.group_code}-${group.group_name}`}
+                      className="flex items-start justify-between gap-3 text-xs text-slate-700"
+                      title={group.group_name}
+                    >
+                      <span className="min-w-0 break-words font-semibold text-ink">{group.group_code}</span>
+                      <span className="shrink-0 tabular-nums">{group.hours} год</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      },
+      sortAccessor: (row) => row.groups?.length ?? 0
+    },
+    {
       key: "total_hours",
       header: "Загальна кількість годин",
       render: (row) => row.total_hours,
@@ -581,8 +630,9 @@ export function WorkloadPage() {
           onEmptyAction={() => load()}
           emptyActionDisabled={isLoading}
           search={{
-            placeholder: "Пошук викладача",
-            getSearchText: (row) => row.teacher_name
+            placeholder: "Пошук викладача або групи",
+            getSearchText: (row) =>
+              `${row.teacher_name} ${(row.groups || []).map((group) => `${group.group_code} ${group.group_name}`).join(" ")}`
           }}
         />
       </Panel>

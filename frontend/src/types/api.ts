@@ -113,6 +113,12 @@ export interface ScheduleSlot {
   room_name?: string | null;
 }
 
+export interface WorkloadGroup {
+  group_code: string;
+  group_name: string;
+  hours: number;
+}
+
 export interface Workload {
   teacher_id: number;
   row_number: number;
@@ -120,6 +126,7 @@ export interface Workload {
   total_hours: number;
   annual_load_hours: number;
   remaining_hours: number;
+  groups: WorkloadGroup[];
 }
 
 export interface TeacherMergeResult {

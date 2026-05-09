@@ -376,6 +376,12 @@ class ScheduleSlotUpdate(BaseModel):
     room_id: int | None = None
 
 
+class WorkloadGroupResponse(BaseModel):
+    group_code: str
+    group_name: str
+    hours: float
+
+
 class WorkloadResponse(BaseModel):
     teacher_id: int
     row_number: int
@@ -383,6 +389,7 @@ class WorkloadResponse(BaseModel):
     total_hours: float
     annual_load_hours: float
     remaining_hours: float
+    groups: list[WorkloadGroupResponse] = Field(default_factory=list)
 
 
 class TeacherMergeRequest(BaseModel):

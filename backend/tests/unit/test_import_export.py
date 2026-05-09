@@ -3,7 +3,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from app.models import Group, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.models import Group, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
 from app.services.import_export import (
     analyze_trainee_import_duplicates,
@@ -92,6 +92,65 @@ def test_teacher_workload_summary_includes_all_active_teachers_with_negative_rem
     assert rows[0]["remaining_hours"] == 0
     assert rows[1]["remaining_hours"] == -2
     assert rows[2]["remaining_hours"] == 12
+
+
+def test_teacher_workload_summary_includes_group_breakdown_from_schedule_and_journals(db_session):
+    teacher = Teacher(branch_id="main", first_name="Олег Леонідович", last_name="Паращук", is_active=True)
+    group = Group(branch_id="main", code="32-26", name="Група 32", status="active")
+    subject = Subject(branch_id="main", name="Предмет деталізації", hours_total=20)
+    room = Room(branch_id="main", name="Аудиторія деталізації", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([teacher, group, subject, room, section])
+    db_session.flush()
+    journal = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-33-26",
+        journal_name="33-26 Журнал",
+        group_code="33-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=10,
+    )
+    db_session.add(journal)
+    db_session.flush()
+
+    starts_at = datetime(2026, 2, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=2.0,
+                pair_number=1,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=journal.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Журнальна дисципліна",
+                hours=10,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    rows = collect_teacher_workload_summary(db_session, "main")
+
+    assert rows[0]["total_hours"] == 12
+    assert rows[0]["groups"] == [
+        {"group_code": "32-26", "group_name": "Група 32", "hours": 2.0},
+        {"group_code": "33-26", "group_name": "33-26 Журнал", "hours": 10.0},
+    ]
 
 
 def test_group_export_rows_include_existing_groups_and_teacher_hours(db_session):

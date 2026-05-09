@@ -33,6 +33,7 @@ def get_workload(
             total_hours=row["total_hours"],
             annual_load_hours=row["annual_load_hours"],
             remaining_hours=row["remaining_hours"],
+            groups=row.get("groups", []),
         )
         for row in summary
     ]

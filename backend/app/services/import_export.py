@@ -1000,12 +1000,21 @@ def collect_teacher_workload_summary(
     slots = query.all()
 
     totals: dict[int, float] = {}
+    group_totals: dict[int, dict[str, dict]] = defaultdict(dict)
     for slot in slots:
         totals.setdefault(slot.teacher_id, 0.0)
         if slot.academic_hours is not None:
-            totals[slot.teacher_id] += float(slot.academic_hours)
+            hours = float(slot.academic_hours)
         else:
-            totals[slot.teacher_id] += (slot.ends_at - slot.starts_at).total_seconds() / 3600
+            hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
+        totals[slot.teacher_id] += hours
+        group = slot.group
+        group_code = group.code if group else "Без групи"
+        bucket = group_totals[slot.teacher_id].setdefault(
+            group_code,
+            {"group_code": group_code, "group_name": group.name if group else "", "hours": 0.0},
+        )
+        bucket["hours"] += hours
 
     journal_query = (
         db.query(JournalWorkloadEntry)
@@ -1025,7 +1034,16 @@ def collect_teacher_workload_summary(
         )
     for journal_entry in journal_query.all():
         totals.setdefault(journal_entry.teacher_id, 0.0)
-        totals[journal_entry.teacher_id] += float(journal_entry.hours or 0)
+        hours = float(journal_entry.hours or 0)
+        totals[journal_entry.teacher_id] += hours
+        journal = journal_entry.journal_entry
+        group_code = journal.group_code if journal and journal.group_code else (journal.journal_name if journal else "Журнал")
+        group_name = journal.journal_name if journal else group_code
+        bucket = group_totals[journal_entry.teacher_id].setdefault(
+            group_code,
+            {"group_code": group_code, "group_name": group_name, "hours": 0.0},
+        )
+        bucket["hours"] += hours
 
     rows: list[dict] = []
     for teacher in teachers:
@@ -1039,6 +1057,13 @@ def collect_teacher_workload_summary(
                 "total_hours": total_hours,
                 "annual_load_hours": annual_load,
                 "remaining_hours": remaining,
+                "groups": [
+                    {**item, "hours": round(float(item["hours"]), 2)}
+                    for item in sorted(
+                        group_totals.get(teacher.id, {}).values(),
+                        key=lambda value: str(value["group_code"]).casefold(),
+                    )
+                ],
             }
         )
     rows.sort(key=lambda item: item["teacher_name"].lower())
