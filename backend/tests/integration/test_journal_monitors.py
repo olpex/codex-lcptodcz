@@ -1173,3 +1173,87 @@ def test_journal_monitor_can_store_section_service_account_json(client, auth_hea
     assert sync_response.status_code == 200
     assert captured["folder_id"] == "root-folder"
     assert "drive-reader@example.iam.gserviceaccount.com" in str(captured["service_account_json"])
+
+
+def test_journal_sync_creates_groups_from_drive_folders(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Організація трудових відносин в умовах воєнного стану",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            }
+        ],
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entry = sync_response.json()["entries"][0]
+    assert entry["group_code"] == "1-26"
+    assert entry["has_group"] is True
+    group = db_session.query(Group).filter(Group.code == "1-26").one()
+    assert group.name == "Організація трудових відносин в умовах воєнного стану"
+    groups_response = client.get("/api/v1/groups", headers=auth_headers)
+    groups_payload = {item["code"]: item for item in groups_response.json()}
+    assert groups_payload["1-26"]["year"] == 2026
+
+
+def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    entry_id = sync_response.json()["entries"][0]["id"]
+
+    delete_response = client.delete(f"/api/v1/journal-monitors/{section_id}/entries/{entry_id}", headers=auth_headers)
+    assert delete_response.status_code == 204
+    assert client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers).json()["entries"] == []
+
+    tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        headers=auth_headers,
+    )
+
+    assert tick_response.status_code == 200
+    entry = tick_response.json()["entries"][0]
+    assert entry["group_code"] == "46-26"
+    assert entry["workload_status"] == "processed"
+    assert entry["trainees_status"] == "processed"
+    assert entry["trainee_count"] == 1

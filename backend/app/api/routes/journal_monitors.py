@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.crypto import cipher
-from app.models import JournalMonitorSection, RoleName
+from app.models import JournalMonitorEntry, JournalMonitorSection, RoleName
 from app.schemas.api import (
     JournalMonitorDetailResponse,
     JournalMonitorSectionCreate,
@@ -23,6 +23,7 @@ from app.services.journal_monitor import (
     save_journal_monitor_export,
     section_to_response_payload,
     process_journal_monitor_section_step,
+    process_journal_monitor_background_step,
     process_next_journal_workload,
     sync_journal_monitor_section,
 )
@@ -141,6 +142,29 @@ def update_section(
 def delete_section(section_id: int, db: DbSession, current_user: CurrentUser) -> None:
     section = _get_section_or_404(db, current_user, section_id)
     db.delete(section)
+    db.commit()
+
+
+@router.delete(
+    "/{section_id}/entries/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: CurrentUser) -> None:
+    section = _get_section_or_404(db, current_user, section_id)
+    entry = db.get(JournalMonitorEntry, entry_id)
+    if not entry or entry.section_id != section.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнал не знайдено")
+    details = {"section_id": section_id, "journal_name": entry.journal_name, "group_code": entry.group_code}
+    db.delete(entry)
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="journal_monitor.entry_delete",
+        entity_type="journal_monitor_entry",
+        entity_id=str(entry_id),
+        details=details,
+    )
     db.commit()
 
 
@@ -288,6 +312,34 @@ def tick_section_processing(
     if not section.workload_auto_enabled:
         return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
     return _process_section_once(section, db, error_prefix="Не вдалося продовжити опрацювання журналів")
+
+
+@router.post(
+    "/{section_id}/processing/background-tick",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def background_tick_section_processing(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    year: int | None = Query(default=None, ge=2025, le=2100),
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    try:
+        process_journal_monitor_background_step(
+            db,
+            section,
+            folder_lister=list_drive_child_folders,
+            target_year=year,
+        )
+        db.commit()
+    except Exception as exc:
+        logger.exception("Journal background processing failed for section %s", section.id)
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося виконати фонове опрацювання журналів: {exc}") from exc
+    db.refresh(section)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
 @router.post(

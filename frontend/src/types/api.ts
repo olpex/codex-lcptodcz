@@ -56,6 +56,7 @@ export interface Group {
   status: string;
   start_date: string | null;
   end_date: string | null;
+  year: number | null;
 }
 
 export interface GroupAuditLog {

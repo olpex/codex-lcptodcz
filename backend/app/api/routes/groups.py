@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import date, datetime, time, timezone
 from io import BytesIO
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -40,6 +41,20 @@ from app.services.audit import write_audit
 router = APIRouter()
 
 
+def _infer_group_year(code: str | None, name: str | None = None) -> int | None:
+    for value in (code, name):
+        text = (value or "").strip()
+        if not text:
+            continue
+        full_year = re.search(r"\b(20\d{2})\b", text)
+        if full_year:
+            return int(full_year.group(1))
+        short_year = re.search(r"[-–—/]\s*(\d{2})(?:\D|$)", text)
+        if short_year:
+            return 2000 + int(short_year.group(1))
+    return None
+
+
 def _schedule_date_ranges(db: DbSession, group_ids: list[int]) -> dict[int, tuple[date, date]]:
     if not group_ids:
         return {}
@@ -63,14 +78,18 @@ def _schedule_date_ranges(db: DbSession, group_ids: list[int]) -> dict[int, tupl
 def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]]) -> GroupResponse:
     response = GroupResponse.model_validate(group)
     schedule_range = schedule_ranges.get(group.id)
+    updates = {"year": _infer_group_year(group.code, group.name)}
     if not schedule_range:
-        return response
+        return response.model_copy(update=updates)
     start_date, end_date = schedule_range
-    return response.model_copy(
-        update={
+    updates.update(
+        {
             "start_date": response.start_date or start_date,
             "end_date": response.end_date or end_date,
         }
+    )
+    return response.model_copy(
+        update=updates
     )
 
 

@@ -230,6 +230,7 @@ class GroupResponse(ORMModel):
     status: GroupStatus
     start_date: date | None
     end_date: date | None
+    year: int | None = None
     created_at: datetime
 
 

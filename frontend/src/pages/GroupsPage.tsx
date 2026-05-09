@@ -70,6 +70,15 @@ function formatTraineeStatus(value: string): string {
   return TRAINEE_STATUS_LABELS[value] || value;
 }
 
+function inferGroupYear(group: Group): number | null {
+  if (group.year) return group.year;
+  const source = `${group.code || ""} ${group.name || ""}`;
+  const fullYear = source.match(/\b(20\d{2})\b/);
+  if (fullYear) return Number(fullYear[1]);
+  const shortYear = source.match(/[-–—/]\s*(\d{2})(?:\D|$)/);
+  return shortYear ? 2000 + Number(shortYear[1]) : null;
+}
+
 function buildTraineeName(trainee: Trainee): string {
   return `${trainee.last_name} ${trainee.first_name}`.trim();
 }
@@ -163,6 +172,7 @@ export function GroupsPage() {
   const [capacity, setCapacity] = useState(25);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [groupYearFilter, setGroupYearFilter] = useState("");
   const [activeGroupSearch, setActiveGroupSearch] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -197,11 +207,19 @@ export function GroupsPage() {
     [groups, selectedGroupIds]
   );
 
+  const groupYears = useMemo(
+    () => Array.from(new Set(groups.map(inferGroupYear).filter((year): year is number => Boolean(year)))).sort((a, b) => b - a),
+    [groups]
+  );
+  const filteredGroups = useMemo(
+    () => groupYearFilter ? groups.filter((group) => inferGroupYear(group) === Number(groupYearFilter)) : groups,
+    [groupYearFilter, groups]
+  );
   const selectedGroupCount = selectedGroups.length;
-  const allGroupsSelected = groups.length > 0 && groups.every((group) => selectedGroupIds[group.id]);
+  const allGroupsSelected = filteredGroups.length > 0 && filteredGroups.every((group) => selectedGroupIds[group.id]);
   const selectedDetailGroup = useMemo(
-    () => groups.find((group) => group.id === selectedDetailGroupId) || groups[0] || null,
-    [groups, selectedDetailGroupId]
+    () => filteredGroups.find((group) => group.id === selectedDetailGroupId) || filteredGroups[0] || null,
+    [filteredGroups, selectedDetailGroupId]
   );
   const selectedGroupDetail = useMemo(
     () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots),
@@ -371,6 +389,12 @@ export function GroupsPage() {
   useEffect(() => {
     loadGroups();
   }, []);
+
+  useEffect(() => {
+    if (!groupYearFilter && groupYears.length > 0) {
+      setGroupYearFilter(String(groupYears[0]));
+    }
+  }, [groupYearFilter, groupYears]);
 
   const loadGroupAudit = async (groupId: number) => {
     setIsAuditLoading(true);
@@ -566,10 +590,17 @@ export function GroupsPage() {
 
   const toggleAllGroups = () => {
     if (allGroupsSelected) {
-      setSelectedGroupIds({});
+      setSelectedGroupIds((prev) => {
+        const next = { ...prev };
+        filteredGroups.forEach((group) => delete next[group.id]);
+        return next;
+      });
       return;
     }
-    setSelectedGroupIds(Object.fromEntries(groups.map((group) => [group.id, true])));
+    setSelectedGroupIds((prev) => ({
+      ...prev,
+      ...Object.fromEntries(filteredGroups.map((group) => [group.id, true]))
+    }));
   };
 
   const openBulkDeleteDialog = () => {
@@ -974,8 +1005,26 @@ export function GroupsPage() {
             {isLoading ? "Оновлюємо..." : "Оновити"}
           </button>
         </div>
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-semibold text-slate-600">Рік</span>
+          <select
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-ink"
+            value={groupYearFilter}
+            onChange={(event) => setGroupYearFilter(event.target.value)}
+          >
+            <option value="">Усі роки</option>
+            {groupYears.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </select>
+          <span className="text-slate-500">
+            Показано: {filteredGroups.length} з {groups.length}
+          </span>
+        </div>
         <DataTable
-          data={groups}
+          data={filteredGroups}
           columns={columns}
           rowKey={(group) => group.id}
           isLoading={isLoading}

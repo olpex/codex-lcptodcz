@@ -231,6 +231,8 @@ export function JournalMonitorsPage() {
   const [workloadYear, setWorkloadYear] = useState(String(new Date().getFullYear()));
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [entryToDelete, setEntryToDelete] = useState<JournalMonitorEntry | null>(null);
+  const [isDeletingEntry, setIsDeletingEntry] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [journalSearch, setJournalSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -341,6 +343,23 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const processSelectedBackgroundStep = async () => {
+    const sectionId = selectedId || selectedSection?.id;
+    if (!sectionId || detail?.workload_auto_enabled) return;
+    const year = Number(workloadYear);
+    const query = Number.isInteger(year) && year >= 2025 && year <= 2100 ? `?year=${year}` : "";
+    try {
+      const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/processing/background-tick${query}`, {
+        method: "POST"
+      });
+      setDetail(data);
+      await loadSections();
+      setErrorText(null);
+    } catch (error) {
+      setErrorText((error as Error).message);
+    }
+  };
+
   useEffect(() => {
     load();
   }, []);
@@ -354,9 +373,10 @@ export function JournalMonitorsPage() {
     });
   }, [selectedId]);
 
-  usePageRefresh(() => syncSelected(false), {
+  usePageRefresh(processSelectedBackgroundStep, {
     enabled: Boolean(selectedId) && !detail?.workload_auto_enabled,
-    intervalMs: 60_000
+    intervalMs: 15_000,
+    refreshOnFocus: false
   });
   usePageRefresh(processSelectedStep, {
     enabled: Boolean(selectedId) && Boolean(detail?.workload_auto_enabled),
@@ -483,6 +503,23 @@ export function JournalMonitorsPage() {
       showError((error as Error).message);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const deleteJournalEntry = async () => {
+    if (!selectedId || !entryToDelete) return;
+    setIsDeletingEntry(true);
+    try {
+      await request<void>(`/journal-monitors/${selectedId}/entries/${entryToDelete.id}`, { method: "DELETE" });
+      const data = await loadDetail(selectedId);
+      await loadSections();
+      setEntryToDelete(null);
+      showSuccess(`Журнал «${entryToDelete.group_code || entryToDelete.journal_name}» видалено з моніторингу`);
+      setDetail(data);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeletingEntry(false);
     }
   };
 
@@ -773,6 +810,7 @@ export function JournalMonitorsPage() {
                       <th className="px-3 py-2">Занять</th>
                       <th className="px-3 py-2">Осіб</th>
                       <th className="px-3 py-2">Drive</th>
+                      <th className="px-3 py-2">Дії</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -819,25 +857,35 @@ export function JournalMonitorsPage() {
                             "—"
                           )}
                         </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            className="rounded-lg border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                            onClick={() => setEntryToDelete(row)}
+                            disabled={isDeletingEntry}
+                          >
+                            Видалити
+                          </button>
+                        </td>
                       </tr>
                     ))}
                     {!isLoading && rows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
                           Даних ще немає. Натисніть «Оновити» після створення розділу.
                         </td>
                       </tr>
                     )}
                     {!isLoading && rows.length > 0 && visibleRows.length === 0 && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
                           За цим пошуком журналів не знайдено.
                         </td>
                       </tr>
                     )}
                     {isLoading && (
                       <tr>
-                        <td className="px-3 py-6 text-center text-slate-500" colSpan={10}>
+                        <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
                           Завантаження...
                         </td>
                       </tr>
@@ -858,6 +906,18 @@ export function JournalMonitorsPage() {
         confirmDisabled={isDeleting}
         onConfirm={deleteSelectedSection}
         onCancel={() => setDeleteDialogOpen(false)}
+      />
+      <ConfirmDialog
+        open={Boolean(entryToDelete)}
+        title="Видалити журнал"
+        description={`Видалити «${entryToDelete?.group_code || entryToDelete?.journal_name || "цей журнал"}» з моніторингу? Після наступної синхронізації він знов підтягнеться з Google Drive, якщо папка там існує.`}
+        confirmLabel={isDeletingEntry ? "Видаляємо..." : "Видалити"}
+        confirmDisabled={isDeletingEntry}
+        confirmVariant="danger"
+        onConfirm={deleteJournalEntry}
+        onCancel={() => {
+          if (!isDeletingEntry) setEntryToDelete(null);
+        }}
       />
     </div>
   );

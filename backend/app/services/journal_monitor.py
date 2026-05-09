@@ -18,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Group, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
+from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
 from app.services.import_export import save_report_file, try_import_trainees
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -58,6 +58,43 @@ def display_group_code(value: str | None) -> str | None:
         return None
     raw = raw.replace("–", "-").replace("—", "-")
     return re.sub(r"\s*-\s*", "-", raw)
+
+
+def _journal_group_name(journal_name: str, group_code: str | None) -> str:
+    value = _norm(journal_name)
+    if group_code:
+        escaped = re.escape(group_code).replace("\\-", r"[-–—]")
+        value = re.sub(rf"^\s*{escaped}\s*[-–—:]?\s*", "", value, flags=re.IGNORECASE)
+    else:
+        value = re.sub(GROUP_CODE_PATTERN, "", value, count=1).strip(" -–—:")
+    return (value or journal_name or group_code or "Група")[:255]
+
+
+def ensure_groups_for_journal_entries(db: Session, section: JournalMonitorSection) -> int:
+    existing = {
+        normalize_group_code(group.code): group
+        for group in db.query(Group).filter(Group.branch_id == section.branch_id).all()
+    }
+    created = 0
+    for entry in section.entries:
+        group_code = display_group_code(entry.group_code)
+        if not group_code:
+            continue
+        cache_key = normalize_group_code(group_code)
+        if cache_key in existing:
+            continue
+        group = Group(
+            branch_id=section.branch_id,
+            code=group_code,
+            name=_journal_group_name(entry.journal_name, group_code),
+            capacity=max(int(entry.trainee_count or 0), 30),
+            status=GroupStatus.ACTIVE,
+        )
+        db.add(group)
+        db.flush()
+        existing[cache_key] = group
+        created += 1
+    return created
 
 
 def extract_group_code(folder_name: str) -> str | None:
@@ -1176,6 +1213,14 @@ def sync_journal_monitor_section(
         entry.drive_modified_at = _parse_datetime(folder.get("modified_time"))
         entry.last_seen_at = now
 
+    db.flush()
+    db.refresh(section)
+    created_groups = ensure_groups_for_journal_entries(db, section)
+    if created_groups:
+        groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
+        for entry in section.entries:
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+
     for entry in section.entries:
         if entry.drive_file_id not in seen_drive_ids:
             db.delete(entry)
@@ -1194,6 +1239,48 @@ def sync_journal_monitor_section(
     db.flush()
     db.refresh(section)
     return section
+
+
+def process_journal_monitor_background_step(
+    db: Session,
+    section: JournalMonitorSection,
+    *,
+    folder_lister=list_drive_child_folders,
+    target_year: int | None = None,
+) -> dict[str, Any]:
+    section = sync_journal_monitor_section(
+        db,
+        section,
+        folder_lister=folder_lister,
+        process_workload=False,
+        process_trainees=False,
+    )
+    workload_result = process_next_journal_workload(
+        db,
+        section,
+        limit=1,
+        target_year=target_year,
+        retry_failed=True,
+    )
+    trainees_result = process_journal_trainees_for_section(
+        db,
+        section,
+        limit=1,
+        target_year=target_year,
+        retry_failed=True,
+    )
+    groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
+    for entry in section.entries:
+        _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+    section.last_sync_message = _clip_monitor_message(
+        "Фонове опрацювання: "
+        f"педнавантаження {workload_result['processed']}/{workload_result['failed']}, "
+        f"слухачі {trainees_result['processed']}/{trainees_result['no_data']}/{trainees_result['failed']}"
+    )
+    db.add(section)
+    db.flush()
+    db.refresh(section)
+    return {"workload": workload_result, "trainees": trainees_result}
 
 
 def collect_export_rows(
