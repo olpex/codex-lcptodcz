@@ -146,6 +146,17 @@ TRAINEE_HEADER_HINTS = (
 GROUP_CONTEXT_PATTERN = re.compile(r"\bгрупа\s*([0-9a-zа-яіїєґ\/\-]+)\b", re.IGNORECASE)
 
 
+def _normalize_group_code_key(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    for dash in ("–", "—", "−", "/", "."):
+        raw = raw.replace(dash, "-")
+    raw = re.sub(r"\s+", "", raw)
+    raw = re.sub(r"-{2,}", "-", raw)
+    return raw.casefold()
+
+
 def _normalize_header(value: Any) -> str:
     raw = str(value or "").strip().lower()
     raw = " ".join(raw.replace("\n", " ").replace("\r", " ").split())
@@ -1001,6 +1012,7 @@ def collect_teacher_workload_summary(
 
     totals: dict[int, float] = {}
     group_totals: dict[int, dict[str, dict]] = defaultdict(dict)
+    scheduled_group_codes: set[str] = set()
     for slot in slots:
         totals.setdefault(slot.teacher_id, 0.0)
         if slot.academic_hours is not None:
@@ -1010,6 +1022,9 @@ def collect_teacher_workload_summary(
         totals[slot.teacher_id] += hours
         group = slot.group
         group_code = group.code if group else "Без групи"
+        normalized_group_code = _normalize_group_code_key(group_code)
+        if normalized_group_code:
+            scheduled_group_codes.add(normalized_group_code)
         bucket = group_totals[slot.teacher_id].setdefault(
             group_code,
             {"group_code": group_code, "group_name": group.name if group else "", "hours": 0.0},
@@ -1035,9 +1050,11 @@ def collect_teacher_workload_summary(
     for journal_entry in journal_query.all():
         totals.setdefault(journal_entry.teacher_id, 0.0)
         hours = float(journal_entry.hours or 0)
-        totals[journal_entry.teacher_id] += hours
         journal = journal_entry.journal_entry
         group_code = journal.group_code if journal and journal.group_code else (journal.journal_name if journal else "Журнал")
+        if _normalize_group_code_key(group_code) in scheduled_group_codes:
+            continue
+        totals[journal_entry.teacher_id] += hours
         group_name = journal.journal_name if journal else group_code
         bucket = group_totals[journal_entry.teacher_id].setdefault(
             group_code,

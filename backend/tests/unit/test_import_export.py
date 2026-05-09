@@ -153,6 +153,65 @@ def test_teacher_workload_summary_includes_group_breakdown_from_schedule_and_jou
     ]
 
 
+def test_teacher_workload_summary_does_not_double_count_journal_hours_for_scheduled_group(db_session):
+    teacher = Teacher(branch_id="main", first_name="Олег Леонідович", last_name="Паращук", is_active=True)
+    group = Group(branch_id="main", code="46-26", name="Група 46-26", status="active")
+    subject = Subject(branch_id="main", name="Предмет 46-26", hours_total=68)
+    room = Room(branch_id="main", name="Аудиторія 46-26", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([teacher, group, subject, room, section])
+    db_session.flush()
+    journal = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=68,
+    )
+    db_session.add(journal)
+    db_session.flush()
+
+    starts_at = datetime(2026, 3, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=68.0,
+                pair_number=1,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=journal.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Предмет 46-26",
+                hours=68,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    rows = collect_teacher_workload_summary(db_session, "main")
+
+    assert rows[0]["teacher_name"] == "Паращук Олег Леонідович"
+    assert rows[0]["total_hours"] == 68
+    assert rows[0]["groups"] == [
+        {"group_code": "46-26", "group_name": "Група 46-26", "hours": 68.0},
+    ]
+
+
 def test_group_export_rows_include_existing_groups_and_teacher_hours(db_session):
     scheduled_group = Group(branch_id="main", code="72-26", name="Група з розкладом", status="active")
     empty_group = Group(branch_id="main", code="73-26", name="Група без розкладу", status="active")
