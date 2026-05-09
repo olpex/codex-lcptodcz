@@ -285,7 +285,7 @@ def _process_section_once(
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
     try:
-        process_journal_monitor_section_step(db, section, process_workload=False, process_trainees=True)
+        process_journal_monitor_section_step(db, section, process_workload=True, process_trainees=True)
         db.commit()
     except Exception as exc:
         logger.exception("Journal processing tick failed for section %s", section.id)

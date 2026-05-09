@@ -1372,7 +1372,7 @@ def format_workload_status(value: str) -> str:
         "failed": "Помилка обробки",
         "skipped_year": "Пропущено за роком",
         "needs_regeneration": "Потребує повторної обробки",
-        "no_data": "н/даних",
+        "no_data": "Н/даних",
     }.get(value, value)
 
 
@@ -1381,7 +1381,7 @@ def format_trainees_status(value: str) -> str:
         "pending": "Очікує обробки",
         "processed": "Додано",
         "failed": "Помилка обробки",
-        "no_data": "н/даних",
+        "no_data": "Н/даних",
     }.get(value, value)
 
 

@@ -31,7 +31,7 @@ const WORKLOAD_STATUS_LABELS: Record<string, string> = {
   pending: "Очікує",
   processed: "Додано",
   failed: "Помилка",
-  no_data: "н/даних",
+  no_data: "Н/даних",
   skipped_year: "Пропущено за роком",
   needs_regeneration: "Повторити"
 };
@@ -49,7 +49,7 @@ const TRAINEES_STATUS_LABELS: Record<string, string> = {
   pending: "Очікує",
   processed: "Так",
   failed: "Помилка",
-  no_data: "н/даних"
+  no_data: "Н/даних"
 };
 
 const TRAINEES_STATUS_CLASSES: Record<string, string> = {

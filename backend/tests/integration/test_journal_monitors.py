@@ -504,6 +504,67 @@ def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     assert "опрацювання завершено" in tick_response.json()["last_sync_message"]
 
 
+def test_journal_processing_tick_processes_pending_workload_before_trainees(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("processing/start must use existing journal entries")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section_id,
+            branch_id="main",
+            drive_file_id="drive-46-26",
+            drive_url="https://drive.google.com/drive/folders/drive-46-26",
+            journal_name="46-26 Журнал",
+            group_code="46-26",
+            workload_status="pending",
+            trainees_status="pending",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
+    assert response.status_code == 200
+
+    tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/tick", headers=auth_headers)
+
+    assert tick_response.status_code == 200
+    tick_entry = tick_response.json()["entries"][0]
+    assert tick_entry["workload_status"] == "processed"
+    assert tick_entry["workload_hours"] == 8
+    assert tick_entry["trainees_status"] == "processed"
+    assert tick_entry["trainee_count"] == 1
+    assert tick_response.json()["workload_auto_enabled"] is False
+    summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
+
+
 def test_journal_auto_worker_processes_trainees_and_workload_together(db_session, monkeypatch):
     monkeypatch.setattr(
         "app.tasks.worker.list_drive_child_folders",
