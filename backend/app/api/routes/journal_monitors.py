@@ -190,6 +190,27 @@ def _start_section_processing(
         db.add(section)
         db.commit()
 
+    return _process_section_once(section, db, error_prefix=error_prefix)
+
+
+def _process_section_once(
+    section: JournalMonitorSection,
+    db: DbSession,
+    *,
+    error_prefix: str,
+) -> JournalMonitorDetailResponse:
+    try:
+        section = sync_journal_monitor_section(
+            db,
+            section,
+            folder_lister=list_drive_child_folders,
+            process_workload=True,
+            process_trainees=True,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
@@ -258,6 +279,22 @@ def stop_section_processing(
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
     return _stop_section_processing(section, db)
+
+
+@router.post(
+    "/{section_id}/processing/tick",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def tick_section_processing(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    if not section.workload_auto_enabled:
+        return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+    return _process_section_once(section, db, error_prefix="Не вдалося продовжити опрацювання журналів")
 
 
 @router.post(

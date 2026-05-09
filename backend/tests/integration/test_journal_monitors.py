@@ -356,7 +356,7 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     assert refreshed_summary["Шевченко Марія Іванівна"]["total_hours"] == 16
 
 
-def test_journal_processing_start_queues_background_processing_without_inline_drive_work(
+def test_journal_processing_start_processes_first_journal_immediately_and_queues_worker(
     client,
     auth_headers,
     monkeypatch,
@@ -364,8 +364,29 @@ def test_journal_processing_start_queues_background_processing_without_inline_dr
     queued = {"called": False}
 
     monkeypatch.setattr(
-        "app.api.routes.journal_monitors.sync_journal_monitor_section",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("processing/start must not do Drive work inline")),
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
     )
     monkeypatch.setattr(
         "app.tasks.worker.process_journal_monitor_auto_task.delay",
@@ -382,9 +403,13 @@ def test_journal_processing_start_queues_background_processing_without_inline_dr
     response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/start?year=2026", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json()["workload_auto_enabled"] is True
+    assert response.json()["workload_auto_enabled"] is False
     assert response.json()["workload_auto_year"] == 2026
-    assert response.json()["last_sync_message"] == "Опрацювання журналів поставлено в чергу: слухачі та години"
+    entry = response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["trainees_status"] == "processed"
+    assert entry["trainee_count"] == 1
+    assert "опрацювання завершено" in response.json()["last_sync_message"]
     assert queued["called"] is True
 
 

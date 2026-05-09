@@ -312,6 +312,21 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const processSelectedStep = async () => {
+    const sectionId = selectedId || selectedSection?.id;
+    if (!sectionId || !detail?.workload_auto_enabled) return;
+    try {
+      const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/processing/tick`, {
+        method: "POST"
+      });
+      setDetail(data);
+      await loadSections();
+      setErrorText(null);
+    } catch (error) {
+      setErrorText((error as Error).message);
+    }
+  };
+
   useEffect(() => {
     load();
   }, []);
@@ -325,7 +340,15 @@ export function JournalMonitorsPage() {
     });
   }, [selectedId]);
 
-  usePageRefresh(() => syncSelected(false), { enabled: Boolean(selectedId), intervalMs: 60_000 });
+  usePageRefresh(() => syncSelected(false), {
+    enabled: Boolean(selectedId) && !detail?.workload_auto_enabled,
+    intervalMs: 60_000
+  });
+  usePageRefresh(processSelectedStep, {
+    enabled: Boolean(selectedId) && Boolean(detail?.workload_auto_enabled),
+    intervalMs: 3_000,
+    refreshOnFocus: false
+  });
 
   const createSection = async (event: FormEvent) => {
     event.preventDefault();
