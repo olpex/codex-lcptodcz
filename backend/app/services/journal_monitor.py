@@ -336,6 +336,14 @@ def _source_name_tokens(value: str | None, group_code: str | None = None) -> set
     return {token for token in tokens if token not in _SOURCE_NAME_STOP_WORDS}
 
 
+def _source_name_has_group_prefix(value: str | None, group_code: str | None = None) -> bool:
+    if not group_code:
+        return False
+    text = _workbook_display_name(value)
+    escaped = re.escape(display_group_code(group_code) or group_code).replace("\\-", r"[-–—]")
+    return bool(re.match(rf"^\s*{escaped}(?:\s|[-–—:]|$)", text, flags=re.IGNORECASE))
+
+
 def _source_name_repeats_journal(source_name: str, entry: JournalMonitorEntry, journal_key: str) -> bool:
     source_key = _source_name_key(source_name, entry.group_code)
     if not source_key:
@@ -346,6 +354,10 @@ def _source_name_repeats_journal(source_name: str, entry: JournalMonitorEntry, j
     source_tokens = _source_name_tokens(source_name, entry.group_code)
     journal_tokens = _source_name_tokens(entry.journal_name, entry.group_code)
     if not source_tokens or not journal_tokens:
+        return False
+
+    has_group_prefix = _source_name_has_group_prefix(source_name, entry.group_code)
+    if not has_group_prefix and len(source_tokens) <= 2:
         return False
 
     shared_tokens = source_tokens & journal_tokens
@@ -1258,13 +1270,15 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
         "workload_trainees_schedule": 0,
     }
     for entry in entries:
-        if entry.processing_status in stats:
-            stats[entry.processing_status] += 1
         has_workload = entry.workload_status == "processed"
+        if has_workload and entry.has_trainees and entry.has_schedule:
+            stats["workload_trainees_schedule"] += 1
+            continue
         if has_workload and entry.has_trainees:
             stats["workload_and_trainees"] += 1
-            if entry.has_schedule:
-                stats["workload_trainees_schedule"] += 1
+            continue
+        if not has_workload and entry.processing_status in stats:
+            stats[entry.processing_status] += 1
     return stats
 
 

@@ -8,11 +8,13 @@ const section = {
   has_service_account_credentials: false,
   stats: {
     total: 4,
-    complete: 1,
+    complete: 0,
     schedule_only: 1,
-    trainees_only: 1,
-    not_processed: 1,
-    unknown_code: 0
+    trainees_only: 0,
+    not_processed: 0,
+    unknown_code: 0,
+    workload_and_trainees: 1,
+    workload_trainees_schedule: 1
   },
   entries: [
     {
@@ -109,7 +111,12 @@ const archiveSection = {
 
 async function loginAndMockJournals(
   page: Page,
-  options: { sections?: unknown[]; onExport?: (url: URL) => void; onProcessingStart?: (url: URL) => void } = {}
+  options: {
+    sections?: unknown[];
+    onExport?: (url: URL) => void;
+    onProcessingStart?: (url: URL) => void;
+    onBackgroundTick?: (url: URL) => void;
+  } = {}
 ) {
   await page.addInitScript(() => {
     localStorage.setItem(
@@ -170,6 +177,15 @@ async function loginAndMockJournals(
       });
     }
 
+    if (path.endsWith("/journal-monitors/1/processing/background-tick") && method === "POST") {
+      options.onBackgroundTick?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...section, workload_auto_enabled: true, workload_auto_year: Number(url.searchParams.get("year")) })
+      });
+    }
+
     if (path.endsWith("/journal-monitors/1") && method === "GET") {
       return route.fulfill({
         status: 200,
@@ -209,9 +225,11 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByRole("heading", { name: "Тільки слухачі" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Не опрацьовано" })).toBeVisible();
   await page.getByRole("button", { name: /Список журналів/ }).click();
-  await expect(page.getByRole("table").getByText("Не опрацьовано", { exact: true })).toBeVisible();
-  await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "2-26" }).getByText("Педнавантаження і слухачі")).toBeVisible();
+  await expect(page.getByRole("table").getByText("Тільки педнавантаження", { exact: true })).toBeVisible();
+  await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "2-26" }).getByText("Пед.+слухачі")).toBeVisible();
   await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "10п-26" }).getByText("Опрацьовано")).toBeVisible();
+  await expect(page.getByText("Тільки слухачі:").locator("b")).toHaveText("0");
+  await expect(page.getByText("Пед.+слухачі:").locator("b")).toHaveText("1");
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {
@@ -343,9 +361,13 @@ test("journal monitor export uses current filters", async ({ page }) => {
 
 test("journal monitor starts one combined processing action for trainees and workload", async ({ page }) => {
   let processingUrl: URL | null = null;
+  let backgroundUrl: URL | null = null;
   await loginAndMockJournals(page, {
     onProcessingStart: (url) => {
       processingUrl = url;
+    },
+    onBackgroundTick: (url) => {
+      backgroundUrl = url;
     }
   });
 
@@ -357,4 +379,9 @@ test("journal monitor starts one combined processing action for trainees and wor
   await expect.poll(() => processingUrl?.pathname).toContain("/journal-monitors/1/processing/start");
   expect(processingUrl?.searchParams.get("year")).toBe("2026");
   await expect(page.getByRole("button", { name: "Зупинити опрацювання" })).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+
+  await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
+  expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
 });

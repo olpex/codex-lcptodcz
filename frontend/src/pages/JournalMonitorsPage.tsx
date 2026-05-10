@@ -31,6 +31,7 @@ const STATUS_CLASSES: Record<string, string> = {
   trainees_only: "bg-amber-100 text-amber-800",
   not_processed: "bg-rose-100 text-rose-800",
   unknown_code: "bg-slate-100 text-slate-700",
+  workload_only: "bg-violet-100 text-violet-800",
   workload_and_trainees: "bg-violet-800 text-violet-100"
 };
 
@@ -169,12 +170,13 @@ function matchesStatusFilter(row: JournalMonitorEntry, filter: string): boolean 
 function getDisplayStatus(row: JournalMonitorEntry): string {
   if (row.has_schedule && row.has_trainees) return "complete";
   if (hasProcessedWorkload(row) && row.has_trainees) return "workload_and_trainees";
+  if (hasProcessedWorkload(row) && !row.has_schedule && !row.has_trainees) return "workload_only";
   return row.processing_status;
 }
 
 function formatDisplayStatus(row: JournalMonitorEntry): string {
   const status = getDisplayStatus(row);
-  if (status === "workload_and_trainees") return "Педнавантаження і слухачі";
+  if (status === "workload_and_trainees") return "Пед.+слухачі";
   return formatStatus(status);
 }
 
@@ -374,24 +376,9 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const processSelectedStep = async () => {
-    const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId || !detail?.workload_auto_enabled) return;
-    try {
-      const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/processing/tick`, {
-        method: "POST"
-      });
-      setDetail(data);
-      await loadSections();
-      setErrorText(null);
-    } catch (error) {
-      setErrorText((error as Error).message);
-    }
-  };
-
   const processSelectedBackgroundStep = async () => {
     const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId || detail?.workload_auto_enabled) return;
+    if (!sectionId) return;
     const year = Number(workloadYear);
     const query = Number.isInteger(year) && year >= 2025 && year <= 2100 ? `?year=${year}` : "";
     try {
@@ -420,13 +407,8 @@ export function JournalMonitorsPage() {
   }, [selectedId]);
 
   usePageRefresh(processSelectedBackgroundStep, {
-    enabled: Boolean(selectedId) && !detail?.workload_auto_enabled,
-    intervalMs: 15_000,
-    refreshOnFocus: false
-  });
-  usePageRefresh(processSelectedStep, {
-    enabled: Boolean(selectedId) && Boolean(detail?.workload_auto_enabled),
-    intervalMs: 3_000,
+    enabled: Boolean(selectedId),
+    intervalMs: 30_000,
     refreshOnFocus: false
   });
 
@@ -760,7 +742,7 @@ export function JournalMonitorsPage() {
             <span>Тільки розклад: <b className="text-sky-700">{detail?.stats.schedule_only ?? 0}</b></span>
             <span>Тільки слухачі: <b className="text-amber-700">{detail?.stats.trainees_only ?? 0}</b></span>
             <span>Не опрацьовано: <b className="text-rose-700">{detail?.stats.not_processed ?? 0}</b></span>
-            <span>Пед. + слухачі: <b className="text-teal-700">{detail?.stats.workload_and_trainees ?? 0}</b></span>
+            <span>Пед.+слухачі: <b className="text-teal-700">{detail?.stats.workload_and_trainees ?? 0}</b></span>
             <span>Пед. + слухачі + розклад: <b className="text-lime-700">{detail?.stats.workload_trainees_schedule ?? 0}</b></span>
           </div>
           <div className="flex flex-wrap justify-end gap-2">

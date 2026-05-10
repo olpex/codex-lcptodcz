@@ -1244,7 +1244,8 @@ def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, a
 
     detail_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
     assert detail_response.status_code == 200
-    assert detail_response.json()["stats"]["workload_and_trainees"] == 2
+    assert detail_response.json()["stats"]["trainees_only"] == 0
+    assert detail_response.json()["stats"]["workload_and_trainees"] == 1
     assert detail_response.json()["stats"]["workload_trainees_schedule"] == 1
     entries = {item["group_code"]: item for item in detail_response.json()["entries"]}
     assert entries["180-25"]["has_schedule"] is True

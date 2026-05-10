@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     openai_ocr_enabled: bool = Field(default=False)
     google_drive_api_key: str = Field(default="")
     google_drive_service_account_json: str = Field(default="")
-    journal_workload_auto_interval_seconds: int = Field(default=60)
+    journal_workload_auto_interval_seconds: int = Field(default=30)
 
     cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
 
