@@ -115,6 +115,7 @@ async function loginAndMockJournals(
     sections?: unknown[];
     onExport?: (url: URL) => void;
     onProcessingStart?: (url: URL) => void;
+    onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
   } = {}
 ) {
@@ -183,6 +184,20 @@ async function loginAndMockJournals(
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ ...section, workload_auto_enabled: true, workload_auto_year: Number(url.searchParams.get("year")) })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/1/processing/reprocess-all") && method === "POST") {
+      options.onReprocessAll?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...section,
+          workload_auto_enabled: true,
+          workload_auto_year: Number(url.searchParams.get("year")),
+          entries: section.entries.map((entry) => ({ ...entry, workload_status: "pending", trainees_status: "pending" }))
+        })
       });
     }
 
@@ -384,4 +399,21 @@ test("journal monitor starts one combined processing action for trainees and wor
 
   await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
   expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+});
+
+test("journal monitor can force full reprocessing for a year", async ({ page }) => {
+  let reprocessUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    onReprocessAll: (url) => {
+      reprocessUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+  await page.getByLabel("Рік").fill("2026");
+  await page.getByRole("button", { name: "Переобробити все" }).click();
+
+  await expect.poll(() => reprocessUrl?.pathname).toContain("/journal-monitors/1/processing/reprocess-all");
+  expect(reprocessUrl?.searchParams.get("year")).toBe("2026");
+  await expect(page.getByText("Повну переобробку журналів для 2026 року поставлено в чергу")).toBeVisible();
 });

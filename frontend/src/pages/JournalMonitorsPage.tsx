@@ -511,6 +511,29 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const reprocessAllJournals = async () => {
+    if (!selectedId) return;
+    const year = Number(workloadYear);
+    if (!Number.isInteger(year) || year < 2025 || year > 2100) {
+      showError("Вкажіть рік від 2025 до 2100");
+      return;
+    }
+    setIsProcessingJournals(true);
+    try {
+      const data = await request<JournalMonitorSection>(
+        `/journal-monitors/${selectedId}/processing/reprocess-all?year=${year}`,
+        { method: "POST" }
+      );
+      setDetail(data);
+      await loadSections();
+      showSuccess(`Повну переобробку журналів для ${year} року поставлено в чергу`);
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsProcessingJournals(false);
+    }
+  };
+
   const deleteSelectedSection = async () => {
     if (!selectedId) return;
     setIsDeleting(true);
@@ -773,6 +796,14 @@ export function JournalMonitorsPage() {
                 ? "Зупинити опрацювання"
                 : "Почати опрацювання"}
           </button>
+            <button
+              type="button"
+              className="rounded-lg border border-violet-500 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+              onClick={reprocessAllJournals}
+              disabled={!selectedId || isProcessingJournals}
+            >
+              Переобробити все
+            </button>
             <button
               type="button"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"

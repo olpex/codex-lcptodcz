@@ -203,6 +203,51 @@ def test_journal_zv_parser_does_not_copy_address_into_phone_from_combined_column
     assert parsed["data"][1]["Телефон"] == "+380501112233"
 
 
+def test_journal_zv_parser_extracts_ukrainian_mobile_from_address_cell():
+    parsed = journal_monitor.parse_journal_zv_trainees_xlsx(
+        _journal_zv_workbook_with_combined_address_phone_bytes(
+            [
+                (
+                    1,
+                    "З-СНН-001",
+                    "Петренко Іван Іванович",
+                    "ч",
+                    "01.02.1990",
+                    "1234567890",
+                    "Львівська область, Жовтанці, Центральна 7, 097 831 94 50",
+                ),
+                (
+                    2,
+                    "З-СНН-002",
+                    "Коваль Олена Петрівна",
+                    "ж",
+                    "03.04.1992",
+                    "0987654321",
+                    "м. Київ, вул. Хрещатик 1, 067.222.33.44",
+                ),
+                (
+                    3,
+                    "З-СНН-003",
+                    "Сидоренко Марія Іванівна",
+                    "ж",
+                    "05.06.1994",
+                    "1111111111",
+                    "м. Луцьк, +38 (050) 111-22-33",
+                ),
+            ]
+        ),
+        group_code="46-26",
+        group_name="46-26 Журнал",
+    )
+
+    assert parsed["data"][0]["Домашня адреса"] == "Львівська область, Жовтанці, Центральна 7"
+    assert parsed["data"][0]["Телефон"] == "+380978319450"
+    assert parsed["data"][1]["Домашня адреса"] == "м. Київ, вул. Хрещатик 1"
+    assert parsed["data"][1]["Телефон"] == "+380672223344"
+    assert parsed["data"][2]["Домашня адреса"] == "м. Луцьк"
+    assert parsed["data"][2]["Телефон"] == "+380501112233"
+
+
 def test_journal_worker_imports_trainees_from_zv_sheet_and_updates_group_status(
     client,
     auth_headers,
@@ -964,6 +1009,53 @@ def test_start_requeue_keeps_already_imported_trainees_out_of_front_of_queue(db_
     assert changed == 1
     assert imported.trainees_status == "processed"
     assert pending.trainees_status == "pending"
+
+
+def test_force_requeue_marks_processed_workload_and_trainees_pending(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    teacher = Teacher(branch_id="main", first_name="Іванович", last_name="Викладач", is_active=True)
+    db_session.add_all([section, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-1-26",
+        journal_name="1-26 Журнал",
+        group_code="1-26",
+        has_trainees=True,
+        trainee_count=33,
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=8,
+        trainees_status="processed",
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Предмет",
+            hours=8,
+        )
+    )
+    db_session.commit()
+
+    workload_changed = journal_monitor.requeue_journal_workload_for_year(db_session, section, 2026, force=True)
+    trainees_changed = journal_monitor.requeue_journal_trainees_for_year(db_session, section, 2026, force=True)
+
+    assert workload_changed == 1
+    assert trainees_changed == 1
+    assert entry.workload_status == "pending"
+    assert entry.trainees_status == "pending"
+    assert entry.workload_hours == 0
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
 
 
 def test_journal_step_message_does_not_grow_past_database_limit(db_session):

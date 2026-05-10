@@ -319,7 +319,19 @@ def _find_header_column(headers: list[str], keywords: tuple[str, ...], excluded:
     return None
 
 
-PHONE_PATTERN = re.compile(r"(?:\+?38)?0\d(?:[\s().-]*\d){8}")
+UKRAINIAN_MOBILE_PREFIXES = "39|50|63|66|67|68|73|91|92|93|94|95|96|97|98|99"
+PHONE_PATTERN = re.compile(
+    rf"(?<!\d)(?:\+?38[\s().-]*)?0(?:{UKRAINIAN_MOBILE_PREFIXES})(?:[\s().-]*\d){{7}}(?!\d)"
+)
+
+
+def _normalize_ukrainian_mobile(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 10 and digits.startswith("0"):
+        return f"+38{digits}"
+    if len(digits) == 12 and digits.startswith("380"):
+        return f"+{digits}"
+    return value.strip(" ,;")
 
 
 def _split_address_phone_cell(value: Any) -> tuple[Any, str | None]:
@@ -329,7 +341,7 @@ def _split_address_phone_cell(value: Any) -> tuple[Any, str | None]:
     for match in PHONE_PATTERN.finditer(text):
         digits = re.sub(r"\D", "", match.group(0))
         if (digits.startswith("380") and len(digits) == 12) or (digits.startswith("0") and len(digits) == 10):
-            phone = match.group(0).strip(" ,;")
+            phone = _normalize_ukrainian_mobile(match.group(0))
             address = f"{text[:match.start()]} {text[match.end():]}".strip(" ,;")
             address = re.sub(r"\s{2,}", " ", address)
             return address or None, phone
@@ -1302,18 +1314,19 @@ def process_journal_trainees_for_section(
     return {"processed": processed, "no_data": no_data, "failed": failed}
 
 
-def requeue_journal_workload_for_year(db: Session, section: JournalMonitorSection, year: int) -> int:
+def requeue_journal_workload_for_year(db: Session, section: JournalMonitorSection, year: int, *, force: bool = False) -> int:
     changed = 0
     for entry in section.entries:
         entry_year = _infer_journal_year(entry, section)
         entry.workload_year = entry_year
         if entry_year != year:
             continue
-        if entry.workload_status in {"failed", "needs_regeneration", "skipped_year"}:
+        if force or entry.workload_status in {"failed", "needs_regeneration", "skipped_year"}:
             entry.workload_status = "pending"
             entry.workload_message = "Поставлено в чергу повторної обробки"
             entry.workload_processed_at = None
             entry.workload_hours = 0.0
+            entry.workload_source_names = None
             db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
                 synchronize_session=False
             )
@@ -1323,7 +1336,7 @@ def requeue_journal_workload_for_year(db: Session, section: JournalMonitorSectio
     return changed
 
 
-def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSection, year: int) -> int:
+def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSection, year: int, *, force: bool = False) -> int:
     changed = 0
     for entry in section.entries:
         entry_year = _infer_journal_year(entry, section)
@@ -1331,9 +1344,9 @@ def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSectio
             continue
         if not entry.group_code:
             continue
-        if entry.trainees_status == "processed" and entry.has_trainees:
+        if not force and entry.trainees_status == "processed" and entry.has_trainees:
             continue
-        if entry.trainees_status in {"pending", "failed", "no_data", "processed"}:
+        if force or entry.trainees_status in {"pending", "failed", "no_data", "processed"}:
             entry.trainees_status = "pending"
             entry.trainees_message = "Поставлено в чергу повторної обробки слухачів"
             entry.trainees_processed_at = None
