@@ -468,7 +468,7 @@ def test_background_tick_reprocesses_processed_trainees_when_import_count_is_too
     db_session.commit()
 
     tick_response = client.post(
-        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
         headers=auth_headers,
     )
 
@@ -798,6 +798,64 @@ def test_journal_processing_tick_processes_pending_workload_before_trainees(
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
 
+def test_background_tick_processes_existing_queue_without_drive_folder_sync(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    drive_sync_calls = 0
+
+    def forbidden_drive_sync(*args, **kwargs):
+        nonlocal drive_sync_calls
+        drive_sync_calls += 1
+        raise AssertionError("background tick must process the existing queue before Drive sync")
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", forbidden_drive_sync)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section_id,
+            branch_id="main",
+            drive_file_id="drive-46-26",
+            drive_url="https://drive.google.com/drive/folders/drive-46-26",
+            journal_name="46-26 Журнал",
+            group_code="46-26",
+            workload_status="pending",
+            trainees_status="pending",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert drive_sync_calls == 0
+    entry = response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["trainees_status"] == "processed"
+
+
 def test_journal_auto_worker_processes_trainees_and_workload_together(db_session, monkeypatch):
     monkeypatch.setattr(
         "app.tasks.worker.list_drive_child_folders",
@@ -1058,7 +1116,7 @@ def test_force_requeue_marks_processed_workload_and_trainees_pending(db_session)
     assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
 
 
-def test_reprocess_all_queues_existing_entries_when_drive_sync_fails(client, auth_headers, db_session, monkeypatch):
+def test_reprocess_all_queues_existing_entries_without_drive_sync(client, auth_headers, db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
         name="Журнали 2026",
@@ -1094,10 +1152,14 @@ def test_reprocess_all_queues_existing_entries_when_drive_sync_fails(client, aut
     )
     db_session.commit()
 
-    def broken_drive_lister(_folder_id, service_account_json=None):
-        raise RuntimeError("тимчасово недоступний Google Drive")
+    drive_sync_calls = 0
 
-    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", broken_drive_lister)
+    def forbidden_drive_lister(_folder_id, service_account_json=None):
+        nonlocal drive_sync_calls
+        drive_sync_calls += 1
+        raise AssertionError("full reprocessing must queue existing entries without Drive sync")
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", forbidden_drive_lister)
 
     response = client.post(
         f"/api/v1/journal-monitors/{section.id}/processing/reprocess-all?year=2026",
@@ -1106,8 +1168,8 @@ def test_reprocess_all_queues_existing_entries_when_drive_sync_fails(client, aut
 
     assert response.status_code == 200
     payload = response.json()
+    assert drive_sync_calls == 0
     assert payload["workload_auto_enabled"] is True
-    assert payload["last_sync_status"] == "failed"
     assert "Повна переобробка 2026" in payload["last_sync_message"]
     assert payload["entries"][0]["workload_status"] == "pending"
     assert payload["entries"][0]["trainees_status"] == "pending"
@@ -1763,7 +1825,7 @@ def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_head
     assert client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers).json()["entries"] == []
 
     tick_response = client.post(
-        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
         headers=auth_headers,
     )
 
@@ -1820,7 +1882,7 @@ def test_background_tick_processes_existing_pending_entries_when_folder_sync_fai
     db_session.commit()
 
     tick_response = client.post(
-        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
         headers=auth_headers,
     )
 
@@ -1888,7 +1950,7 @@ def test_background_tick_clears_all_pending_workloads_for_resynced_journals(
     assert tick_response.status_code == 200
     entries = {entry["group_code"]: entry for entry in tick_response.json()["entries"]}
     assert {entries[code]["workload_status"] for code in ("1-26", "10-26", "11-26")} == {"processed"}
-    assert sum(1 for code in ("1-26", "10-26", "11-26") if entries[code]["trainees_status"] == "processed") == 1
+    assert {entries[code]["trainees_status"] for code in ("1-26", "10-26", "11-26")} == {"processed"}
 
 
 def test_delete_journal_entry_archives_group_trainees_and_resync_restores_them(client, auth_headers, db_session, monkeypatch):

@@ -403,9 +403,13 @@ test("journal monitor starts one combined processing action for trainees and wor
 
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {
   let reprocessUrl: URL | null = null;
+  let backgroundUrl: URL | null = null;
   await loginAndMockJournals(page, {
     onReprocessAll: (url) => {
       reprocessUrl = url;
+    },
+    onBackgroundTick: (url) => {
+      backgroundUrl = url;
     }
   });
 
@@ -416,4 +420,7 @@ test("journal monitor can force full reprocessing for a year", async ({ page }) 
   await expect.poll(() => reprocessUrl?.pathname).toContain("/journal-monitors/1/processing/reprocess-all");
   expect(reprocessUrl?.searchParams.get("year")).toBe("2026");
   await expect(page.getByText("Повну переобробку журналів для 2026 року поставлено в чергу")).toBeVisible();
+  await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
+  expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+  await expect(page.getByRole("button", { name: "Переобробити все" })).toBeDisabled();
 });

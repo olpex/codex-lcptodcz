@@ -1665,39 +1665,43 @@ def process_journal_monitor_background_step(
     *,
     folder_lister=list_drive_child_folders,
     target_year: int | None = None,
+    sync_before: bool = True,
+    workload_limit: int | None = None,
+    trainees_limit: int | None = 1,
 ) -> dict[str, Any]:
     section_id = section.id
     sync_warning: str | None = None
-    try:
-        section = sync_journal_monitor_section(
-            db,
-            section,
-            folder_lister=folder_lister,
-            process_workload=False,
-            process_trainees=False,
-        )
-    except Exception as exc:
-        db.rollback()
-        section = db.get(JournalMonitorSection, section_id)
-        if section is None:
-            raise
-        sync_warning = f"Синхронізацію Drive пропущено: {exc}"
-        section.last_sync_status = "failed"
-        section.last_sync_message = _clip_monitor_message(sync_warning)
-        db.add(section)
-        db.flush()
+    if sync_before:
+        try:
+            section = sync_journal_monitor_section(
+                db,
+                section,
+                folder_lister=folder_lister,
+                process_workload=False,
+                process_trainees=False,
+            )
+        except Exception as exc:
+            db.rollback()
+            section = db.get(JournalMonitorSection, section_id)
+            if section is None:
+                raise
+            sync_warning = f"Синхронізацію Drive пропущено: {exc}"
+            section.last_sync_status = "failed"
+            section.last_sync_message = _clip_monitor_message(sync_warning)
+            db.add(section)
+            db.flush()
     effective_target_year = target_year if target_year is not None else section.workload_auto_year
     workload_result = process_next_journal_workload(
         db,
         section,
-        limit=None,
+        limit=workload_limit,
         target_year=effective_target_year,
         retry_failed=True,
     )
     trainees_result = process_journal_trainees_for_section(
         db,
         section,
-        limit=1,
+        limit=trainees_limit,
         target_year=effective_target_year,
         retry_failed=True,
     )

@@ -289,39 +289,15 @@ def _reprocess_section_all(
     *,
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
-    section_id = section.id
-    sync_warning: str | None = None
     section.workload_auto_enabled = True
     section.workload_auto_year = year
     db.add(section)
     db.flush()
     try:
-        section = sync_journal_monitor_section(
-            db,
-            section,
-            folder_lister=list_drive_child_folders,
-            process_workload=False,
-            process_trainees=False,
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.warning("Drive sync failed before full journal reprocessing for section %s: %s", section_id, exc)
-        section = db.get(JournalMonitorSection, section_id)
-        if not section:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розділ журналів не знайдено") from exc
-        section.workload_auto_enabled = True
-        section.workload_auto_year = year
-        section.last_sync_status = "failed"
-        sync_warning = f"Синхронізацію Google Drive пропущено: {exc}"
-        section.last_sync_message = sync_warning[:500]
-        db.add(section)
-        db.flush()
-
-    try:
         workload_count = requeue_journal_workload_for_year(db, section, year, force=True)
         trainees_count = requeue_journal_trainees_for_year(db, section, year, force=True)
         queue_message = f"Повна переобробка {year}: у черзі педнавантаження {workload_count}, слухачі {trainees_count}"
-        section.last_sync_message = (f"{sync_warning}; {queue_message}" if sync_warning else queue_message)[:500]
+        section.last_sync_message = queue_message[:500]
         db.add(section)
         db.commit()
     except Exception as exc:
@@ -456,6 +432,7 @@ def background_tick_section_processing(
     db: DbSession,
     current_user: CurrentUser,
     year: int | None = Query(default=None, ge=2025, le=2100),
+    sync: bool = Query(default=False),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
     try:
@@ -464,6 +441,9 @@ def background_tick_section_processing(
             section,
             folder_lister=list_drive_child_folders,
             target_year=year,
+            sync_before=sync or not section.entries,
+            workload_limit=3,
+            trainees_limit=3,
         )
         db.commit()
     except Exception as exc:

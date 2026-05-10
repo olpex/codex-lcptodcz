@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { API_URL } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { InlineNotice } from "../components/InlineNotice";
@@ -277,6 +277,7 @@ export function JournalMonitorsPage() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const backgroundStepInFlightRef = useRef(false);
 
   const selectedSection = useMemo(
     () => sections.find((section) => section.id === selectedId) || null,
@@ -376,10 +377,9 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const processSelectedBackgroundStep = async () => {
-    const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId) return;
-    const year = Number(workloadYear);
+  const runBackgroundStep = async (sectionId: number, year: number) => {
+    if (backgroundStepInFlightRef.current) return;
+    backgroundStepInFlightRef.current = true;
     const query = Number.isInteger(year) && year >= 2025 && year <= 2100 ? `?year=${year}` : "";
     try {
       const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/processing/background-tick${query}`, {
@@ -390,7 +390,15 @@ export function JournalMonitorsPage() {
       setErrorText(null);
     } catch (error) {
       setErrorText((error as Error).message);
+    } finally {
+      backgroundStepInFlightRef.current = false;
     }
+  };
+
+  const processSelectedBackgroundStep = async () => {
+    const sectionId = selectedId || selectedSection?.id;
+    if (!sectionId) return;
+    await runBackgroundStep(sectionId, Number(workloadYear));
   };
 
   useEffect(() => {
@@ -407,7 +415,7 @@ export function JournalMonitorsPage() {
   }, [selectedId]);
 
   usePageRefresh(processSelectedBackgroundStep, {
-    enabled: Boolean(selectedId),
+    enabled: Boolean(selectedId && detail?.workload_auto_enabled),
     intervalMs: 30_000,
     refreshOnFocus: false
   });
@@ -504,6 +512,7 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Опрацювання журналів для ${year} року поставлено в чергу: слухачі та години`);
+      void runBackgroundStep(selectedId, year);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -527,6 +536,7 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Повну переобробку журналів для ${year} року поставлено в чергу`);
+      void runBackgroundStep(selectedId, year);
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -800,7 +810,7 @@ export function JournalMonitorsPage() {
               type="button"
               className="rounded-lg border border-violet-500 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
               onClick={reprocessAllJournals}
-              disabled={!selectedId || isProcessingJournals}
+              disabled={!selectedId || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             >
               Переобробити все
             </button>
