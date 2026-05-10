@@ -299,6 +299,74 @@ def _source_name_key(value: str | None, group_code: str | None = None) -> str:
     return re.sub(r"[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ]+", "", text).casefold()
 
 
+_SOURCE_NAME_STOP_WORDS = {
+    "в",
+    "вп",
+    "за",
+    "з",
+    "і",
+    "й",
+    "кат",
+    "категорія",
+    "категорії",
+    "під",
+    "практика",
+    "практичні",
+    "практичний",
+    "роботи",
+    "робота",
+    "теорія",
+    "час",
+    "виробн",
+    "виробниче",
+    "виробничий",
+}
+
+
+def _source_name_tokens(value: str | None, group_code: str | None = None) -> set[str]:
+    text = _workbook_display_name(value)
+    if group_code:
+        escaped = re.escape(display_group_code(group_code) or group_code).replace("\\-", r"[-–—]")
+        text = re.sub(rf"^\s*{escaped}\s*[-–—:]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*журнал\s*[-–—:]?\s*", "", text, flags=re.IGNORECASE)
+    tokens = {
+        token.casefold()
+        for token in re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ]{2,}", text)
+    }
+    return {token for token in tokens if token not in _SOURCE_NAME_STOP_WORDS}
+
+
+def _source_name_repeats_journal(source_name: str, entry: JournalMonitorEntry, journal_key: str) -> bool:
+    source_key = _source_name_key(source_name, entry.group_code)
+    if not source_key:
+        return True
+    if journal_key and (source_key.startswith(journal_key) or journal_key.startswith(source_key)):
+        return True
+
+    source_tokens = _source_name_tokens(source_name, entry.group_code)
+    journal_tokens = _source_name_tokens(entry.journal_name, entry.group_code)
+    if not source_tokens or not journal_tokens:
+        return False
+
+    shared_tokens = source_tokens & journal_tokens
+    if source_tokens.issubset(journal_tokens) or journal_tokens.issubset(source_tokens):
+        return True
+    if len(source_tokens) <= 3 and len(shared_tokens) >= max(1, len(source_tokens) - 1):
+        return True
+    if len(shared_tokens) >= 3:
+        return True
+    prefix_matches = sum(
+        1
+        for source_token in source_tokens
+        if any(source_token.startswith(journal_token[:5]) or journal_token.startswith(source_token[:5]) for journal_token in journal_tokens)
+    )
+    if len(source_tokens) <= 3 and prefix_matches >= max(1, len(source_tokens) - 1):
+        return True
+    if prefix_matches >= 2:
+        return True
+    return False
+
+
 def _visible_source_names(entry: JournalMonitorEntry, source_names: list[str] | None) -> list[str]:
     journal_key = _source_name_key(entry.journal_name, entry.group_code)
     visible: list[str] = []
@@ -308,11 +376,7 @@ def _visible_source_names(entry: JournalMonitorEntry, source_names: list[str] | 
         source_key = _source_name_key(display_name, entry.group_code)
         if not display_name or not source_key or source_key in seen:
             continue
-        if journal_key and (
-            source_key.startswith(journal_key)
-            or journal_key.startswith(source_key)
-            or len(set(re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ]{4,}", source_key)) & set(re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ]{4,}", journal_key))) >= 3
-        ):
+        if journal_key and _source_name_repeats_journal(display_name, entry, journal_key):
             continue
         visible.append(display_name)
         seen.add(source_key)

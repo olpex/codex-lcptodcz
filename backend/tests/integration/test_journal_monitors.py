@@ -306,6 +306,39 @@ def test_journal_response_hides_redundant_workbook_names_but_keeps_distinct_file
     assert payload["workload_source_names"] == ["Теорія"]
 
 
+def test_journal_response_hides_source_names_that_repeat_journal_title_variants():
+    tractor_entry = journal_monitor.JournalMonitorEntry(
+        id=1,
+        section_id=1,
+        branch_id="main",
+        drive_file_id="drive-18p-26",
+        journal_name="18п-26 Трактористи кат.А2",
+        group_code="18п-26",
+        workload_source_names=[
+            "18п-26 Трактори A2",
+            "18п-26 Трактори A2 виробн",
+            "Практичні роботи",
+        ],
+    )
+    long_title_entry = journal_monitor.JournalMonitorEntry(
+        id=2,
+        section_id=1,
+        branch_id="main",
+        drive_file_id="drive-2-26",
+        journal_name="2-26 Соціально-психологічна адаптація цивільного населення під час роботи в умовах воєнного стану",
+        group_code="2-26",
+        workload_source_names=[
+            '2-26 "Соціально-психологічна адаптація цивільного населення в умовах воєнного стану"',
+        ],
+    )
+
+    tractor_payload = journal_monitor.entry_to_response_payload(tractor_entry)
+    long_title_payload = journal_monitor.entry_to_response_payload(long_title_entry)
+
+    assert tractor_payload["workload_source_names"] == ["Практичні роботи"]
+    assert long_title_payload["workload_source_names"] == []
+
+
 def test_background_tick_reprocesses_processed_trainees_when_import_count_is_too_low(
     client,
     auth_headers,

@@ -46,9 +46,9 @@ const section = {
       schedule_lessons: 8,
       schedule_hours: 16,
       trainee_count: 0,
-      workload_status: "processed",
-      workload_hours: 16,
-      workload_source_names: ["Педнавантаження"],
+      workload_status: "pending",
+      workload_hours: 0,
+      workload_source_names: [],
       matched_group_id: 100
     },
     {
@@ -64,9 +64,9 @@ const section = {
       schedule_lessons: 0,
       schedule_hours: 0,
       trainee_count: 24,
-      workload_status: "pending",
-      workload_hours: 0,
-      workload_source_names: [],
+      workload_status: "processed",
+      workload_hours: 30,
+      workload_source_names: ["Педнавантаження"],
       matched_group_id: 2
     },
     {
@@ -210,6 +210,8 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByRole("heading", { name: "Не опрацьовано" })).toBeVisible();
   await page.getByRole("button", { name: /Список журналів/ }).click();
   await expect(page.getByRole("table").getByText("Не опрацьовано", { exact: true })).toBeVisible();
+  await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "2-26" }).getByText("Педнавантаження і слухачі")).toBeVisible();
+  await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "10п-26" }).getByText("Опрацьовано")).toBeVisible();
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {
@@ -304,7 +306,7 @@ test("journal monitor status filter can show workload-only and missing workload 
   await expect.poll(visibleGroupCodes).toEqual(["1-26"]);
 
   await page.getByLabel("Фільтр за статусом журналів").selectOption("without_workload");
-  await expect.poll(visibleGroupCodes).toEqual(["2-26"]);
+  await expect.poll(visibleGroupCodes).toEqual(["100-26"]);
 });
 
 test("journal monitor export uses current filters", async ({ page }) => {

@@ -12,7 +12,7 @@ import type { JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, Journa
 const EXPORT_FORMATS = ["xlsx", "pdf", "docx", "csv"] as const;
 
 const STATUS_LABELS: Record<string, string> = {
-  complete: "Розклад і слухачі",
+  complete: "Опрацьовано",
   schedule_only: "Тільки розклад",
   trainees_only: "Тільки слухачі",
   not_processed: "Не опрацьовано",
@@ -30,7 +30,8 @@ const STATUS_CLASSES: Record<string, string> = {
   schedule_only: "bg-sky-100 text-sky-800",
   trainees_only: "bg-amber-100 text-amber-800",
   not_processed: "bg-rose-100 text-rose-800",
-  unknown_code: "bg-slate-100 text-slate-700"
+  unknown_code: "bg-slate-100 text-slate-700",
+  workload_and_trainees: "bg-violet-800 text-violet-100"
 };
 
 const WORKLOAD_STATUS_LABELS: Record<string, string> = {
@@ -163,6 +164,18 @@ function matchesStatusFilter(row: JournalMonitorEntry, filter: string): boolean 
   if (filter === "with_workload") return hasProcessedWorkload(row);
   if (filter === "without_workload") return !hasProcessedWorkload(row);
   return row.processing_status === filter;
+}
+
+function getDisplayStatus(row: JournalMonitorEntry): string {
+  if (row.has_schedule && row.has_trainees) return "complete";
+  if (hasProcessedWorkload(row) && row.has_trainees) return "workload_and_trainees";
+  return row.processing_status;
+}
+
+function formatDisplayStatus(row: JournalMonitorEntry): string {
+  const status = getDisplayStatus(row);
+  if (status === "workload_and_trainees") return "Педнавантаження і слухачі";
+  return formatStatus(status);
 }
 
 function getGroupSortParts(code: string | null): { number: number; suffix: string; year: number; raw: string } {
@@ -949,8 +962,8 @@ export function JournalMonitorsPage() {
                           )}
                         </td>
                         <td className="px-3 py-2">
-                          <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[row.processing_status] || STATUS_CLASSES.unknown_code)}>
-                            {formatStatus(row.processing_status)}
+                          <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[getDisplayStatus(row)] || STATUS_CLASSES.unknown_code)}>
+                            {formatDisplayStatus(row)}
                           </span>
                         </td>
                         <td className="px-3 py-2">
