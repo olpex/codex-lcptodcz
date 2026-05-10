@@ -1518,6 +1518,7 @@ def filter_journal_monitor_entries(
     *,
     query: str | None = None,
     status: str | None = None,
+    workload: str | None = None,
     has_schedule: bool | None = None,
     has_trainees: bool | None = None,
 ) -> list[JournalMonitorEntry]:
@@ -1532,6 +1533,16 @@ def filter_journal_monitor_entries(
         ]
     if status:
         filtered = [entry for entry in filtered if entry.processing_status == status]
+    if workload == "workload_only":
+        filtered = [
+            entry
+            for entry in filtered
+            if entry.workload_status == "processed" and not entry.has_schedule and not entry.has_trainees
+        ]
+    elif workload == "with_workload":
+        filtered = [entry for entry in filtered if entry.workload_status == "processed"]
+    elif workload == "without_workload":
+        filtered = [entry for entry in filtered if entry.workload_status != "processed"]
     if has_schedule is not None:
         filtered = [entry for entry in filtered if entry.has_schedule is has_schedule]
     if has_trainees is not None:
@@ -1545,6 +1556,7 @@ def save_journal_monitor_export(
     *,
     query: str | None = None,
     status: str | None = None,
+    workload: str | None = None,
     has_schedule: bool | None = None,
     has_trainees: bool | None = None,
 ) -> tuple[str, str, str]:
@@ -1555,6 +1567,7 @@ def save_journal_monitor_export(
         list(section.entries),
         query=query,
         status=status,
+        workload=workload,
         has_schedule=has_schedule,
         has_trainees=has_trainees,
     )

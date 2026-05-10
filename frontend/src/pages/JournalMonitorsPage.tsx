@@ -16,8 +16,14 @@ const STATUS_LABELS: Record<string, string> = {
   schedule_only: "Тільки розклад",
   trainees_only: "Тільки слухачі",
   not_processed: "Не опрацьовано",
-  unknown_code: "Без номера групи"
+  unknown_code: "Без номера групи",
+  workload_only: "Тільки педнавантаження",
+  with_workload: "Є педнавантаження",
+  without_workload: "Немає педнавантаження"
 };
+
+const PROCESSING_STATUS_FILTERS = new Set(["complete", "schedule_only", "trainees_only", "not_processed", "unknown_code"]);
+const WORKLOAD_STATUS_FILTERS = new Set(["workload_only", "with_workload", "without_workload"]);
 
 const STATUS_CLASSES: Record<string, string> = {
   complete: "bg-emerald-100 text-emerald-800",
@@ -147,6 +153,18 @@ function normalizeSearchValue(value: string | null | undefined): string {
   return (value || "").toLocaleLowerCase("uk-UA").trim();
 }
 
+function hasProcessedWorkload(row: JournalMonitorEntry): boolean {
+  return row.workload_status === "processed";
+}
+
+function matchesStatusFilter(row: JournalMonitorEntry, filter: string): boolean {
+  if (!filter) return true;
+  if (filter === "workload_only") return hasProcessedWorkload(row) && !row.has_schedule && !row.has_trainees;
+  if (filter === "with_workload") return hasProcessedWorkload(row);
+  if (filter === "without_workload") return !hasProcessedWorkload(row);
+  return row.processing_status === filter;
+}
+
 function getGroupSortParts(code: string | null): { number: number; suffix: string; year: number; raw: string } {
   const raw = code || "";
   const match = raw.match(/^\s*(\d+)\s*([^\d\s-]*)\s*-\s*(\d+)/i);
@@ -260,9 +278,7 @@ export function JournalMonitorsPage() {
           return groupCode.includes(query) || journalName.includes(query);
         })
       : rows;
-    const statusFiltered = statusFilter
-      ? filtered.filter((row) => row.processing_status === statusFilter)
-      : filtered;
+    const statusFiltered = filtered.filter((row) => matchesStatusFilter(row, statusFilter));
     const scheduleFiltered = scheduleFilter
       ? statusFiltered.filter((row) => row.has_schedule === (scheduleFilter === "true"))
       : statusFiltered;
@@ -435,7 +451,8 @@ export function JournalMonitorsPage() {
     try {
       const params = new URLSearchParams({ format });
       if (journalSearch.trim()) params.set("q", journalSearch.trim());
-      if (statusFilter) params.set("status", statusFilter);
+      if (PROCESSING_STATUS_FILTERS.has(statusFilter)) params.set("status", statusFilter);
+      if (WORKLOAD_STATUS_FILTERS.has(statusFilter)) params.set("workload", statusFilter);
       if (scheduleFilter) params.set("has_schedule", scheduleFilter);
       if (traineesFilter) params.set("has_trainees", traineesFilter);
       const response = await fetch(`${API_URL}/journal-monitors/${selectedId}/export?${params.toString()}`, {
@@ -858,6 +875,9 @@ export function JournalMonitorsPage() {
                       <option value="trainees_only">Тільки слухачі</option>
                       <option value="not_processed">Не опрацьовано</option>
                       <option value="unknown_code">Без номера групи</option>
+                      <option value="workload_only">Тільки педнавантаження</option>
+                      <option value="with_workload">Є педнавантаження</option>
+                      <option value="without_workload">Немає педнавантаження</option>
                     </select>
                   </label>
                   <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">

@@ -28,6 +28,9 @@ const section = {
       schedule_lessons: 0,
       schedule_hours: 0,
       trainee_count: 0,
+      workload_status: "processed",
+      workload_hours: 12,
+      workload_source_names: ["Педнавантаження"],
       matched_group_id: null
     },
     {
@@ -43,6 +46,9 @@ const section = {
       schedule_lessons: 8,
       schedule_hours: 16,
       trainee_count: 0,
+      workload_status: "processed",
+      workload_hours: 16,
+      workload_source_names: ["Педнавантаження"],
       matched_group_id: 100
     },
     {
@@ -58,6 +64,9 @@ const section = {
       schedule_lessons: 0,
       schedule_hours: 0,
       trainee_count: 24,
+      workload_status: "pending",
+      workload_hours: 0,
+      workload_source_names: [],
       matched_group_id: 2
     },
     {
@@ -73,6 +82,9 @@ const section = {
       schedule_lessons: 12,
       schedule_hours: 24,
       trainee_count: 22,
+      workload_status: "processed",
+      workload_hours: 24,
+      workload_source_names: ["Педнавантаження"],
       matched_group_id: 10
     }
   ]
@@ -249,7 +261,7 @@ test("journal monitor entries can be searched and sorted", async ({ page }) => {
   const visibleGroupCodes = () =>
     page.locator("#journal-monitor-entries tbody tr").evaluateAll((rows) =>
       rows
-        .map((row) => row.querySelector("td")?.textContent?.trim() || "")
+        .map((row) => row.querySelector("td:nth-child(2)")?.textContent?.trim() || "")
         .filter((value) => value && value !== "Даних ще немає. Натисніть «Оновити» після створення розділу.")
     );
 
@@ -275,6 +287,26 @@ test("journal monitor entries can be searched and sorted", async ({ page }) => {
   await expect.poll(visibleGroupCodes).toEqual(["100-26"]);
 });
 
+test("journal monitor status filter can show workload-only and missing workload journals", async ({ page }) => {
+  await loginAndMockJournals(page);
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+
+  const visibleGroupCodes = () =>
+    page.locator("#journal-monitor-entries tbody tr").evaluateAll((rows) =>
+      rows
+        .map((row) => row.querySelector("td:nth-child(2)")?.textContent?.trim() || "")
+        .filter((value) => value && value !== "Даних ще немає. Натисніть «Оновити» після створення розділу.")
+    );
+
+  await page.getByLabel("Фільтр за статусом журналів").selectOption("workload_only");
+  await expect.poll(visibleGroupCodes).toEqual(["1-26"]);
+
+  await page.getByLabel("Фільтр за статусом журналів").selectOption("without_workload");
+  await expect.poll(visibleGroupCodes).toEqual(["2-26"]);
+});
+
 test("journal monitor export uses current filters", async ({ page }) => {
   let exportUrl: URL | null = null;
   await loginAndMockJournals(page, {
@@ -296,6 +328,15 @@ test("journal monitor export uses current filters", async ({ page }) => {
   expect(exportUrl?.searchParams.get("status")).toBe("trainees_only");
   expect(exportUrl?.searchParams.get("has_schedule")).toBe("false");
   expect(exportUrl?.searchParams.get("has_trainees")).toBe("true");
+
+  await page.getByPlaceholder("Пошук за номером або назвою журналу").fill("");
+  await page.getByLabel("Фільтр за статусом журналів").selectOption("workload_only");
+  await page.getByLabel("Фільтр за розкладом журналів").selectOption("");
+  await page.getByLabel("Фільтр за слухачами журналів").selectOption("");
+  await page.getByRole("button", { name: "csv" }).click();
+
+  await expect.poll(() => exportUrl?.searchParams.get("workload")).toBe("workload_only");
+  expect(exportUrl?.searchParams.get("status")).toBeNull();
 });
 
 test("journal monitor starts one combined processing action for trainees and workload", async ({ page }) => {

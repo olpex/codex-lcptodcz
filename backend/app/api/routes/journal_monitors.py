@@ -472,6 +472,7 @@ def export_section(
         alias="status",
         pattern="^(complete|schedule_only|trainees_only|not_processed|unknown_code)$",
     ),
+    workload: str | None = Query(default=None, pattern="^(workload_only|with_workload|without_workload)$"),
     has_schedule: bool | None = Query(default=None),
     has_trainees: bool | None = Query(default=None),
 ) -> FileResponse:
@@ -483,6 +484,7 @@ def export_section(
         format,
         query=q,
         status=processing_status,
+        workload=workload,
         has_schedule=has_schedule,
         has_trainees=has_trainees,
     )

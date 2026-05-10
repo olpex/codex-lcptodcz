@@ -1311,6 +1311,74 @@ def test_journal_monitor_export_respects_filters(client, auth_headers, db_sessio
     assert "999-25" not in export_response.text
 
 
+def test_journal_monitor_export_filters_by_workload_presence(client, auth_headers, db_session, monkeypatch):
+    scheduled_group = Group(branch_id="main", code="167-25", name="Трудові відносини", status=GroupStatus.ACTIVE)
+    db_session.add(scheduled_group)
+    db_session.flush()
+    _seed_schedule(db_session, scheduled_group, "167-workload-filter")
+    db_session.add(Trainee(branch_id="main", first_name="Олена", last_name="Слухачі", status="active", group_code="162-25"))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-167",
+                "name": "167-25 Є розклад і педнавантаження",
+                "url": "https://drive.google.com/drive/folders/drive-167",
+                "modified_time": None,
+            },
+            {
+                "id": "drive-162",
+                "name": "162-25 Немає педнавантаження",
+                "url": "https://drive.google.com/drive/folders/drive-162",
+                "modified_time": None,
+            },
+            {
+                "id": "drive-999",
+                "name": "999-25 Тільки педнавантаження",
+                "url": "https://drive.google.com/drive/folders/drive-999",
+                "modified_time": None,
+            },
+        ],
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    for entry in db_session.query(journal_monitor.JournalMonitorEntry).filter(
+        journal_monitor.JournalMonitorEntry.section_id == section_id,
+        journal_monitor.JournalMonitorEntry.group_code.in_(["167-25", "999-25"]),
+    ):
+        entry.workload_status = "processed"
+        entry.workload_hours = 10
+        db_session.add(entry)
+    db_session.commit()
+
+    workload_only_response = client.get(
+        f"/api/v1/journal-monitors/{section_id}/export?format=csv&workload=workload_only",
+        headers=auth_headers,
+    )
+    without_workload_response = client.get(
+        f"/api/v1/journal-monitors/{section_id}/export?format=csv&workload=without_workload",
+        headers=auth_headers,
+    )
+
+    assert workload_only_response.status_code == 200
+    assert "999-25" in workload_only_response.text
+    assert "167-25" not in workload_only_response.text
+    assert "162-25" not in workload_only_response.text
+    assert without_workload_response.status_code == 200
+    assert "162-25" in without_workload_response.text
+    assert "167-25" not in without_workload_response.text
+    assert "999-25" not in without_workload_response.text
+
+
 def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "")
     monkeypatch.setattr(
