@@ -293,6 +293,45 @@ def test_dashboard_kpi_excludes_hidden_groups_from_active_count(client, auth_hea
     assert response.json()["active_groups"] == 1
 
 
+def test_dashboard_kpi_uses_current_year_journal_count_when_section_exists(client, auth_headers, db_session):
+    groups = [
+        Group(branch_id="main", code=f"KPI-JOURNAL-{index}", name=f"Група {index}", status=GroupStatus.ACTIVE)
+        for index in range(3)
+    ]
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([*groups, section])
+    db_session.flush()
+    db_session.add_all(
+        [
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="journal-1",
+                journal_name="1-26 Перша група",
+                group_code="1-26",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="journal-2",
+                journal_name="2-26 Друга група",
+                group_code="2-26",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["active_groups"] == 2
+
+
 def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_headers, db_session):
     for index in range(24):
         db_session.add(

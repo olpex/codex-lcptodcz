@@ -13,6 +13,7 @@ from app.models import (
     GroupStatus,
     ImportJob,
     JournalMonitorEntry,
+    JournalMonitorSection,
     JobStatus,
     OCRResult,
     Performance,
@@ -62,19 +63,51 @@ def _student_plan_response(db: DbSession, branch_id: str, year: int) -> StudentP
     )
 
 
-@router.get("/kpi", response_model=DashboardKPIResponse)
-def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -> DashboardKPIResponse:
-    plan_year = year or _current_plan_year()
-    student_plan = _student_plan_response(db, current_user.branch_id, plan_year)
-    active_groups = (
+def _default_journal_section_for_year(db: DbSession, branch_id: str, year: int) -> JournalMonitorSection | None:
+    sections = (
+        db.query(JournalMonitorSection)
+        .filter(
+            JournalMonitorSection.branch_id == branch_id,
+            JournalMonitorSection.is_active.is_(True),
+        )
+        .order_by(JournalMonitorSection.created_at.desc())
+        .all()
+    )
+    exact_name = f"журнали {year}"
+    for section in sections:
+        if section.name.strip().casefold() == exact_name:
+            return section
+    year_text = str(year)
+    for section in sections:
+        if year_text in section.name:
+            return section
+    return None
+
+
+def _active_groups_count(db: DbSession, branch_id: str, year: int) -> int:
+    journal_section = _default_journal_section_for_year(db, branch_id, year)
+    if journal_section:
+        return (
+            db.query(JournalMonitorEntry)
+            .filter(JournalMonitorEntry.section_id == journal_section.id)
+            .count()
+        )
+    return (
         db.query(Group)
         .filter(
-            Group.branch_id == current_user.branch_id,
+            Group.branch_id == branch_id,
             Group.status == GroupStatus.ACTIVE,
             Group.hidden_from_registry.is_(False),
         )
         .count()
     )
+
+
+@router.get("/kpi", response_model=DashboardKPIResponse)
+def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -> DashboardKPIResponse:
+    plan_year = year or _current_plan_year()
+    student_plan = _student_plan_response(db, current_user.branch_id, plan_year)
+    active_groups = _active_groups_count(db, current_user.branch_id, plan_year)
     active_trainees = (
         db.query(Trainee)
         .filter(Trainee.branch_id == current_user.branch_id, Trainee.is_deleted.is_(False))
