@@ -124,7 +124,8 @@ export function WorkloadPage() {
   }, []);
 
   usePageRefresh(() => load(), {
-    enabled: savingTeacherId === null && !isDeleting && !isExporting
+    enabled: savingTeacherId === null && !isDeleting && !isExporting,
+    intervalMs: 30_000
   });
 
   const seriesByKey = useMemo(

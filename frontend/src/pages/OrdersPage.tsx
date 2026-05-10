@@ -82,7 +82,8 @@ export function OrdersPage() {
   }, []);
 
   usePageRefresh(load, {
-    enabled: !editId && !isCreating && !isSavingEdit && !isDeleting
+    enabled: !editId && !isCreating && !isSavingEdit && !isDeleting,
+    intervalMs: 30_000
   });
 
   const createOrder = async (event: FormEvent) => {

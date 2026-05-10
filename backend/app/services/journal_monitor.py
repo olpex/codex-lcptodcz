@@ -83,10 +83,16 @@ def ensure_groups_for_journal_entries(db: Session, section: JournalMonitorSectio
         cache_key = normalize_group_code(group_code)
         existing_group = existing.get(cache_key)
         if existing_group:
+            next_name = _journal_group_name(entry.journal_name, group_code)
+            next_capacity = max(int(entry.trainee_count or 0), existing_group.capacity or 30, 30)
+            if existing_group.name != next_name:
+                existing_group.name = next_name
+            if existing_group.capacity < next_capacity:
+                existing_group.capacity = next_capacity
             if existing_group.hidden_from_registry:
                 existing_group.hidden_from_registry = False
-                db.add(existing_group)
                 created += 1
+            db.add(existing_group)
             continue
         group = Group(
             branch_id=section.branch_id,
@@ -179,6 +185,43 @@ def archive_trainees_for_deleted_journal_entries(db: Session, entries: list[Jour
     return archived
 
 
+def _requeue_entry_after_drive_change(db: Session, entry: JournalMonitorEntry) -> None:
+    if entry.workload_status != "pending":
+        entry.workload_status = "pending"
+        entry.workload_message = "Поставлено в чергу після змін у Google Drive"
+        entry.workload_processed_at = None
+        entry.workload_hours = 0.0
+        entry.workload_source_names = None
+        db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
+            synchronize_session=False
+        )
+    if entry.trainees_status != "pending":
+        entry.trainees_status = "pending"
+        entry.trainees_message = "Поставлено в чергу після змін у Google Drive"
+        entry.trainees_processed_at = None
+        entry.trainees_source_names = None
+    db.add(entry)
+
+
+def _journal_workbooks_modified_after(
+    entry: JournalMonitorEntry,
+    processed_at: datetime | None,
+    service_account_json: str | None,
+) -> bool:
+    processed_at = _as_aware_utc(processed_at)
+    if processed_at is None:
+        return False
+    try:
+        files = list_drive_journal_workbook_files(entry.drive_file_id, service_account_json=service_account_json)
+    except Exception:
+        return False
+    for workbook_file in files:
+        modified_at = _as_aware_utc(_parse_datetime(str(workbook_file.get("modifiedTime") or "")))
+        if modified_at and modified_at > processed_at:
+            return True
+    return False
+
+
 def extract_group_code(folder_name: str) -> str | None:
     match = GROUP_CODE_PATTERN.search(folder_name or "")
     if not match:
@@ -213,6 +256,14 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _norm(text: Any) -> str:
@@ -430,6 +481,82 @@ def _clear_repeated_contract_numbers(rows: list[dict[str, Any]]) -> list[dict[st
             cleaned["Номер в журналі З-СНН"] = None
         cleaned_rows.append(cleaned)
     return cleaned_rows
+
+
+def _trainee_date_key(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if hasattr(value, "isoformat") and not isinstance(value, str):
+        return value.isoformat()
+    text = _norm(value)
+    if not text:
+        return ""
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return text.casefold()
+
+
+def _trainee_identity(last_name: Any, first_name: Any, birth_date: Any) -> tuple[str, str, str]:
+    return (_norm(last_name).casefold(), _norm(first_name).casefold(), _trainee_date_key(birth_date))
+
+
+def _archive_missing_group_trainees(db: Session, branch_id: str, group_code: str | None, rows: list[dict[str, Any]]) -> int:
+    display_code = display_group_code(group_code)
+    if not display_code:
+        return 0
+    incoming = {
+        _trainee_identity(
+            row.get("Прізвище"),
+            " ".join(part for part in [row.get("Ім'я"), row.get("По батькові")] if _norm(part)),
+            row.get("Дата народження"),
+        )
+        for row in rows
+    }
+    incoming_loose = [
+        {
+            "last_name": _norm(row.get("Прізвище")).casefold(),
+            "first_name": " ".join(part for part in [row.get("Ім'я"), row.get("По батькові")] if _norm(part)).casefold(),
+            "birth_date": _trainee_date_key(row.get("Дата народження")),
+        }
+        for row in rows
+    ]
+    if not incoming:
+        return 0
+    now = datetime.now(timezone.utc)
+    archived = 0
+    trainees = (
+        db.query(Trainee)
+        .filter(
+            Trainee.branch_id == branch_id,
+            Trainee.group_code == display_code,
+            Trainee.is_deleted.is_(False),
+        )
+        .all()
+    )
+    for trainee in trainees:
+        identity = _trainee_identity(trainee.last_name, trainee.first_name, trainee.birth_date)
+        if identity in incoming:
+            continue
+        trainee_first = _norm(trainee.first_name).casefold()
+        trainee_birth = _trainee_date_key(trainee.birth_date)
+        matches_loose = any(
+            item["last_name"] == _norm(trainee.last_name).casefold()
+            and item["first_name"]
+            and (item["first_name"].startswith(trainee_first) or trainee_first.startswith(item["first_name"].split(" ")[0]))
+            and (not item["birth_date"] or not trainee_birth or item["birth_date"] == trainee_birth)
+            for item in incoming_loose
+        )
+        if matches_loose:
+            continue
+        trainee.is_deleted = True
+        trainee.deleted_at = now
+        trainee.group_code = None
+        db.add(trainee)
+        archived += 1
+    return archived
 
 
 def _expected_trainee_count_from_message(message: str | None) -> int | None:
@@ -1003,10 +1130,12 @@ def process_journal_trainees_entry(
             "default_group_name": entry.journal_name,
         },
         entry.branch_id,
-        update_existing_mode="missing_only",
+        update_existing_mode="overwrite",
         commit=False,
     )
+    archived_missing = _archive_missing_group_trainees(db, entry.branch_id, entry.group_code, combined_data)
     changed_count = int(import_result.get("inserted") or 0) + int(import_result.get("updated_existing") or 0)
+    changed_count += archived_missing
     total_seen = len(combined_data)
     entry.trainees_status = "processed"
     entry.trainees_message = f"Додано/оновлено слухачів із журналу: {total_seen}"
@@ -1055,7 +1184,10 @@ def process_next_journal_workload(
         if limit is not None and handled >= limit:
             break
         if entry.workload_status in {"processed", "no_data", "skipped_year"}:
-            continue
+            if _journal_workbooks_modified_after(entry, entry.workload_processed_at, section_service_account_json):
+                _requeue_entry_after_drive_change(db, entry)
+            else:
+                continue
         if entry.workload_status == "failed" and not retry_failed:
             continue
         year = _infer_journal_year(entry, section)
@@ -1134,9 +1266,15 @@ def process_journal_trainees_for_section(
         if not entry.group_code:
             continue
         if entry.trainees_status == "processed" and not _entry_needs_trainee_reimport(entry):
-            continue
+            if _journal_workbooks_modified_after(entry, entry.trainees_processed_at, section_service_account_json):
+                _requeue_entry_after_drive_change(db, entry)
+            else:
+                continue
         if entry.trainees_status == "no_data":
-            continue
+            if _journal_workbooks_modified_after(entry, entry.trainees_processed_at, section_service_account_json):
+                _requeue_entry_after_drive_change(db, entry)
+            else:
+                continue
         if entry.trainees_status == "failed" and not retry_failed:
             continue
         entry_year = _infer_journal_year(entry, section)
@@ -1446,6 +1584,7 @@ def sync_journal_monitor_section(
             continue
         seen_drive_ids.add(drive_id)
         group_code = extract_group_code(name)
+        next_modified_at = _parse_datetime(folder.get("modified_time"))
 
         entry = entries_by_drive_id.get(drive_id)
         if not entry:
@@ -1456,13 +1595,25 @@ def sync_journal_monitor_section(
                 journal_name=name,
             )
             db.add(entry)
+        old_group_code = display_group_code(entry.group_code)
+        old_journal_name = entry.journal_name
+        old_modified_at = _as_aware_utc(entry.drive_modified_at)
+        next_group_code = display_group_code(group_code)
+        renamed_group = old_group_code and next_group_code and normalize_group_code(old_group_code) != normalize_group_code(next_group_code)
+        modified_after_processing = bool(old_modified_at and next_modified_at and _as_aware_utc(next_modified_at) > old_modified_at)
+
+        if renamed_group:
+            hide_groups_for_deleted_journal_entries(db, [entry])
+            archive_trainees_for_deleted_journal_entries(db, [entry])
 
         entry.drive_url = str(folder.get("url") or f"https://drive.google.com/drive/folders/{drive_id}")
         entry.journal_name = name
         entry.group_code = group_code
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-        entry.drive_modified_at = _parse_datetime(folder.get("modified_time"))
+        entry.drive_modified_at = next_modified_at
         entry.last_seen_at = now
+        if old_journal_name != name or renamed_group or modified_after_processing:
+            _requeue_entry_after_drive_change(db, entry)
 
     db.flush()
     db.refresh(section)
@@ -1472,9 +1623,12 @@ def sync_journal_monitor_section(
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
 
-    for entry in section.entries:
-        if entry.drive_file_id not in seen_drive_ids:
-            db.delete(entry)
+    removed_entries = [entry for entry in section.entries if entry.drive_file_id not in seen_drive_ids]
+    if removed_entries:
+        hide_groups_for_deleted_journal_entries(db, removed_entries)
+        archive_trainees_for_deleted_journal_entries(db, removed_entries)
+    for entry in removed_entries:
+        db.delete(entry)
 
     section.last_synced_at = now
     section.last_sync_status = "success"

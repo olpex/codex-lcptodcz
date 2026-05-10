@@ -96,7 +96,8 @@ export function PerformancePage() {
   }, []);
 
   usePageRefresh(load, {
-    enabled: !editingId && !isSubmitting && !isDeleting
+    enabled: !editingId && !isSubmitting && !isDeleting,
+    intervalMs: 30_000
   });
 
   const submit = async (event: FormEvent) => {

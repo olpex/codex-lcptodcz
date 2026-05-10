@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 test("group detail shows trainees imported from Excel", async ({ page }) => {
+  let workloadRequests = 0;
+  let traineeRequests = 0;
+
   await page.addInitScript(() => {
     localStorage.setItem(
       "suptc_auth",
@@ -43,6 +46,7 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
     }
 
     if (path.endsWith("/trainees") && method === "GET") {
+      traineeRequests += 1;
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -133,6 +137,7 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
     }
 
     if (path.endsWith("/teacher-workload") && method === "GET") {
+      workloadRequests += 1;
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -199,4 +204,8 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
   await expect(detail.getByText("Іваненко Іван Іванович")).toBeVisible();
   await expect(detail.getByText("180-25/001")).toBeVisible();
   await expect(detail.getByText("+380501112233")).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+  await expect.poll(() => traineeRequests).toBeGreaterThan(1);
+  await expect.poll(() => workloadRequests).toBeGreaterThan(1);
 });

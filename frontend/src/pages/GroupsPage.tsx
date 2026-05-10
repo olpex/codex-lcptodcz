@@ -443,7 +443,7 @@ export function GroupsPage() {
     loadGroupAudit(selectedDetailGroup.id);
   }, [selectedDetailGroup?.id]);
 
-  usePageRefresh(loadGroups);
+  usePageRefresh(loadGroups, { intervalMs: 30_000 });
 
   const validatePeriod = () => {
     if (dateFrom && dateTo && dateTo < dateFrom) {

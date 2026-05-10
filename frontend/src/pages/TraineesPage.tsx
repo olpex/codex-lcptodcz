@@ -338,7 +338,8 @@ export function TraineesPage() {
   }, [showArchived, problemFilter]);
 
   usePageRefresh(() => fetchTrainees(search), {
-    enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating
+    enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating,
+    intervalMs: 30_000
   });
 
   const createTrainee = async (event: FormEvent) => {

@@ -1811,6 +1811,231 @@ def test_delete_journal_entry_archives_group_trainees_and_resync_restores_them(c
     assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 2
 
 
+def test_drive_sync_cleanup_hides_group_and_archives_trainees_when_folder_removed(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    group = Group(branch_id="main", code="46-26", name="46-26 Журнал", status=GroupStatus.ACTIVE)
+    trainee = Trainee(branch_id="main", first_name="Іван Іванович", last_name="Петренко", status="active", group_code="46-26")
+    db_session.add_all([section, group, trainee])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+        trainees_status="processed",
+        workload_status="processed",
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    db_session.refresh(group)
+    db_session.refresh(trainee)
+    assert group.hidden_from_registry is True
+    assert trainee.is_deleted is True
+    assert trainee.group_code is None
+    assert db_session.query(journal_monitor.JournalMonitorEntry).count() == 0
+
+
+def test_drive_sync_renames_group_and_requeues_processed_entry_when_folder_changes(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    group = Group(branch_id="main", code="46-26", name="Стара назва", status=GroupStatus.ACTIVE)
+    db_session.add_all([section, group])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Стара назва",
+        group_code="46-26",
+        trainees_status="processed",
+        workload_status="processed",
+        workload_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        trainees_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        drive_modified_at=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Нова назва",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-05-02T10:00:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    db_session.refresh(group)
+    db_session.refresh(entry)
+    assert group.name == "Нова назва"
+    assert entry.journal_name == "46-26 Нова назва"
+    assert entry.workload_status == "pending"
+    assert entry.trainees_status == "pending"
+
+
+def test_reprocessing_journal_trainees_updates_changed_phone_and_archives_removed_rows(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+    )
+    db_session.add_all(
+        [
+            entry,
+            Trainee(
+                branch_id="main",
+                first_name="Іван Іванович",
+                last_name="Петренко",
+                birth_date=datetime(1990, 2, 1).date(),
+                status="active",
+                group_code="46-26",
+                phone_encrypted=cipher.encrypt("+380000000000"),
+            ),
+            Trainee(
+                branch_id="main",
+                first_name="Олена Петрівна",
+                last_name="Коваль",
+                birth_date=datetime(1992, 4, 3).date(),
+                status="active",
+                group_code="46-26",
+            ),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "zv-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", "+380501112233"),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_journal_trainees_entry(db_session, entry)
+    db_session.commit()
+
+    assert result["changed"] >= 1
+    active_trainees = db_session.query(Trainee).filter(Trainee.is_deleted.is_(False)).all()
+    archived_trainees = db_session.query(Trainee).filter(Trainee.is_deleted.is_(True)).all()
+    assert [(item.last_name, item.group_code) for item in active_trainees] == [("Петренко", "46-26")]
+    assert [item.last_name for item in archived_trainees] == ["Коваль"]
+    assert cipher.decrypt(active_trainees[0].phone_encrypted) == "+380501112233"
+
+
+def test_processed_workload_reimports_when_workbook_modified_time_is_newer(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    teacher = Teacher(branch_id="main", first_name="Іванович", last_name="Старий", is_active=True)
+    db_session.add_all([section, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        workload_hours=4,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Старий предмет",
+            hours=4,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "disciplines-xlsx",
+                "name": "46-26 Журнал.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-02T10:00:00Z",
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [("Новий предмет", 10, "1-10", "Новий Викладач")]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result["processed"] == 1
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 10
+    rows = db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).all()
+    assert [(row.subject_name, row.hours) for row in rows] == [("Новий предмет", 10)]
+
+
 def test_bulk_delete_journal_entries_hides_related_groups(client, auth_headers, db_session, monkeypatch):
     db_session.add_all(
         [
