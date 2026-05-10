@@ -1119,6 +1119,45 @@ def collect_teacher_workload_summary(
     return rows
 
 
+def reconcile_teacher_workload_sources(db: Session, branch_id: str) -> dict:
+    entries = db.query(JournalMonitorEntry).filter(JournalMonitorEntry.branch_id == branch_id).all()
+    entries_by_id = {entry.id: entry for entry in entries}
+    rows = db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.branch_id == branch_id).all()
+    rows_by_entry: dict[int, list[JournalWorkloadEntry]] = defaultdict(list)
+    deleted_rows = 0
+
+    for row in rows:
+        entry = entries_by_id.get(row.journal_monitor_entry_id)
+        if entry is None or entry.workload_status != "processed":
+            db.delete(row)
+            deleted_rows += 1
+            continue
+        rows_by_entry[row.journal_monitor_entry_id].append(row)
+
+    corrected_entries = 0
+    reset_entries = 0
+    for entry in entries:
+        if entry.workload_status == "processed":
+            actual_hours = round(sum(float(row.hours or 0.0) for row in rows_by_entry.get(entry.id, [])), 2)
+            if round(float(entry.workload_hours or 0.0), 2) != actual_hours:
+                entry.workload_hours = actual_hours
+                db.add(entry)
+                corrected_entries += 1
+            continue
+        if float(entry.workload_hours or 0.0) != 0.0 or entry.workload_source_names:
+            entry.workload_hours = 0.0
+            entry.workload_source_names = None
+            db.add(entry)
+            reset_entries += 1
+
+    db.flush()
+    return {
+        "deleted_stale_workload_rows": deleted_rows,
+        "corrected_processed_entries": corrected_entries,
+        "reset_unprocessed_entries": reset_entries,
+    }
+
+
 def collect_report_rows(db: Session, report_type: str, branch_id: str, request_payload: dict | None = None) -> list[dict] | dict[str, list[dict]]:
     if report_type == "trainees":
         trainees = db.query(Trainee).filter(Trainee.branch_id == branch_id).all()

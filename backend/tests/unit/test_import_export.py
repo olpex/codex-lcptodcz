@@ -11,6 +11,7 @@ from app.services.import_export import (
     collect_group_export_rows,
     collect_teacher_workload_summary,
     parse_document_content,
+    reconcile_teacher_workload_sources,
     try_import_trainees,
 )
 
@@ -211,6 +212,75 @@ def test_teacher_workload_summary_does_not_double_count_journal_hours_for_schedu
     assert rows[0]["groups"] == [
         {"group_code": "46-26", "group_name": "Група 46-26", "hours": 68.0},
     ]
+
+
+def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entry_hours(db_session):
+    teacher = Teacher(branch_id="main", first_name="Олена Петрівна", last_name="Коваль", annual_load_hours=100, is_active=True)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([teacher, section])
+    db_session.flush()
+    processed = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-10-26",
+        journal_name="10-26 Журнал",
+        group_code="10-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=99,
+    )
+    pending = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-11-26",
+        journal_name="11-26 Журнал",
+        group_code="11-26",
+        workload_status="pending",
+        workload_year=2026,
+        workload_hours=12,
+    )
+    db_session.add_all([processed, pending])
+    db_session.flush()
+    db_session.add_all(
+        [
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=processed.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Чинна дисципліна",
+                hours=14,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=pending.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Застаріла дисципліна",
+                hours=12,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    report = reconcile_teacher_workload_sources(db_session, "main")
+    db_session.commit()
+
+    assert report == {
+        "deleted_stale_workload_rows": 1,
+        "corrected_processed_entries": 1,
+        "reset_unprocessed_entries": 1,
+    }
+    db_session.refresh(processed)
+    db_session.refresh(pending)
+    assert processed.workload_hours == 14
+    assert pending.workload_hours == 0
+    rows = collect_teacher_workload_summary(db_session, "main")
+    assert rows[0]["total_hours"] == 14
+    assert rows[0]["remaining_hours"] == 86
 
 
 def test_group_export_rows_include_existing_groups_and_teacher_hours(db_session):

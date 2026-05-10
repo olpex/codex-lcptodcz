@@ -57,6 +57,7 @@ export function WorkloadPage() {
   const [isMergingTeachers, setIsMergingTeachers] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<WorkloadSnapshot[]>([]);
   const canEditAnnualLoad =
@@ -116,6 +117,34 @@ export function WorkloadPage() {
       showError(message);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const reconcileWorkload = async () => {
+    setIsReconciling(true);
+    try {
+      const params = new URLSearchParams();
+      if (dateFrom) params.append("date_from", dateFrom);
+      if (dateTo) params.append("date_to", dateTo);
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const result = await request<{ rows: Workload[]; report: Record<string, number>; totals: Record<string, number> }>(
+        `/teacher-workload/reconcile${query}`,
+        { method: "POST" }
+      );
+      setRows(result.rows);
+      appendSnapshot(result.rows);
+      setAnnualLoadDrafts(
+        Object.fromEntries(result.rows.map((row) => [row.teacher_id, String(row.annual_load_hours ?? 0)]))
+      );
+      setAnnualLoadErrors({});
+      setLoadError(null);
+      showSuccess(`Години перераховано: поточні ${result.totals.total_hours ?? 0} год`);
+    } catch (error) {
+      const message = (error as Error).message;
+      setLoadError(message);
+      showError(message);
+    } finally {
+      setIsReconciling(false);
     }
   };
 
@@ -575,6 +604,16 @@ export function WorkloadPage() {
           >
             {isLoading ? "Оновлюємо..." : "Оновити"}
           </button>
+          {canEditAnnualLoad && (
+            <button
+              type="button"
+              className="rounded-lg border border-pine bg-white px-4 py-2 font-semibold text-pine hover:bg-emerald-50 disabled:opacity-50"
+              onClick={reconcileWorkload}
+              disabled={isReconciling}
+            >
+              {isReconciling ? "Перераховуємо..." : "Перерахувати години"}
+            </button>
+          )}
           {(dateFrom || dateTo) && (
             <button 
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50" 

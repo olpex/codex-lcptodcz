@@ -12,7 +12,7 @@ from app.api.deps import CurrentUser, DbSession, require_roles
 from app.models import JournalWorkloadEntry, RoleName, ScheduleSlot, Teacher
 from app.schemas.api import TeacherMergeRequest, TeacherMergeResponse, WorkloadResponse
 from app.services.audit import write_audit
-from app.services.import_export import collect_teacher_workload_summary
+from app.services.import_export import collect_teacher_workload_summary, reconcile_teacher_workload_sources
 
 router = APIRouter()
 
@@ -47,6 +47,41 @@ def get_workload(
         )
         for row in summary
     ]
+
+
+@router.post("/reconcile", dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))])
+def reconcile_workload(
+    db: DbSession,
+    current_user: CurrentUser,
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+) -> dict:
+    report = reconcile_teacher_workload_sources(db, current_user.branch_id)
+    db.commit()
+    rows = collect_teacher_workload_summary(db, current_user.branch_id, date_from=date_from, date_to=date_to)
+    total_hours = round(sum(float(row["total_hours"] or 0) for row in rows), 2)
+    annual_load_hours = round(sum(float(row["annual_load_hours"] or 0) for row in rows), 2)
+    return {
+        "report": report,
+        "totals": {
+            "teachers": len(rows),
+            "total_hours": total_hours,
+            "annual_load_hours": annual_load_hours,
+            "remaining_hours": round(annual_load_hours - total_hours, 2),
+        },
+        "rows": [
+            WorkloadResponse(
+                teacher_id=row["teacher_id"],
+                row_number=row["row_number"],
+                teacher_name=row["teacher_name"],
+                total_hours=row["total_hours"],
+                annual_load_hours=row["annual_load_hours"],
+                remaining_hours=row["remaining_hours"],
+                groups=row.get("groups", []),
+            ).model_dump()
+            for row in rows
+        ],
+    }
 
 
 @router.get("/export-summary")
