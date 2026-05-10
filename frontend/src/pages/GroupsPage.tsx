@@ -911,7 +911,6 @@ export function GroupsPage() {
                               <th className="py-2 pr-3 font-semibold">ПІБ</th>
                               <th className="py-2 pr-3 font-semibold">Договір</th>
                               <th className="py-2 pr-3 font-semibold">Дата нар.</th>
-                              <th className="py-2 pr-3 font-semibold">Телефон</th>
                               <th className="py-2 pr-3 font-semibold">Центр</th>
                               <th className="py-2 pr-3 font-semibold">Адреса</th>
                               <th className="py-2 font-semibold">Статус</th>
@@ -924,7 +923,6 @@ export function GroupsPage() {
                                 <td className="py-2 pr-3 font-semibold text-ink">{trainee.name || "—"}</td>
                                 <td className="py-2 pr-3 text-slate-700">{trainee.contractNumber || "—"}</td>
                                 <td className="py-2 pr-3 text-slate-700">{formatDate(trainee.birthDate)}</td>
-                                <td className="py-2 pr-3 text-slate-700">{trainee.phone || "—"}</td>
                                 <td className="py-2 pr-3 text-slate-700">{trainee.employmentCenter || "—"}</td>
                                 <td className="py-2 pr-3 text-slate-700">{trainee.address || "—"}</td>
                                 <td className="py-2 text-slate-700">{formatTraineeStatus(trainee.status)}</td>

@@ -1837,6 +1837,51 @@ def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_head
     assert entry["trainee_count"] == 1
 
 
+def test_delete_journal_entry_removes_workload_from_teacher_summary(client, auth_headers, db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    teacher = Teacher(branch_id="main", first_name="Олена Петрівна", last_name="Коваль", annual_load_hours=100, is_active=True)
+    db_session.add_all([section, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=12,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Журнальна дисципліна",
+            hours=12,
+        )
+    )
+    db_session.commit()
+
+    before = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert before[teacher.id]["total_hours"] == 12
+
+    response = client.delete(f"/api/v1/journal-monitors/{section.id}/entries/{entry.id}", headers=auth_headers)
+
+    assert response.status_code == 204
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.teacher_id == teacher.id).count() == 0
+    after = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert after[teacher.id]["total_hours"] == 0
+    assert after[teacher.id]["remaining_hours"] == 100
+
+
 def test_background_tick_processes_existing_pending_entries_when_folder_sync_fails(
     client,
     auth_headers,
@@ -2031,7 +2076,8 @@ def test_drive_sync_cleanup_hides_group_and_archives_trainees_when_folder_remove
     )
     group = Group(branch_id="main", code="46-26", name="46-26 Журнал", status=GroupStatus.ACTIVE)
     trainee = Trainee(branch_id="main", first_name="Іван Іванович", last_name="Петренко", status="active", group_code="46-26")
-    db_session.add_all([section, group, trainee])
+    teacher = Teacher(branch_id="main", first_name="Олена Петрівна", last_name="Коваль", annual_load_hours=100, is_active=True)
+    db_session.add_all([section, group, trainee, teacher])
     db_session.flush()
     entry = journal_monitor.JournalMonitorEntry(
         section_id=section.id,
@@ -2041,9 +2087,24 @@ def test_drive_sync_cleanup_hides_group_and_archives_trainees_when_folder_remove
         group_code="46-26",
         trainees_status="processed",
         workload_status="processed",
+        workload_year=2026,
+        workload_hours=8,
     )
     db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Журнальна дисципліна",
+            hours=8,
+        )
+    )
     db_session.commit()
+
+    before = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert before[teacher.id]["total_hours"] == 8
 
     journal_monitor.sync_journal_monitor_section(
         db_session,
@@ -2060,6 +2121,10 @@ def test_drive_sync_cleanup_hides_group_and_archives_trainees_when_folder_remove
     assert trainee.is_deleted is True
     assert trainee.group_code is None
     assert db_session.query(journal_monitor.JournalMonitorEntry).count() == 0
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.teacher_id == teacher.id).count() == 0
+    after = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert after[teacher.id]["total_hours"] == 0
+    assert after[teacher.id]["remaining_hours"] == 100
 
 
 def test_drive_sync_renames_group_and_requeues_processed_entry_when_folder_changes(db_session):

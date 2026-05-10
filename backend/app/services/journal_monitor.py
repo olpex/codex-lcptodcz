@@ -185,6 +185,27 @@ def archive_trainees_for_deleted_journal_entries(db: Session, entries: list[Jour
     return archived
 
 
+def delete_workload_for_journal_entries(db: Session, entries: list[JournalMonitorEntry]) -> int:
+    entry_ids = [entry.id for entry in entries if entry.id is not None]
+    if not entry_ids:
+        return 0
+    deleted = (
+        db.query(JournalWorkloadEntry)
+        .filter(JournalWorkloadEntry.journal_monitor_entry_id.in_(entry_ids))
+        .delete(synchronize_session=False)
+    )
+    for entry in entries:
+        entry.workload_status = "pending"
+        entry.workload_message = "Педнавантаження видалено разом із журналом"
+        entry.workload_processed_at = None
+        entry.workload_year = None
+        entry.workload_hours = 0.0
+        entry.workload_source_names = None
+        db.add(entry)
+    db.flush()
+    return int(deleted or 0)
+
+
 def _requeue_entry_after_drive_change(db: Session, entry: JournalMonitorEntry) -> None:
     if entry.workload_status != "pending":
         entry.workload_status = "pending"
@@ -1640,6 +1661,7 @@ def sync_journal_monitor_section(
     if removed_entries:
         hide_groups_for_deleted_journal_entries(db, removed_entries)
         archive_trainees_for_deleted_journal_entries(db, removed_entries)
+        delete_workload_for_journal_entries(db, removed_entries)
     for entry in removed_entries:
         db.delete(entry)
 

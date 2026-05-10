@@ -117,6 +117,7 @@ async function loginAndMockJournals(
     onProcessingStart?: (url: URL) => void;
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
+    onSync?: (url: URL) => void;
   } = {}
 ) {
   await page.addInitScript(() => {
@@ -198,6 +199,15 @@ async function loginAndMockJournals(
           workload_auto_year: Number(url.searchParams.get("year")),
           entries: section.entries.map((entry) => ({ ...entry, workload_status: "pending", trainees_status: "pending" }))
         })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/1/sync") && method === "POST") {
+      options.onSync?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...section, workload_auto_enabled: true, workload_auto_year: 2026 })
       });
     }
 
@@ -404,12 +414,16 @@ test("journal monitor starts one combined processing action for trainees and wor
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {
   let reprocessUrl: URL | null = null;
   let backgroundUrl: URL | null = null;
+  let syncUrl: URL | null = null;
   await loginAndMockJournals(page, {
     onReprocessAll: (url) => {
       reprocessUrl = url;
     },
     onBackgroundTick: (url) => {
       backgroundUrl = url;
+    },
+    onSync: (url) => {
+      syncUrl = url;
     }
   });
 
@@ -422,5 +436,6 @@ test("journal monitor can force full reprocessing for a year", async ({ page }) 
   await expect(page.getByText("Повну переобробку журналів для 2026 року поставлено в чергу")).toBeVisible();
   await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
   expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+  await expect.poll(() => syncUrl?.pathname).toContain("/journal-monitors/1/sync");
   await expect(page.getByRole("button", { name: "Переобробити все" })).toBeDisabled();
 });

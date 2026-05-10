@@ -203,7 +203,8 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
   await expect(traineesToggle).toHaveAttribute("aria-expanded", "true");
   await expect(detail.getByText("Іваненко Іван Іванович")).toBeVisible();
   await expect(detail.getByText("180-25/001")).toBeVisible();
-  await expect(detail.getByText("+380501112233")).toBeVisible();
+  await expect(detail.getByRole("columnheader", { name: "Телефон" })).toHaveCount(0);
+  await expect(detail.getByText("+380501112233")).toHaveCount(0);
 
   await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
   await expect.poll(() => traineeRequests).toBeGreaterThan(1);

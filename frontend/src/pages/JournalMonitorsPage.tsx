@@ -536,7 +536,7 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Повну переобробку журналів для ${year} року поставлено в чергу`);
-      void runBackgroundStep(selectedId, year);
+      void runBackgroundStep(selectedId, year).then(() => syncSelected(false));
     } catch (error) {
       showError((error as Error).message);
     } finally {

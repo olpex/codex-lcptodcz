@@ -19,6 +19,7 @@ from app.services.audit import write_audit
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     archive_trainees_for_deleted_journal_entries,
+    delete_workload_for_journal_entries,
     extract_drive_folder_id,
     hide_groups_for_deleted_journal_entries,
     list_drive_child_folders,
@@ -177,6 +178,7 @@ def bulk_delete_entries(
 
     hidden_group_count = hide_groups_for_deleted_journal_entries(db, target_entries)
     archived_trainee_count = archive_trainees_for_deleted_journal_entries(db, target_entries)
+    deleted_workload_count = delete_workload_for_journal_entries(db, target_entries)
     deleted_ids = [entry.id for entry in target_entries]
     details = [
         {"id": entry.id, "journal_name": entry.journal_name, "group_code": entry.group_code}
@@ -198,6 +200,7 @@ def bulk_delete_entries(
             "missing_ids": missing_ids,
             "hidden_group_count": hidden_group_count,
             "archived_trainee_count": archived_trainee_count,
+            "deleted_workload_count": deleted_workload_count,
             "entries": details,
         },
     )
@@ -223,6 +226,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
     details = {"section_id": section_id, "journal_name": entry.journal_name, "group_code": entry.group_code}
     hidden_group_count = hide_groups_for_deleted_journal_entries(db, [entry])
     archived_trainee_count = archive_trainees_for_deleted_journal_entries(db, [entry])
+    deleted_workload_count = delete_workload_for_journal_entries(db, [entry])
     db.delete(entry)
     write_audit(
         db,
@@ -230,7 +234,12 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
         action="journal_monitor.entry_delete",
         entity_type="journal_monitor_entry",
         entity_id=str(entry_id),
-        details={**details, "hidden_group_count": hidden_group_count, "archived_trainee_count": archived_trainee_count},
+        details={
+            **details,
+            "hidden_group_count": hidden_group_count,
+            "archived_trainee_count": archived_trainee_count,
+            "deleted_workload_count": deleted_workload_count,
+        },
     )
     db.commit()
 

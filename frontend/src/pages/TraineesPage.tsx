@@ -1123,7 +1123,6 @@ export function TraineesPage() {
                                   <p className="md:col-span-2"><span className="font-semibold">Ким виданий:</span> {trainee.passport_issued_by || "—"}</p>
                                   <p><span className="font-semibold">Коли виданий:</span> {formatDate(trainee.passport_issued_date)}</p>
                                   <p><span className="font-semibold">Ідентифікаційний код:</span> {trainee.tax_id || "—"}</p>
-                                  <p><span className="font-semibold">Телефон:</span> {trainee.phone || "—"}</p>
                                   <p><span className="font-semibold">Номер групи:</span> {trainee.group_code || "—"}</p>
                                   <p><span className="font-semibold">Статус:</span> {TRAINEE_STATUS_LABELS[trainee.status] || trainee.status}</p>
                                 </div>
