@@ -85,6 +85,18 @@ def _journal_zv_workbook_with_title_bytes(rows: list[tuple[int, str, str, str, s
     return stream.getvalue()
 
 
+def _journal_zv_workbook_with_combined_address_phone_bytes(rows: list[tuple[int, str, str, str, str, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "ЗВ"
+    sheet = workbook.active
+    sheet.append(["№ п/п", "№ договору", "Прізвище, ім'я, по батькові", "Стать", "Дата народження", "ІПН", "Адреса, телефон"])
+    for row in rows:
+        sheet.append(list(row))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_combined_workbook_bytes() -> bytes:
     workbook = Workbook()
     workbook.active.title = "Загальні"
@@ -171,6 +183,24 @@ def test_journal_zv_parser_skips_title_and_imports_all_real_trainees():
     assert parsed["data"][0]["№ договору"] == "1(З-СНН) від 02.01.2026"
     assert parsed["data"][-1]["Номер за порядком"] == 33
     assert all(row["Прізвище"] != "№" for row in parsed["data"])
+
+
+def test_journal_zv_parser_does_not_copy_address_into_phone_from_combined_column():
+    parsed = journal_monitor.parse_journal_zv_trainees_xlsx(
+        _journal_zv_workbook_with_combined_address_phone_bytes(
+            [
+                (1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів, вул. Зелена 1"),
+                (2, "З-СНН-002", "Коваль Олена Петрівна", "ж", "03.04.1992", "0987654321", "м. Київ, вул. Хрещатик 1, +380501112233"),
+            ]
+        ),
+        group_code="46-26",
+        group_name="46-26 Журнал",
+    )
+
+    assert parsed["data"][0]["Домашня адреса"] == "м. Львів, вул. Зелена 1"
+    assert parsed["data"][0]["Телефон"] is None
+    assert parsed["data"][1]["Домашня адреса"] == "м. Київ, вул. Хрещатик 1"
+    assert parsed["data"][1]["Телефон"] == "+380501112233"
 
 
 def test_journal_worker_imports_trainees_from_zv_sheet_and_updates_group_status(

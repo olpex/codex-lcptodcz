@@ -58,7 +58,7 @@ test("shares one refresh request across parallel expired-token API calls", async
       });
     }
 
-    if (["/api/v1/groups", "/api/v1/trainees", "/api/v1/schedule"].includes(path) && method === "GET") {
+    if (["/api/v1/groups", "/api/v1/trainees", "/api/v1/schedule", "/api/v1/teacher-workload"].includes(path) && method === "GET") {
       if (auth !== "Bearer new-access-token") {
         return route.fulfill({
           status: 401,
@@ -91,6 +91,10 @@ test("shares one refresh request across parallel expired-token API calls", async
     }
 
     if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/teacher-workload") && method === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     }
 

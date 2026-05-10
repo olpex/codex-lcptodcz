@@ -8,7 +8,7 @@ import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ActiveGroupBetweenDates, Group, GroupAuditLog, ScheduleSlot, Trainee } from "../types/api";
+import type { ActiveGroupBetweenDates, Group, GroupAuditLog, ScheduleSlot, Trainee, Workload } from "../types/api";
 
 type GroupDetail = {
   activeTrainees: number;
@@ -79,6 +79,10 @@ function inferGroupYear(group: Group): number | null {
   return shortYear ? 2000 + Number(shortYear[1]) : null;
 }
 
+function normalizeGroupCode(value: string | null | undefined): string {
+  return (value || "").replace(/[–—−/.]/g, "-").replace(/\s+/g, "").replace(/-+/g, "-").toLowerCase();
+}
+
 function buildTraineeName(trainee: Trainee): string {
   return `${trainee.last_name} ${trainee.first_name}`.trim();
 }
@@ -103,7 +107,7 @@ function formatAuditDetails(details: Record<string, unknown> | null): string {
   return parts.join(", ");
 }
 
-function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlots: ScheduleSlot[]): GroupDetail | null {
+function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlots: ScheduleSlot[], workloadRows: Workload[] = []): GroupDetail | null {
   if (!group) return null;
   const groupCode = group.code.trim();
   const groupTrainees = trainees.filter((trainee) => (trainee.group_code || "").trim() === groupCode);
@@ -132,17 +136,34 @@ function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlot
     }));
   const scheduleDates = groupSlots.map((slot) => slot.starts_at).filter(Boolean).sort();
   const teacherBuckets = new Map<number, GroupDetailTeacher>();
-  groupSlots.forEach((slot) => {
-    const name = (slot.teacher_name || "").trim();
-    if (!name) return;
-    const existing = teacherBuckets.get(slot.teacher_id);
-    const nextHours = (existing?.hours || 0) + (slot.academic_hours || 0);
-    teacherBuckets.set(slot.teacher_id, {
-      teacherId: slot.teacher_id,
-      name: existing && existing.name.length >= name.length ? existing.name : name,
-      hours: Number(nextHours.toFixed(2))
+  const normalizedGroupCode = normalizeGroupCode(groupCode);
+  workloadRows.forEach((row) => {
+    (row.groups || []).forEach((workloadGroup) => {
+      if (normalizeGroupCode(workloadGroup.group_code) !== normalizedGroupCode) return;
+      const name = (row.teacher_name || "").trim();
+      if (!name) return;
+      const existing = teacherBuckets.get(row.teacher_id);
+      const nextHours = (existing?.hours || 0) + (workloadGroup.hours || 0);
+      teacherBuckets.set(row.teacher_id, {
+        teacherId: row.teacher_id,
+        name: existing && existing.name.length >= name.length ? existing.name : name,
+        hours: Number(nextHours.toFixed(2))
+      });
     });
   });
+  if (teacherBuckets.size === 0) {
+    groupSlots.forEach((slot) => {
+      const name = (slot.teacher_name || "").trim();
+      if (!name) return;
+      const existing = teacherBuckets.get(slot.teacher_id);
+      const nextHours = (existing?.hours || 0) + (slot.academic_hours || 0);
+      teacherBuckets.set(slot.teacher_id, {
+        teacherId: slot.teacher_id,
+        name: existing && existing.name.length >= name.length ? existing.name : name,
+        hours: Number(nextHours.toFixed(2))
+      });
+    });
+  }
   const teachers = Array.from(teacherBuckets.values()).sort((left, right) =>
     left.name.localeCompare(right.name, "uk-UA", { sensitivity: "base" })
   );
@@ -166,6 +187,7 @@ export function GroupsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [trainees, setTrainees] = useState<Trainee[]>([]);
   const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
+  const [workloadRows, setWorkloadRows] = useState<Workload[]>([]);
   const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -222,8 +244,8 @@ export function GroupsPage() {
     [filteredGroups, selectedDetailGroupId]
   );
   const selectedGroupDetail = useMemo(
-    () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots),
-    [scheduleSlots, selectedDetailGroup, trainees]
+    () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots, workloadRows),
+    [scheduleSlots, selectedDetailGroup, trainees, workloadRows]
   );
   const selectedTraineesExpanded = selectedDetailGroup ? Boolean(expandedTraineeTables[selectedDetailGroup.id]) : false;
 
@@ -356,14 +378,16 @@ export function GroupsPage() {
   const loadGroups = async () => {
     setIsLoading(true);
     try {
-      const [data, traineeRows, scheduleRows] = await Promise.all([
+      const [data, traineeRows, scheduleRows, workloadData] = await Promise.all([
         request<Group[]>("/groups"),
         request<Trainee[]>("/trainees?include_deleted=true"),
-        request<ScheduleSlot[]>("/schedule")
+        request<ScheduleSlot[]>("/schedule"),
+        request<Workload[]>("/teacher-workload")
       ]);
       setGroups(data);
       setTrainees(traineeRows);
       setScheduleSlots(scheduleRows);
+      setWorkloadRows(workloadData);
       setSelectedGroupIds((prev) => {
         const availableIds = new Set(data.map((group) => group.id));
         return Object.fromEntries(

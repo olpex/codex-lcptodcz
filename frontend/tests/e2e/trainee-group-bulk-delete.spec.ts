@@ -85,6 +85,14 @@ test("admin can delete selected trainee-register groups with their trainees", as
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(state.trainees) });
     }
 
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/teacher-workload") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
     if (path.endsWith("/groups/bulk/delete") && method === "POST") {
       state.bulkPayload = request.postDataJSON() as { group_ids: number[]; delete_trainees: boolean };
       const deletedCodes = new Set(

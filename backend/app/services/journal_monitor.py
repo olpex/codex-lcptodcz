@@ -268,6 +268,23 @@ def _find_header_column(headers: list[str], keywords: tuple[str, ...], excluded:
     return None
 
 
+PHONE_PATTERN = re.compile(r"(?:\+?38)?0\d(?:[\s().-]*\d){8}")
+
+
+def _split_address_phone_cell(value: Any) -> tuple[Any, str | None]:
+    text = _norm(value)
+    if not text:
+        return value, None
+    for match in PHONE_PATTERN.finditer(text):
+        digits = re.sub(r"\D", "", match.group(0))
+        if (digits.startswith("380") and len(digits) == 12) or (digits.startswith("0") and len(digits) == 10):
+            phone = match.group(0).strip(" ,;")
+            address = f"{text[:match.start()]} {text[match.end():]}".strip(" ,;")
+            address = re.sub(r"\s{2,}", " ", address)
+            return address or None, phone
+    return value, None
+
+
 def _infer_journal_year(entry: JournalMonitorEntry, section: JournalMonitorSection | None = None) -> int | None:
     for value in (entry.group_code, entry.journal_name, section.name if section else None):
         text = _norm(value)
@@ -759,6 +776,13 @@ def parse_journal_zv_trainees_xlsx(payload: bytes, group_code: str | None = None
         full_name = _norm(raw_row[full_name_col] if full_name_col < len(raw_row) else "")
         if not _looks_like_trainee_full_name(full_name):
             continue
+        raw_address = raw_row[address_col] if address_col is not None and address_col < len(raw_row) else None
+        raw_phone = raw_row[phone_col] if phone_col is not None and phone_col < len(raw_row) else None
+        if address_col is not None and address_col == phone_col:
+            address_value, phone_value = _split_address_phone_cell(raw_address)
+        else:
+            address_value = raw_address
+            _phone_remainder, phone_value = _split_address_phone_cell(raw_phone)
         name_parts = full_name.split(" ")
         last_name = name_parts[0] if name_parts else ""
         first_name = name_parts[1] if len(name_parts) > 1 else ""
@@ -773,8 +797,8 @@ def parse_journal_zv_trainees_xlsx(payload: bytes, group_code: str | None = None
                 "По батькові": middle_name,
                 "Дата народження": raw_row[birth_date_col] if birth_date_col is not None and birth_date_col < len(raw_row) else None,
                 "Ідентифікаційний номер": raw_row[tax_id_col] if tax_id_col is not None and tax_id_col < len(raw_row) else None,
-                "Домашня адреса": raw_row[address_col] if address_col is not None and address_col < len(raw_row) else None,
-                "Телефон": raw_row[phone_col] if phone_col is not None and phone_col < len(raw_row) else None,
+                "Домашня адреса": address_value,
+                "Телефон": phone_value,
             }
         )
     if not data:

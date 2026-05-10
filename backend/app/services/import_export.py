@@ -449,6 +449,18 @@ def _set_encrypted_value(obj: Any, field: str, plain_value: str | None, overwrit
     return False
 
 
+def _clear_phone_if_it_contains_address(obj: Any, incoming_address: str | None) -> bool:
+    current_phone = _normalize_text_value(cipher.decrypt(getattr(obj, "phone_encrypted", None)))
+    if not current_phone:
+        return False
+    current_address = _normalize_text_value(cipher.decrypt(getattr(obj, "address_encrypted", None)))
+    address = _normalize_text_value(incoming_address) or current_address
+    if not address or current_phone != address:
+        return False
+    setattr(obj, "phone_encrypted", None)
+    return True
+
+
 def _ensure_group_for_trainee(
     db: Session,
     trainee: Trainee,
@@ -817,6 +829,7 @@ def try_import_trainees(
             changed = _set_encrypted_value(existing, "passport_number_encrypted", passport_number, overwrite_existing) or changed
             changed = _set_encrypted_value(existing, "passport_issued_by_encrypted", passport_issued_by, overwrite_existing) or changed
             changed = _set_encrypted_value(existing, "tax_id_encrypted", tax_id, overwrite_existing) or changed
+            changed = _clear_phone_if_it_contains_address(existing, address) or changed
             changed = _set_encrypted_value(existing, "phone_encrypted", phone_value, overwrite_existing) or changed
 
             memberships_added, group_changed = _ensure_group_for_trainee(

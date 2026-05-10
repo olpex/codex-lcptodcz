@@ -4,8 +4,8 @@ test("admin can delete multiple trainee groups from the groups register", async 
   const state = {
     groups: [
       { id: 1, code: "46-26", name: "Комп'ютерна обробка", capacity: 25, status: "active", start_date: null, end_date: null },
-      { id: 2, code: "180-25", name: "Штучний інтелект", capacity: 30, status: "active", start_date: null, end_date: null },
-      { id: 3, code: "KEEP-1", name: "Залишити", capacity: 20, status: "active", start_date: null, end_date: null }
+      { id: 2, code: "180-26", name: "Штучний інтелект", capacity: 30, status: "active", start_date: null, end_date: null },
+      { id: 3, code: "KEEP-26", name: "Залишити", capacity: 20, status: "active", start_date: null, end_date: null }
     ],
     bulkPayload: null as null | { group_ids: number[]; delete_trainees: boolean }
   };
@@ -52,6 +52,10 @@ test("admin can delete multiple trainee groups from the groups register", async 
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     }
 
+    if (path.endsWith("/teacher-workload") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
     if (path.endsWith("/groups/bulk/delete") && method === "POST") {
       state.bulkPayload = request.postDataJSON() as { group_ids: number[]; delete_trainees: boolean };
       state.groups = state.groups.filter((group) => !state.bulkPayload?.group_ids.includes(group.id));
@@ -77,7 +81,7 @@ test("admin can delete multiple trainee groups from the groups register", async 
   await page.goto("/groups");
 
   await page.getByRole("checkbox", { name: "Вибрати групу 46-26" }).check();
-  await page.getByRole("checkbox", { name: "Вибрати групу 180-25" }).check();
+  await page.getByRole("checkbox", { name: "Вибрати групу 180-26" }).check();
   await page.getByRole("button", { name: "Видалити вибрані" }).click();
 
   const dialog = page.getByRole("alertdialog");
@@ -85,7 +89,7 @@ test("admin can delete multiple trainee groups from the groups register", async 
   await dialog.getByRole("button", { name: "Видалити" }).click();
 
   await expect.poll(() => state.bulkPayload).toEqual({ group_ids: [1, 2], delete_trainees: true });
-  await expect(page.getByRole("row", { name: /KEEP-1/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /KEEP-26/ })).toBeVisible();
   await expect(page.getByRole("row", { name: /46-26/ })).not.toBeVisible();
-  await expect(page.getByRole("row", { name: /180-25/ })).not.toBeVisible();
+  await expect(page.getByRole("row", { name: /180-26/ })).not.toBeVisible();
 });

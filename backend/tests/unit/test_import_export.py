@@ -3,6 +3,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
+from app.core.crypto import cipher
 from app.models import Group, GroupMembership, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
 from app.services.import_export import (
@@ -392,6 +393,43 @@ def test_import_updates_existing_missing_fields_instead_of_skipping(tmp_path: Pa
     assert trainee.contract_number == "1499"
     assert trainee.group_code == "73-26"
     assert trainee.employment_center_encrypted is not None
+
+
+def test_import_replaces_existing_phone_that_is_actually_address(db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            first_name="Іван Іванович",
+            last_name="Петренко",
+            birth_date=datetime(1990, 2, 1).date(),
+            status="active",
+            address_encrypted=cipher.encrypt("м. Львів, вул. Зелена 1"),
+            phone_encrypted=cipher.encrypt("м. Львів, вул. Зелена 1"),
+        )
+    )
+    db_session.commit()
+
+    result = try_import_trainees(
+        db_session,
+        {
+            "headers": ["Прізвище", "Ім'я", "По батькові", "Дата народження", "Домашня адреса", "Телефон"],
+            "data": [
+                {
+                    "Прізвище": "Петренко",
+                    "Ім'я": "Іван",
+                    "По батькові": "Іванович",
+                    "Дата народження": "01.02.1990",
+                    "Домашня адреса": "м. Львів, вул. Зелена 1",
+                    "Телефон": "+380501112233",
+                }
+            ],
+        },
+        "main",
+    )
+
+    assert result["updated_existing"] == 1
+    trainee = db_session.query(Trainee).filter(Trainee.last_name == "Петренко").one()
+    assert cipher.decrypt(trainee.phone_encrypted) == "+380501112233"
 
 
 def test_import_restores_archived_existing_trainee(tmp_path: Path, db_session):

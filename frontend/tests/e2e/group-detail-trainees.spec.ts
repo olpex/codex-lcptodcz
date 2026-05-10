@@ -37,7 +37,7 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
         contentType: "application/json",
         body: JSON.stringify([
           { id: 1, code: "180-25", name: "Штучний інтелект", capacity: 30, status: "active", start_date: null, end_date: null },
-          { id: 2, code: "46-26", name: "Технології комп'ютерної обробки інформації", capacity: 25, status: "active", start_date: null, end_date: null }
+          { id: 2, code: "46-25", name: "Технології комп'ютерної обробки інформації", capacity: 25, status: "active", start_date: null, end_date: null }
         ])
       });
     }
@@ -122,11 +122,47 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
             ends_at: "2026-03-11T11:05:00Z",
             pair_number: 1,
             academic_hours: 2,
-            group_code: "46-26",
+            group_code: "46-25",
             group_name: "Технології комп'ютерної обробки інформації",
             teacher_name: "Войтехівська Галина Михайлівна",
             subject_name: "Тема",
             room_name: null
+          }
+        ])
+      });
+    }
+
+    if (path.endsWith("/teacher-workload") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            teacher_id: 11,
+            row_number: 1,
+            teacher_name: "Коваль Олена Петрівна",
+            total_hours: 30,
+            annual_load_hours: 0,
+            remaining_hours: -30,
+            groups: [{ group_code: "180-25", group_name: "Штучний інтелект", hours: 30 }]
+          },
+          {
+            teacher_id: 12,
+            row_number: 2,
+            teacher_name: "Сидоренко Ігор Іванович",
+            total_hours: 12,
+            annual_load_hours: 0,
+            remaining_hours: -12,
+            groups: [{ group_code: "180-25", group_name: "Штучний інтелект", hours: 12 }]
+          },
+          {
+            teacher_id: 7,
+            row_number: 3,
+            teacher_name: "Войтехівська Галина Михайлівна",
+            total_hours: 2,
+            annual_load_hours: 0,
+            remaining_hours: -2,
+            groups: [{ group_code: "46-25", group_name: "Технології комп'ютерної обробки інформації", hours: 2 }]
           }
         ])
       });
@@ -149,6 +185,10 @@ test("group detail shows trainees imported from Excel", async ({ page }) => {
   await expect(detail.getByText("180-25 — Штучний інтелект")).toBeVisible();
   await expect(detail.getByText("Слухачі з Excel")).toBeVisible();
   await expect(detail.getByText("Активних: 2")).toBeVisible();
+  await expect(detail.getByText("Коваль Олена Петрівна")).toBeVisible();
+  await expect(detail.getByText("(30 год)")).toBeVisible();
+  await expect(detail.getByText("Сидоренко Ігор Іванович")).toBeVisible();
+  await expect(detail.getByText("(12 год)")).toBeVisible();
   await expect(detail.getByText("Іваненко Іван Іванович")).not.toBeVisible();
 
   const traineesToggle = detail.getByRole("button", { name: /Слухачі групи/ });
