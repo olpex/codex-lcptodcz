@@ -68,7 +68,11 @@ def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -
     student_plan = _student_plan_response(db, current_user.branch_id, plan_year)
     active_groups = (
         db.query(Group)
-        .filter(Group.branch_id == current_user.branch_id, Group.status == GroupStatus.ACTIVE)
+        .filter(
+            Group.branch_id == current_user.branch_id,
+            Group.status == GroupStatus.ACTIVE,
+            Group.hidden_from_registry.is_(False),
+        )
         .count()
     )
     active_trainees = (

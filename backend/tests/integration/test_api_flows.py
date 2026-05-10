@@ -275,6 +275,24 @@ def test_dashboard_kpi_excludes_archived_trainees_from_active_count(client, auth
     assert response.json()["active_trainees"] == 1
 
 
+def test_dashboard_kpi_excludes_hidden_groups_from_active_count(client, auth_headers, db_session):
+    visible_group = Group(branch_id="main", code="KPI-VISIBLE", name="Видима група", status=GroupStatus.ACTIVE)
+    hidden_group = Group(
+        branch_id="main",
+        code="KPI-HIDDEN",
+        name="Прихована група",
+        status=GroupStatus.ACTIVE,
+        hidden_from_registry=True,
+    )
+    db_session.add_all([visible_group, hidden_group])
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/kpi", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["active_groups"] == 1
+
+
 def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_headers, db_session):
     for index in range(24):
         db_session.add(
