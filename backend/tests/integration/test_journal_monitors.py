@@ -1610,7 +1610,7 @@ def test_background_tick_clears_all_pending_workloads_for_resynced_journals(
     assert sum(1 for code in ("1-26", "10-26", "11-26") if entries[code]["trainees_status"] == "processed") == 1
 
 
-def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, auth_headers, db_session, monkeypatch):
+def test_delete_journal_entry_archives_group_trainees_and_resync_restores_them(client, auth_headers, db_session, monkeypatch):
     group = Group(branch_id="main", code="46-26", name="Журнал із листів", status=GroupStatus.ACTIVE)
     db_session.add(group)
     db_session.flush()
@@ -1628,6 +1628,25 @@ def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, au
             }
         ],
     )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", ""),
+                (2, "З-СНН-002", "Коваль Олена Петрівна", "ж", "03.04.1992", "0987654321", "м. Київ", ""),
+            ]
+        ),
+        raising=False,
+    )
     create_response = client.post(
         "/api/v1/journal-monitors",
         json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
@@ -1644,7 +1663,8 @@ def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, au
     db_session.refresh(group)
     assert group.hidden_from_registry is True
     assert db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count() == 1
-    assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 1
+    assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 0
+    assert db_session.query(Trainee).filter(Trainee.is_deleted.is_(True)).count() == 1
 
     resync_response = client.post(
         f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
@@ -1656,9 +1676,17 @@ def test_delete_journal_entry_hides_group_but_preserves_imported_data(client, au
     assert group.hidden_from_registry is False
     groups_payload = {item["code"]: item for item in client.get("/api/v1/groups", headers=auth_headers).json()}
     assert groups_payload["46-26"]["year"] == 2026
+    assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 2
 
 
 def test_bulk_delete_journal_entries_hides_related_groups(client, auth_headers, db_session, monkeypatch):
+    db_session.add_all(
+        [
+            Trainee(branch_id="main", first_name="Іван", last_name="Перший", status="active", group_code="31-26"),
+            Trainee(branch_id="main", first_name="Олена", last_name="Друга", status="active", group_code="32-26"),
+        ]
+    )
+    db_session.commit()
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
         lambda _folder_id, service_account_json=None: [
@@ -1695,4 +1723,6 @@ def test_bulk_delete_journal_entries_hides_related_groups(client, auth_headers, 
     assert delete_response.json()["deleted_count"] == 2
     assert set(delete_response.json()["deleted_ids"]) == set(entry_ids)
     assert {group.code for group in db_session.query(Group).filter(Group.hidden_from_registry.is_(True)).all()} == {"31-26", "32-26"}
+    assert db_session.query(Trainee).filter(Trainee.group_code.in_(["31-26", "32-26"]), Trainee.is_deleted.is_(False)).count() == 0
+    assert db_session.query(Trainee).filter(Trainee.is_deleted.is_(True)).count() == 2
     assert client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers).json()["entries"] == []

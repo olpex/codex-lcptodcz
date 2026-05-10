@@ -18,6 +18,7 @@ from app.schemas.api import (
 from app.services.audit import write_audit
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
+    archive_trainees_for_deleted_journal_entries,
     extract_drive_folder_id,
     hide_groups_for_deleted_journal_entries,
     list_drive_child_folders,
@@ -175,6 +176,7 @@ def bulk_delete_entries(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнали для видалення не знайдено")
 
     hidden_group_count = hide_groups_for_deleted_journal_entries(db, target_entries)
+    archived_trainee_count = archive_trainees_for_deleted_journal_entries(db, target_entries)
     deleted_ids = [entry.id for entry in target_entries]
     details = [
         {"id": entry.id, "journal_name": entry.journal_name, "group_code": entry.group_code}
@@ -195,6 +197,7 @@ def bulk_delete_entries(
             "deleted_ids": deleted_ids,
             "missing_ids": missing_ids,
             "hidden_group_count": hidden_group_count,
+            "archived_trainee_count": archived_trainee_count,
             "entries": details,
         },
     )
@@ -219,6 +222,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнал не знайдено")
     details = {"section_id": section_id, "journal_name": entry.journal_name, "group_code": entry.group_code}
     hidden_group_count = hide_groups_for_deleted_journal_entries(db, [entry])
+    archived_trainee_count = archive_trainees_for_deleted_journal_entries(db, [entry])
     db.delete(entry)
     write_audit(
         db,
@@ -226,7 +230,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
         action="journal_monitor.entry_delete",
         entity_type="journal_monitor_entry",
         entity_id=str(entry_id),
-        details={**details, "hidden_group_count": hidden_group_count},
+        details={**details, "hidden_group_count": hidden_group_count, "archived_trainee_count": archived_trainee_count},
     )
     db.commit()
 

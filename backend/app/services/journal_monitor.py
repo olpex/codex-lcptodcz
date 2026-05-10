@@ -137,6 +137,48 @@ def hide_groups_for_deleted_journal_entries(db: Session, entries: list[JournalMo
     return hidden
 
 
+def archive_trainees_for_deleted_journal_entries(db: Session, entries: list[JournalMonitorEntry]) -> int:
+    archived = 0
+    deleted_ids = {entry.id for entry in entries if entry.id is not None}
+    seen_codes: set[str] = set()
+    now = datetime.now(timezone.utc)
+    for entry in entries:
+        group_code = display_group_code(entry.group_code)
+        if not group_code:
+            continue
+        normalized_code = normalize_group_code(group_code)
+        if normalized_code in seen_codes:
+            continue
+        seen_codes.add(normalized_code)
+        remaining_entry = (
+            db.query(JournalMonitorEntry)
+            .filter(
+                JournalMonitorEntry.branch_id == entry.branch_id,
+                JournalMonitorEntry.group_code == group_code,
+                JournalMonitorEntry.id.notin_(deleted_ids),
+            )
+            .first()
+        )
+        if remaining_entry:
+            continue
+        trainees = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == entry.branch_id,
+                Trainee.group_code == group_code,
+                Trainee.is_deleted.is_(False),
+            )
+            .all()
+        )
+        for trainee in trainees:
+            trainee.is_deleted = True
+            trainee.deleted_at = now
+            trainee.group_code = None
+            db.add(trainee)
+            archived += 1
+    return archived
+
+
 def extract_group_code(folder_name: str) -> str | None:
     match = GROUP_CODE_PATTERN.search(folder_name or "")
     if not match:
