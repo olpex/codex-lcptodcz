@@ -289,6 +289,8 @@ def _reprocess_section_all(
     *,
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
+    section_id = section.id
+    sync_warning: str | None = None
     section.workload_auto_enabled = True
     section.workload_auto_year = year
     db.add(section)
@@ -301,11 +303,25 @@ def _reprocess_section_all(
             process_workload=False,
             process_trainees=False,
         )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Drive sync failed before full journal reprocessing for section %s: %s", section_id, exc)
+        section = db.get(JournalMonitorSection, section_id)
+        if not section:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розділ журналів не знайдено") from exc
+        section.workload_auto_enabled = True
+        section.workload_auto_year = year
+        section.last_sync_status = "failed"
+        sync_warning = f"Синхронізацію Google Drive пропущено: {exc}"
+        section.last_sync_message = sync_warning[:500]
+        db.add(section)
+        db.flush()
+
+    try:
         workload_count = requeue_journal_workload_for_year(db, section, year, force=True)
         trainees_count = requeue_journal_trainees_for_year(db, section, year, force=True)
-        section.last_sync_message = (
-            f"Повна переобробка {year}: у черзі педнавантаження {workload_count}, слухачі {trainees_count}"
-        )
+        queue_message = f"Повна переобробка {year}: у черзі педнавантаження {workload_count}, слухачі {trainees_count}"
+        section.last_sync_message = (f"{sync_warning}; {queue_message}" if sync_warning else queue_message)[:500]
         db.add(section)
         db.commit()
     except Exception as exc:

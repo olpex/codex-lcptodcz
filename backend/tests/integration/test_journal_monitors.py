@@ -1058,6 +1058,63 @@ def test_force_requeue_marks_processed_workload_and_trainees_pending(db_session)
     assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
 
 
+def test_reprocess_all_queues_existing_entries_when_drive_sync_fails(client, auth_headers, db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    teacher = Teacher(branch_id="main", first_name="Іванович", last_name="Викладач", is_active=True)
+    db_session.add_all([section, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-1-26",
+        journal_name="1-26 Журнал",
+        group_code="1-26",
+        has_trainees=True,
+        trainee_count=12,
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=8,
+        trainees_status="processed",
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Предмет",
+            hours=8,
+        )
+    )
+    db_session.commit()
+
+    def broken_drive_lister(_folder_id, service_account_json=None):
+        raise RuntimeError("тимчасово недоступний Google Drive")
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", broken_drive_lister)
+
+    response = client.post(
+        f"/api/v1/journal-monitors/{section.id}/processing/reprocess-all?year=2026",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workload_auto_enabled"] is True
+    assert payload["last_sync_status"] == "failed"
+    assert "Повна переобробка 2026" in payload["last_sync_message"]
+    assert payload["entries"][0]["workload_status"] == "pending"
+    assert payload["entries"][0]["trainees_status"] == "pending"
+    assert payload["entries"][0]["workload_hours"] == 0
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
+
+
 def test_journal_step_message_does_not_grow_past_database_limit(db_session):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
