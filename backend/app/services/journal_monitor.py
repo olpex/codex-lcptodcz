@@ -244,7 +244,71 @@ def _workbook_display_name(name: str | None) -> str:
     value = _norm(name)
     if not value:
         return ""
-    return re.sub(r"\.(?:xlsx|xlsm|xls|csv)$", "", value, flags=re.IGNORECASE).strip()
+    value = re.sub(r"\.(?:xlsx|xlsm|xls|csv)$", "", value, flags=re.IGNORECASE)
+    return value.strip(" \"'«»“”„`")
+
+
+def _source_name_key(value: str | None, group_code: str | None = None) -> str:
+    text = _workbook_display_name(value)
+    if group_code:
+        escaped = re.escape(display_group_code(group_code) or group_code).replace("\\-", r"[-–—]")
+        text = re.sub(rf"^\s*{escaped}\s*[-–—:]?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*журнал\s*[-–—:]?\s*", "", text, flags=re.IGNORECASE)
+    return re.sub(r"[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ]+", "", text).casefold()
+
+
+def _visible_source_names(entry: JournalMonitorEntry, source_names: list[str] | None) -> list[str]:
+    journal_key = _source_name_key(entry.journal_name, entry.group_code)
+    visible: list[str] = []
+    seen: set[str] = set()
+    for raw_name in source_names or []:
+        display_name = _workbook_display_name(raw_name)
+        source_key = _source_name_key(display_name, entry.group_code)
+        if not display_name or not source_key or source_key in seen:
+            continue
+        if journal_key and (
+            source_key.startswith(journal_key)
+            or journal_key.startswith(source_key)
+            or len(set(re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ]{4,}", source_key)) & set(re.findall(r"[0-9A-Za-zА-Яа-яІіЇїЄєҐґ]{4,}", journal_key))) >= 3
+        ):
+            continue
+        visible.append(display_name)
+        seen.add(source_key)
+    return visible
+
+
+def _clear_repeated_contract_numbers(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        contract = _norm(row.get("№ договору") or row.get("Номер в журналі З-СНН"))
+        if contract:
+            counts[contract.casefold()] = counts.get(contract.casefold(), 0) + 1
+    repeated = {contract for contract, count in counts.items() if count > 1}
+    if not repeated:
+        return rows
+    cleaned_rows: list[dict[str, Any]] = []
+    for row in rows:
+        cleaned = dict(row)
+        contract = _norm(cleaned.get("№ договору") or cleaned.get("Номер в журналі З-СНН"))
+        if contract.casefold() in repeated:
+            cleaned["№ договору"] = None
+            cleaned["Номер в журналі З-СНН"] = None
+        cleaned_rows.append(cleaned)
+    return cleaned_rows
+
+
+def _expected_trainee_count_from_message(message: str | None) -> int | None:
+    match = re.search(r"слухачів із журналу:\s*(\d+)", message or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _entry_needs_trainee_reimport(entry: JournalMonitorEntry) -> bool:
+    expected_count = _expected_trainee_count_from_message(entry.trainees_message)
+    return bool(
+        entry.trainees_status == "processed"
+        and expected_count is not None
+        and expected_count > int(entry.trainee_count or 0)
+    )
 
 
 def _decode_service_account_json(raw_json: str | None = None) -> dict[str, Any]:
@@ -785,6 +849,7 @@ def process_journal_trainees_entry(
         message = no_data_messages[0] if no_data_messages else "На аркуші «ЗВ» не знайдено рядків зі слухачами"
         raise JournalNoDataError(message)
 
+    combined_data = _clear_repeated_contract_numbers(combined_data)
     import_result = try_import_trainees(
         db,
         {
@@ -926,7 +991,9 @@ def process_journal_trainees_for_section(
             break
         if not entry.group_code:
             continue
-        if entry.trainees_status in {"processed", "no_data"}:
+        if entry.trainees_status == "processed" and not _entry_needs_trainee_reimport(entry):
+            continue
+        if entry.trainees_status == "no_data":
             continue
         if entry.trainees_status == "failed" and not retry_failed:
             continue
@@ -1135,11 +1202,11 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "workload_processed_at": entry.workload_processed_at,
         "workload_year": entry.workload_year,
         "workload_hours": entry.workload_hours,
-        "workload_source_names": entry.workload_source_names or [],
+        "workload_source_names": _visible_source_names(entry, entry.workload_source_names),
         "trainees_status": entry.trainees_status,
         "trainees_message": entry.trainees_message,
         "trainees_processed_at": entry.trainees_processed_at,
-        "trainees_source_names": entry.trainees_source_names or [],
+        "trainees_source_names": _visible_source_names(entry, entry.trainees_source_names),
         "drive_modified_at": entry.drive_modified_at,
         "last_seen_at": entry.last_seen_at,
     }
@@ -1356,9 +1423,9 @@ def collect_export_rows(
             "Статус опрацювання": format_processing_status(entry.processing_status),
             "Статус педнавантаження": format_workload_status(entry.workload_status),
             "Годин із журналу": entry.workload_hours,
-            "Файли журналів": "; ".join(entry.workload_source_names or []),
+            "Файли журналів": "; ".join(_visible_source_names(entry, entry.workload_source_names)),
             "Статус слухачів": format_trainees_status(entry.trainees_status),
-            "Файли ЗВ": "; ".join(entry.trainees_source_names or []),
+            "Файли ЗВ": "; ".join(_visible_source_names(entry, entry.trainees_source_names)),
             "Рік педнавантаження": entry.workload_year or "",
             "Повідомлення педнавантаження": entry.workload_message or "",
             "Повідомлення слухачів": entry.trainees_message or "",

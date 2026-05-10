@@ -245,6 +245,131 @@ def test_journal_worker_imports_trainees_from_zv_sheet_and_updates_group_status(
     assert cipher.decrypt(trainees[1].phone_encrypted) == "+380501112233"
 
 
+def test_journal_trainees_import_keeps_all_rows_with_shared_group_contract(
+    db_session,
+    monkeypatch,
+):
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=1,
+        branch_id="main",
+        drive_file_id="drive-1-26",
+        drive_url="https://drive.google.com/drive/folders/drive-1-26",
+        journal_name="1-26 Організація трудових відносин",
+        group_code="1-26",
+    )
+    db_session.add(entry)
+    db_session.flush()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "shared-contract-zv", "name": "1-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "1(З-СНН) від 02.01.2026", "Петренко Іван Іванович", "ч", "01.02.1990", "", "м. Львів", ""),
+                (2, "1(З-СНН) від 02.01.2026", "Коваль Олена Петрівна", "ж", "03.04.1992", "", "м. Київ", ""),
+                (3, "1(З-СНН) від 02.01.2026", "Шевченко Марія Іванівна", "ж", "05.06.1994", "", "м. Одеса", ""),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_journal_trainees_entry(db_session, entry)
+
+    assert result["entries"] == 3
+    assert result["import_result"]["inserted"] == 3
+    assert db_session.query(Trainee).filter(Trainee.group_code == "1-26", Trainee.is_deleted.is_(False)).count() == 3
+
+
+def test_journal_response_hides_redundant_workbook_names_but_keeps_distinct_files():
+    redundant_entry = journal_monitor.JournalMonitorEntry(
+        id=1,
+        section_id=1,
+        branch_id="main",
+        drive_file_id="drive-1-26",
+        journal_name="1-26 Організація трудових відносин в умовах воєнного стану",
+        group_code="1-26",
+        workload_source_names=[
+            '"1-26 Організація трудових відносин в умовах воєнного стану правові аспекти"',
+            "Теорія",
+        ],
+    )
+
+    payload = journal_monitor.entry_to_response_payload(redundant_entry)
+
+    assert payload["workload_source_names"] == ["Теорія"]
+
+
+def test_background_tick_reprocesses_processed_trainees_when_import_count_is_too_low(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "shared-contract-zv", "name": "1-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "1(З-СНН) від 02.01.2026", "Петренко Іван Іванович", "ч", "01.02.1990", "", "м. Львів", ""),
+                (2, "1(З-СНН) від 02.01.2026", "Коваль Олена Петрівна", "ж", "03.04.1992", "", "м. Київ", ""),
+                (3, "1(З-СНН) від 02.01.2026", "Шевченко Марія Іванівна", "ж", "05.06.1994", "", "м. Одеса", ""),
+            ]
+        ),
+        raising=False,
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    entry_id = sync_response.json()["entries"][0]["id"]
+    db_session.add(Trainee(branch_id="main", first_name="Іван Іванович", last_name="Петренко", group_code="1-26"))
+    entry = db_session.get(journal_monitor.JournalMonitorEntry, entry_id)
+    entry.trainees_status = "processed"
+    entry.trainees_message = "Додано/оновлено слухачів із журналу: 3"
+    entry.trainee_count = 1
+    db_session.add(entry)
+    db_session.commit()
+
+    tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        headers=auth_headers,
+    )
+
+    assert tick_response.status_code == 200
+    entry_payload = tick_response.json()["entries"][0]
+    assert entry_payload["trainees_status"] == "processed"
+    assert entry_payload["trainee_count"] == 3
+
+
 def test_journal_sync_refreshes_folders_without_inline_processing(client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
