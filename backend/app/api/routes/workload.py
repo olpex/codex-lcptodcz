@@ -9,12 +9,22 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from app.api.deps import CurrentUser, DbSession, require_roles
-from app.models import RoleName, ScheduleSlot, Teacher
+from app.models import JournalWorkloadEntry, RoleName, ScheduleSlot, Teacher
 from app.schemas.api import TeacherMergeRequest, TeacherMergeResponse, WorkloadResponse
 from app.services.audit import write_audit
 from app.services.import_export import collect_teacher_workload_summary
 
 router = APIRouter()
+
+
+def _merge_pages(left: str | None, right: str | None) -> str | None:
+    values: list[str] = []
+    for value in (left, right):
+        for part in str(value or "").split(";"):
+            item = part.strip()
+            if item and item not in values:
+                values.append(item)
+    return "; ".join(values) if values else None
 
 
 @router.get("", response_model=list[WorkloadResponse])
@@ -158,6 +168,34 @@ def merge_teachers(
         .filter(ScheduleSlot.teacher_id.in_(source_ids))
         .update({ScheduleSlot.teacher_id: target.id}, synchronize_session=False)
     )
+    source_workload_entries = (
+        db.query(JournalWorkloadEntry)
+        .filter(
+            JournalWorkloadEntry.branch_id == current_user.branch_id,
+            JournalWorkloadEntry.teacher_id.in_(source_ids),
+        )
+        .all()
+    )
+    for entry in source_workload_entries:
+        existing = (
+            db.query(JournalWorkloadEntry)
+            .filter(
+                JournalWorkloadEntry.branch_id == current_user.branch_id,
+                JournalWorkloadEntry.journal_monitor_entry_id == entry.journal_monitor_entry_id,
+                JournalWorkloadEntry.teacher_id == target.id,
+                JournalWorkloadEntry.subject_name == entry.subject_name,
+            )
+            .first()
+        )
+        if existing:
+            existing.hours = float(existing.hours or 0) + float(entry.hours or 0)
+            existing.pages = _merge_pages(existing.pages, entry.pages)
+            db.add(existing)
+            db.delete(entry)
+        else:
+            entry.teacher_id = target.id
+            db.add(entry)
+
     target.annual_load_hours = float(target.annual_load_hours or 0) + sum(float(source.annual_load_hours or 0) for source in sources)
     if not target.hourly_rate:
         target.hourly_rate = max(float(source.hourly_rate or 0) for source in sources + [target])
