@@ -38,6 +38,7 @@ EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 JOURNAL_WORKLOAD_START_YEAR = 2026
 JOURNAL_MONITOR_MESSAGE_LIMIT = 500
 GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 8
+SUBJECTLESS_WORKLOAD_SUBJECT_NAME = "Без назви предмета"
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -830,7 +831,7 @@ def _find_disciplines_rows(workbook) -> list[list[Any]]:
             subject_candidate = _find_header_column(headers, ("дисципл", "предмет", "назва"), ("стор", "год", "виклада", "піб"))
             hours_candidate = _find_header_column(headers, ("год", "кількість годин"))
             teacher_candidate = _find_header_column(headers, ("виклада", "піб", "прізвищ"))
-            if subject_candidate is not None and hours_candidate is not None and teacher_candidate is not None:
+            if hours_candidate is not None and teacher_candidate is not None:
                 return rows
     raise JournalNoDataError("У файлі журналу не знайдено аркуш «Дисципліни»")
 
@@ -903,7 +904,7 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
         subject_candidate = _find_header_column(headers, ("дисципл", "предмет", "назва"), ("стор", "год", "виклада", "піб"))
         hours_candidate = _find_header_column(headers, ("год", "кількість годин"))
         teacher_candidate = _find_header_column(headers, ("виклада", "піб", "прізвищ"))
-        if subject_candidate is not None and hours_candidate is not None and teacher_candidate is not None:
+        if hours_candidate is not None and teacher_candidate is not None:
             header_index = index
             subject_col = subject_candidate
             hours_col = hours_candidate
@@ -911,8 +912,8 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
             teacher_col = teacher_candidate
             break
 
-    if header_index < 0 or subject_col is None or hours_col is None or teacher_col is None:
-        raise JournalNoDataError("На аркуші «Дисципліни» не знайдено колонки дисципліни, годин і викладача")
+    if header_index < 0 or hours_col is None or teacher_col is None:
+        raise JournalNoDataError("На аркуші «Дисципліни» не знайдено колонки годин і викладача")
 
     parsed: dict[tuple[str, str], dict[str, Any]] = {}
     total_hours = 0.0
@@ -921,14 +922,18 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
         row_text = " ".join(_norm(value) for value in raw_row)
         if _is_total_hours_row(row_text):
             continue
-        subject_name = _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
+        subject_name = (
+            _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
+            if subject_col is not None
+            else ""
+        ) or SUBJECTLESS_WORKLOAD_SUBJECT_NAME
         teacher_cell = _norm(raw_row[teacher_col] if teacher_col < len(raw_row) else "")
         hours = _parse_hours(raw_row[hours_col] if hours_col < len(raw_row) else "")
         pages = _norm(raw_row[pages_col] if pages_col is not None and pages_col < len(raw_row) else "")
         if hours <= 0:
             continue
         total_hours = round(total_hours + hours, 2)
-        if not subject_name or not teacher_cell:
+        if not teacher_cell:
             incomplete_hours = round(incomplete_hours + hours, 2)
             continue
         for teacher_name in _split_teacher_cell(teacher_cell):
@@ -946,7 +951,7 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
 
     if incomplete_hours > 0:
         raise JournalNoDataError(
-            "На аркуші «Дисципліни» є години, але відсутні назви предметів або ПІБ викладачів",
+            "На аркуші «Дисципліни» є години, але відсутні ПІБ викладачів",
             workload_hours=total_hours,
         )
 

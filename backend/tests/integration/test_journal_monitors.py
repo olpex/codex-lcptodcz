@@ -63,6 +63,18 @@ def _journal_workbook_with_total_row_bytes(rows: list[tuple[str, float, str, str
     return stream.getvalue()
 
 
+def _journal_workbook_without_subject_column_bytes(rows: list[tuple[float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["Кількість годин", "Сторінки", "Прізвище, ім'я, по батькові викладача"])
+    for row in rows:
+        sheet.append(list(row))
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, str, str]]) -> bytes:
     workbook = Workbook()
     workbook.active.title = "Дисципліни"
@@ -956,7 +968,7 @@ def test_journal_workload_no_data_clears_previously_imported_hours(db_session, m
     assert summary[teacher.id]["total_hours"] == 0
 
 
-def test_journal_workload_no_data_keeps_visible_hours_when_subject_or_teacher_missing(db_session, monkeypatch):
+def test_journal_workload_processes_hours_and_teacher_when_subject_names_are_blank(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
         name="Journals 2026",
@@ -982,14 +994,110 @@ def test_journal_workload_no_data_keeps_visible_hours_when_subject_or_teacher_mi
         "download_drive_file_bytes",
         lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
             [
-                ("", 4, "3", ""),
-                ("", 5, "5", ""),
-                ("", 5, "7", ""),
-                ("", 5, "9", ""),
-                ("", 5, "11", ""),
-                ("", 2, "13", ""),
-                ("", 2, "15", ""),
-                ("", 2, "19", ""),
+                ("", 4, "3", "Паращук Олег Леонідович"),
+                ("", 5, "5", "Паращук Олег Леонідович"),
+                ("", 5, "7", "Паращук Олег Леонідович"),
+                ("", 5, "9", "Паращук Олег Леонідович"),
+                ("", 5, "11", "Паращук Олег Леонідович"),
+                ("", 2, "13", "Паращук Олег Леонідович"),
+                ("", 2, "15", "Паращук Олег Леонідович"),
+                ("", 2, "19", "Паращук Олег Леонідович"),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 1, "failed": 0, "skipped_year": 0}
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 30
+    workload_rows = db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).all()
+    assert [(row.subject_name, row.hours) for row in workload_rows] == [("Без назви предмета", 30)]
+    summary = collect_teacher_workload_summary(db_session, "main")
+    assert [(row["teacher_name"], row["total_hours"]) for row in summary] == [("Паращук Олег Леонідович", 30)]
+
+
+def test_journal_workload_processes_hours_and_teacher_when_subject_column_is_missing(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        workload_status="pending",
+        workload_year=2026,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_without_subject_column_bytes(
+            [
+                (12, "3-8", "Коваль Олена Петрівна"),
+                (18, "9-19", "Коваль Олена Петрівна"),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 1, "failed": 0, "skipped_year": 0}
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 30
+    workload_rows = db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).all()
+    assert [(row.subject_name, row.hours) for row in workload_rows] == [("Без назви предмета", 30)]
+
+
+def test_journal_workload_no_data_keeps_visible_hours_when_teacher_missing(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        workload_status="pending",
+        workload_year=2026,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [
+                ("Охорона праці", 4, "3", ""),
+                ("Роль AI у сучасному ринку праці", 5, "5", ""),
+                ("Практичне використання AI у повсякденній роботі", 5, "7", ""),
+                ("AI у творчих і технічних професіях", 5, "9", ""),
+                ("Працевлаштування та кар'єрний ріст завдяки AI", 5, "11", ""),
+                ("Етика, ризики та відповідальне", 2, "13", ""),
+                ("Фінальне тестування", 2, "15", ""),
+                ("Підсумкове заняття", 2, "19", ""),
             ]
         ),
         raising=False,
@@ -1002,7 +1110,7 @@ def test_journal_workload_no_data_keeps_visible_hours_when_subject_or_teacher_mi
     assert result == {"processed": 0, "failed": 1, "skipped_year": 0}
     assert entry.workload_status == "no_data"
     assert entry.workload_hours == 30
-    assert "відсутні" in (entry.workload_message or "")
+    assert "ПІБ викладачів" in (entry.workload_message or "")
     assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
     assert collect_teacher_workload_summary(db_session, "main") == []
 
