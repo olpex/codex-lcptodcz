@@ -32,6 +32,10 @@ const section = {
       trainee_count: 0,
       workload_status: "processed",
       workload_hours: 12,
+      workload_teachers: [
+        { teacher_id: 11, teacher_name: "Брикін В. Є.", hours: 8 },
+        { teacher_id: 12, teacher_name: "Старожук Л. В.", hours: 4 }
+      ],
       workload_source_names: ["Педнавантаження"],
       matched_group_id: null
     },
@@ -50,6 +54,7 @@ const section = {
       trainee_count: 0,
       workload_status: "pending",
       workload_hours: 0,
+      workload_teachers: [],
       workload_source_names: [],
       matched_group_id: 100
     },
@@ -68,6 +73,7 @@ const section = {
       trainee_count: 24,
       workload_status: "processed",
       workload_hours: 30,
+      workload_teachers: [{ teacher_id: 13, teacher_name: "Паращук О. Л.", hours: 30 }],
       workload_source_names: ["Педнавантаження"],
       matched_group_id: 2
     },
@@ -86,6 +92,7 @@ const section = {
       trainee_count: 22,
       workload_status: "processed",
       workload_hours: 24,
+      workload_teachers: [{ teacher_id: 14, teacher_name: "Коваль О. П.", hours: 24 }],
       workload_source_names: ["Педнавантаження"],
       matched_group_id: 10
     }
@@ -129,6 +136,7 @@ const noDataSection = {
       trainees_message: "Списку слухачів немає",
       workload_status: "no_data",
       workload_hours: 0,
+      workload_teachers: [],
       workload_message: "Педнавантаження відсутнє",
       workload_source_names: [],
       matched_group_id: null
@@ -300,6 +308,18 @@ test("journal monitor shows extracted hours when workload details are incomplete
   const row = page.locator("#journal-monitor-entries tbody tr", { hasText: "85-26" });
   await expect(row.locator("td").nth(4).getByText("Н/даних", { exact: true })).toBeVisible();
   await expect(row.locator("td").nth(5)).toHaveText("30");
+});
+
+test("journal monitor workload status title lists teachers and course hours", async ({ page }) => {
+  await loginAndMockJournals(page);
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+
+  const row = page.locator("#journal-monitor-entries tbody tr", { hasText: "1-26" });
+  const badge = row.locator("td").nth(4).getByText("Додано", { exact: true });
+
+  await expect(badge).toHaveAttribute("title", "Брикін В. Є. (8 год)\nСтарожук Л. В. (4 год)");
 });
 
 test("journal monitor uses a single wide detail block with section metadata and status percentages", async ({ page }) => {

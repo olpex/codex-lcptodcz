@@ -468,6 +468,12 @@ class JournalMonitorEntryBulkDeleteResponse(BaseModel):
     hidden_group_count: int
 
 
+class JournalWorkloadTeacherResponse(BaseModel):
+    teacher_id: int
+    teacher_name: str
+    hours: float
+
+
 class JournalMonitorEntryResponse(BaseModel):
     id: int
     drive_file_id: str
@@ -486,6 +492,7 @@ class JournalMonitorEntryResponse(BaseModel):
     workload_processed_at: datetime | None = None
     workload_year: int | None = None
     workload_hours: float = 0.0
+    workload_teachers: list[JournalWorkloadTeacherResponse] = Field(default_factory=list)
     workload_source_names: list[str] = Field(default_factory=list)
     trainees_status: str = "pending"
     trainees_message: str | None = None

@@ -637,6 +637,47 @@ def test_journal_response_hides_source_names_that_repeat_journal_title_variants(
     assert long_title_payload["workload_source_names"] == []
 
 
+def test_journal_response_includes_processed_workload_teachers_for_status_tooltip():
+    first_teacher = Teacher(
+        id=11,
+        branch_id="main",
+        last_name="Брикін",
+        first_name="Віктор Євгенович",
+        hourly_rate=0,
+        is_active=True,
+    )
+    second_teacher = Teacher(
+        id=12,
+        branch_id="main",
+        last_name="Старожук",
+        first_name="Людмила Василівна",
+        hourly_rate=0,
+        is_active=True,
+    )
+    entry = journal_monitor.JournalMonitorEntry(
+        id=1,
+        section_id=1,
+        branch_id="main",
+        drive_file_id="drive-82-26",
+        journal_name="82-26 Журнал",
+        group_code="82-26",
+        workload_status="processed",
+        workload_hours=14,
+    )
+    entry.workload_entries = [
+        JournalWorkloadEntry(teacher_id=first_teacher.id, teacher=first_teacher, subject_name="Теорія", hours=4),
+        JournalWorkloadEntry(teacher_id=first_teacher.id, teacher=first_teacher, subject_name="Практика", hours=5),
+        JournalWorkloadEntry(teacher_id=second_teacher.id, teacher=second_teacher, subject_name="Практика", hours=5),
+    ]
+
+    payload = journal_monitor.entry_to_response_payload(entry)
+
+    assert payload["workload_teachers"] == [
+        {"teacher_id": 11, "teacher_name": "Брикін В. Є.", "hours": 9},
+        {"teacher_id": 12, "teacher_name": "Старожук Л. В.", "hours": 5},
+    ]
+
+
 def test_background_tick_reprocesses_processed_trainees_when_import_count_is_too_low(
     client,
     auth_headers,

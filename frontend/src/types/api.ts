@@ -201,6 +201,11 @@ export interface JournalMonitorEntry {
   workload_processed_at: string | null;
   workload_year: number | null;
   workload_hours: number;
+  workload_teachers: Array<{
+    teacher_id: number;
+    teacher_name: string;
+    hours: number;
+  }>;
   workload_source_names: string[];
   trainees_status: string;
   trainees_message: string | null;

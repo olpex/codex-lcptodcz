@@ -148,6 +148,21 @@ function formatTraineesStatus(value: string): string {
   return TRAINEES_STATUS_LABELS[value] || value;
 }
 
+function formatWorkloadTeacherHours(value: number): string {
+  return Number(value || 0).toLocaleString("uk-UA", {
+    maximumFractionDigits: 2
+  });
+}
+
+function getWorkloadStatusTitle(row: JournalMonitorEntry): string | undefined {
+  if (row.workload_status === "processed" && row.workload_teachers?.length > 0) {
+    return row.workload_teachers
+      .map((teacher) => `${teacher.teacher_name} (${formatWorkloadTeacherHours(teacher.hours)} год)`)
+      .join("\n");
+  }
+  return row.workload_message || undefined;
+}
+
 function formatPercent(count = 0, total = 0): string {
   if (total <= 0) return "0%";
   return `${Math.round((count / total) * 100)}%`;
@@ -1022,7 +1037,7 @@ export function JournalMonitorsPage() {
                                 "whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold",
                                 WORKLOAD_STATUS_CLASSES[row.workload_status] || WORKLOAD_STATUS_CLASSES.pending
                               )}
-                              title={row.workload_message || undefined}
+                              title={getWorkloadStatusTitle(row)}
                             >
                               {formatWorkloadStatus(row.workload_status)}
                             </span>

@@ -352,6 +352,18 @@ def _split_teacher_name(full_name: str) -> tuple[str, str]:
     return tokens[0], " ".join(tokens[1:])
 
 
+def _short_teacher_display_name(teacher: Teacher | None) -> str:
+    if teacher is None:
+        return "Невідомий викладач"
+    last_name = _norm(teacher.last_name) or "Невідомий"
+    initials = [
+        f"{part[0].upper()}."
+        for part in _norm(teacher.first_name).split(" ")
+        if part
+    ]
+    return f"{last_name} {' '.join(initials)}".strip()
+
+
 def _normalize_teacher_identity_text(value: str | None) -> str:
     return re.sub(r"[^0-9A-Za-zА-Яа-яЇїІіЄєҐґ]", "", value or "").casefold()
 
@@ -1580,6 +1592,23 @@ def section_to_response_payload(section: JournalMonitorSection, include_entries:
     return payload
 
 
+def _entry_workload_teachers(entry: JournalMonitorEntry) -> list[dict[str, Any]]:
+    if entry.workload_status != "processed":
+        return []
+    totals: dict[int, dict[str, Any]] = {}
+    for workload_entry in entry.workload_entries:
+        teacher = workload_entry.teacher
+        teacher_id = int(workload_entry.teacher_id)
+        if teacher_id not in totals:
+            totals[teacher_id] = {
+                "teacher_id": teacher_id,
+                "teacher_name": _short_teacher_display_name(teacher),
+                "hours": 0.0,
+            }
+        totals[teacher_id]["hours"] = round(float(totals[teacher_id]["hours"]) + float(workload_entry.hours or 0.0), 2)
+    return sorted(totals.values(), key=lambda item: str(item["teacher_name"]).casefold())
+
+
 def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
     journal_trainee_count = _entry_journal_trainee_count(entry)
     journal_has_trainees = journal_trainee_count > 0
@@ -1601,6 +1630,7 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "workload_processed_at": entry.workload_processed_at,
         "workload_year": entry.workload_year,
         "workload_hours": entry.workload_hours,
+        "workload_teachers": _entry_workload_teachers(entry),
         "workload_source_names": _visible_source_names(entry, entry.workload_source_names),
         "trainees_status": entry.trainees_status,
         "trainees_message": entry.trainees_message,
