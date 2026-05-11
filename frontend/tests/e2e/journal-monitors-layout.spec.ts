@@ -109,10 +109,38 @@ const archiveSection = {
   entries: []
 };
 
+const noDataSection = {
+  ...section,
+  entries: [
+    {
+      id: 85,
+      section_id: 1,
+      drive_folder_id: "drive-85",
+      drive_url: "https://drive.google.com/drive/folders/drive-85",
+      journal_name: "85-26 Штучний інтелект: розвиток кар'єри та професійне зростання",
+      group_code: "85-26",
+      processing_status: "not_processed",
+      has_schedule: false,
+      has_trainees: false,
+      schedule_lessons: 0,
+      schedule_hours: 0,
+      trainee_count: 0,
+      trainees_status: "no_data",
+      trainees_message: "Списку слухачів немає",
+      workload_status: "no_data",
+      workload_hours: 0,
+      workload_message: "Педнавантаження відсутнє",
+      workload_source_names: [],
+      matched_group_id: null
+    }
+  ]
+};
+
 async function loginAndMockJournals(
   page: Page,
   options: {
     sections?: unknown[];
+    detailSection?: typeof section;
     onExport?: (url: URL) => void;
     onProcessingStart?: (url: URL) => void;
     onReprocessAll?: (url: URL) => void;
@@ -131,6 +159,7 @@ async function loginAndMockJournals(
   });
 
   const sections = options.sections || [{ ...section, entries: [] }];
+  const detailSection = options.detailSection || section;
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -215,7 +244,7 @@ async function loginAndMockJournals(
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(section)
+        body: JSON.stringify(detailSection)
       });
     }
 
@@ -234,6 +263,27 @@ async function loginAndMockJournals(
     });
   });
 }
+
+test("journal monitor no-data cells use the same badge styling", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...noDataSection, entries: [] }],
+    detailSection: noDataSection
+  });
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+
+  const noDataBadges = page.locator("#journal-monitor-entries tbody tr", { hasText: "85-26" }).getByText("Н/даних", { exact: true });
+  await expect(noDataBadges).toHaveCount(4);
+
+  const classNames = await noDataBadges.evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute("class") || "")
+  );
+  expect(new Set(classNames).size).toBe(1);
+  expect(classNames[0]).toContain("bg-rose-100");
+  expect(classNames[0]).toContain("rounded-full");
+  expect(classNames[0]).toContain("text-xs");
+});
 
 test("journal monitor uses a single wide detail block with section metadata and status percentages", async ({ page }) => {
   await loginAndMockJournals(page);

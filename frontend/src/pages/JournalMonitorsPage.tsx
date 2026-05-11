@@ -67,6 +67,8 @@ const TRAINEES_STATUS_CLASSES: Record<string, string> = {
   no_data: "text-rose-700"
 };
 
+const NO_DATA_BADGE_CLASSES = "whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold bg-rose-100 text-rose-800";
+
 const PROGRESS_CARDS = [
   {
     key: "complete",
@@ -643,10 +645,17 @@ export function JournalMonitorsPage() {
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
 
+  const renderNoDataBadge = (message?: string | null) => (
+    <span className={NO_DATA_BADGE_CLASSES} title={message || undefined}>Н/даних</span>
+  );
+
   const renderTraineesState = (row: JournalMonitorEntry) => {
     const value = row.has_trainees ? "processed" : row.trainees_status || "pending";
     if (value === "pending") {
       return <span className="font-semibold text-slate-400">Ні</span>;
+    }
+    if (value === "no_data") {
+      return renderNoDataBadge(row.trainees_message);
     }
     return (
       <span
@@ -660,14 +669,14 @@ export function JournalMonitorsPage() {
 
   const renderWorkloadHours = (row: JournalMonitorEntry) => {
     if (row.workload_status === "no_data") {
-      return <span className="font-semibold text-rose-700" title={row.workload_message || undefined}>Н/даних</span>;
+      return renderNoDataBadge(row.workload_message);
     }
     return row.workload_hours || 0;
   };
 
   const renderTraineeCount = (row: JournalMonitorEntry) => {
     if (row.trainees_status === "no_data") {
-      return <span className="font-semibold text-rose-700" title={row.trainees_message || undefined}>Н/даних</span>;
+      return renderNoDataBadge(row.trainees_message);
     }
     return row.trainee_count;
   };
@@ -1004,15 +1013,19 @@ export function JournalMonitorsPage() {
                           </span>
                         </td>
                         <td className="px-3 py-2">
-                          <span
-                            className={clsx(
-                              "whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold",
-                              WORKLOAD_STATUS_CLASSES[row.workload_status] || WORKLOAD_STATUS_CLASSES.pending
-                            )}
-                            title={row.workload_message || undefined}
-                          >
-                            {formatWorkloadStatus(row.workload_status)}
-                          </span>
+                          {row.workload_status === "no_data" ? (
+                            renderNoDataBadge(row.workload_message)
+                          ) : (
+                            <span
+                              className={clsx(
+                                "whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold",
+                                WORKLOAD_STATUS_CLASSES[row.workload_status] || WORKLOAD_STATUS_CLASSES.pending
+                              )}
+                              title={row.workload_message || undefined}
+                            >
+                              {formatWorkloadStatus(row.workload_status)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2">{renderWorkloadHours(row)}</td>
                         <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
