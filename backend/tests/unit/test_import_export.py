@@ -414,7 +414,18 @@ def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entr
         workload_year=2026,
         workload_hours=12,
     )
-    db_session.add_all([processed, pending])
+    no_data = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-12-26",
+        journal_name="12-26 Журнал",
+        group_code="12-26",
+        workload_status="no_data",
+        workload_year=2026,
+        workload_hours=30,
+        workload_source_names=["12-26.xlsx"],
+    )
+    db_session.add_all([processed, pending, no_data])
     db_session.flush()
     db_session.add_all(
         [
@@ -446,8 +457,11 @@ def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entr
     }
     db_session.refresh(processed)
     db_session.refresh(pending)
+    db_session.refresh(no_data)
     assert processed.workload_hours == 14
     assert pending.workload_hours == 0
+    assert no_data.workload_hours == 30
+    assert no_data.workload_source_names == ["12-26.xlsx"]
     rows = collect_teacher_workload_summary(db_session, "main")
     assert rows[0]["total_hours"] == 14
     assert rows[0]["remaining_hours"] == 86

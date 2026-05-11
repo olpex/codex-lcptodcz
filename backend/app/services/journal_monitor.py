@@ -42,7 +42,9 @@ _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_a
 
 
 class JournalNoDataError(ValueError):
-    pass
+    def __init__(self, message: str, *, workload_hours: float | None = None):
+        super().__init__(message)
+        self.workload_hours = round(float(workload_hours), 2) if workload_hours is not None else None
 
 
 class JournalMissingWorkbookError(JournalNoDataError):
@@ -902,12 +904,18 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
         raise JournalNoDataError("На аркуші «Дисципліни» не знайдено колонки дисципліни, годин і викладача")
 
     parsed: dict[tuple[str, str], dict[str, Any]] = {}
+    total_hours = 0.0
+    incomplete_hours = 0.0
     for raw_row in rows[header_index + 1 :]:
         subject_name = _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
         teacher_cell = _norm(raw_row[teacher_col] if teacher_col < len(raw_row) else "")
         hours = _parse_hours(raw_row[hours_col] if hours_col < len(raw_row) else "")
         pages = _norm(raw_row[pages_col] if pages_col is not None and pages_col < len(raw_row) else "")
-        if not subject_name or not teacher_cell or hours <= 0:
+        if hours <= 0:
+            continue
+        total_hours = round(total_hours + hours, 2)
+        if not subject_name or not teacher_cell:
+            incomplete_hours = round(incomplete_hours + hours, 2)
             continue
         for teacher_name in _split_teacher_cell(teacher_cell):
             key = (subject_name.casefold(), teacher_name.casefold())
@@ -921,6 +929,12 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
             parsed[key]["hours"] = round(float(parsed[key]["hours"]) + hours, 2)
             if pages and not parsed[key].get("pages"):
                 parsed[key]["pages"] = pages[:255]
+
+    if incomplete_hours > 0:
+        raise JournalNoDataError(
+            "На аркуші «Дисципліни» є години, але відсутні назви предметів або ПІБ викладачів",
+            workload_hours=total_hours,
+        )
 
     return list(parsed.values())
 
@@ -1081,6 +1095,7 @@ def process_journal_workload_entry(
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     no_data_messages: list[str] = []
+    no_data_hours = 0.0
     for workbook_file in sorted(files, key=lambda item: str(item.get("name") or "").casefold()):
         try:
             payload = workbook_downloader(
@@ -1091,8 +1106,18 @@ def process_journal_workload_entry(
             rows.extend(parse_journal_disciplines_xlsx(payload))
         except JournalNoDataError as exc:
             no_data_messages.append(str(exc))
+            if exc.workload_hours is not None:
+                no_data_hours = round(no_data_hours + exc.workload_hours, 2)
         except Exception as exc:
             errors.append(f"{workbook_file.get('name') or workbook_file.get('id')}: {exc}")
+    if no_data_hours > 0:
+        detail = "; ".join(no_data_messages[:3])
+        valid_hours = round(sum(float(row["hours"] or 0.0) for row in rows), 2)
+        total_hours = round(valid_hours + no_data_hours, 2)
+        raise JournalNoDataError(
+            f"Педнавантаження не імпортовано через неповні дані на аркуші «Дисципліни»: {detail}",
+            workload_hours=total_hours,
+        )
     if not rows:
         if errors and not no_data_messages:
             raise ValueError("; ".join(errors[:3]))
@@ -1292,7 +1317,7 @@ def process_next_journal_workload(
             entry.workload_status = "no_data"
             entry.workload_message = str(exc)[:500]
             entry.workload_processed_at = datetime.now(timezone.utc)
-            entry.workload_hours = 0.0
+            entry.workload_hours = round(float(exc.workload_hours or 0.0), 2)
             entry.workload_source_names = entry.workload_source_names or []
             db.add(entry)
             failed += 1

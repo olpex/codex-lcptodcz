@@ -669,6 +669,7 @@ export function JournalMonitorsPage() {
 
   const renderWorkloadHours = (row: JournalMonitorEntry) => {
     if (row.workload_status === "no_data") {
+      if (row.workload_hours > 0) return row.workload_hours;
       return renderNoDataBadge(row.workload_message);
     }
     return row.workload_hours || 0;

@@ -942,6 +942,57 @@ def test_journal_workload_no_data_clears_previously_imported_hours(db_session, m
     assert summary[teacher.id]["total_hours"] == 0
 
 
+def test_journal_workload_no_data_keeps_visible_hours_when_subject_or_teacher_missing(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        workload_status="pending",
+        workload_year=2026,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [
+                ("", 4, "3", ""),
+                ("", 5, "5", ""),
+                ("", 5, "7", ""),
+                ("", 5, "9", ""),
+                ("", 5, "11", ""),
+                ("", 2, "13", ""),
+                ("", 2, "15", ""),
+                ("", 2, "19", ""),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 0, "failed": 1, "skipped_year": 0}
+    assert entry.workload_status == "no_data"
+    assert entry.workload_hours == 30
+    assert "відсутні" in (entry.workload_message or "")
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
+    assert collect_teacher_workload_summary(db_session, "main") == []
+
+
 def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teacher_workload(
     client,
     auth_headers,

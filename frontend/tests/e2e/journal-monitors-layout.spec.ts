@@ -285,6 +285,23 @@ test("journal monitor no-data cells use the same badge styling", async ({ page }
   expect(classNames[0]).toContain("text-xs");
 });
 
+test("journal monitor shows extracted hours when workload details are incomplete", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...noDataSection, entries: [] }],
+    detailSection: {
+      ...noDataSection,
+      entries: noDataSection.entries.map((entry) => ({ ...entry, workload_hours: 30 }))
+    }
+  });
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: /Список журналів/ }).click();
+
+  const row = page.locator("#journal-monitor-entries tbody tr", { hasText: "85-26" });
+  await expect(row.locator("td").nth(4).getByText("Н/даних", { exact: true })).toBeVisible();
+  await expect(row.locator("td").nth(5)).toHaveText("30");
+});
+
 test("journal monitor uses a single wide detail block with section metadata and status percentages", async ({ page }) => {
   await loginAndMockJournals(page);
 

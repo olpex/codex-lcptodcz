@@ -1131,6 +1131,8 @@ def reconcile_teacher_workload_sources(db: Session, branch_id: str) -> dict:
                 db.add(entry)
                 corrected_entries += 1
             continue
+        if entry.workload_status == "no_data":
+            continue
         if float(entry.workload_hours or 0.0) != 0.0 or entry.workload_source_names:
             entry.workload_hours = 0.0
             entry.workload_source_names = None
