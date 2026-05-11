@@ -45,6 +45,10 @@ class JournalNoDataError(ValueError):
     pass
 
 
+class JournalMissingWorkbookError(JournalNoDataError):
+    pass
+
+
 def normalize_group_code(value: str | None) -> str:
     raw = (value or "").strip()
     raw = raw.replace("–", "-").replace("—", "-")
@@ -206,6 +210,22 @@ def delete_workload_for_journal_entries(db: Session, entries: list[JournalMonito
     return int(deleted or 0)
 
 
+def remove_journal_entries_from_project(db: Session, entries: list[JournalMonitorEntry]) -> dict[str, int]:
+    entries = [entry for entry in entries if entry is not None]
+    hidden_groups = hide_groups_for_deleted_journal_entries(db, entries)
+    archived_trainees = archive_trainees_for_deleted_journal_entries(db, entries)
+    deleted_workload = delete_workload_for_journal_entries(db, entries)
+    for entry in entries:
+        db.delete(entry)
+    db.flush()
+    return {
+        "entries": len(entries),
+        "hidden_groups": hidden_groups,
+        "archived_trainees": archived_trainees,
+        "deleted_workload": deleted_workload,
+    }
+
+
 def _requeue_entry_after_drive_change(db: Session, entry: JournalMonitorEntry) -> None:
     if entry.workload_status != "pending":
         entry.workload_status = "pending"
@@ -236,6 +256,8 @@ def _journal_workbooks_modified_after(
         files = list_drive_journal_workbook_files(entry.drive_file_id, service_account_json=service_account_json)
     except Exception:
         return False
+    if not files:
+        return bool(entry.workload_source_names or entry.trainees_source_names)
     for workbook_file in files:
         modified_at = _as_aware_utc(_parse_datetime(str(workbook_file.get("modifiedTime") or "")))
         if modified_at and modified_at > processed_at:
@@ -593,6 +615,19 @@ def _archive_missing_group_trainees(db: Session, branch_id: str, group_code: str
 def _expected_trainee_count_from_message(message: str | None) -> int | None:
     match = re.search(r"слухачів із журналу:\s*(\d+)", message or "", flags=re.IGNORECASE)
     return int(match.group(1)) if match else None
+
+
+def _entry_journal_trainee_count(entry: JournalMonitorEntry, registry_count: int = 0) -> int:
+    if entry.trainees_status == "no_data":
+        return 0
+    if entry.trainees_status == "processed":
+        expected_count = _expected_trainee_count_from_message(entry.trainees_message)
+        if expected_count is not None:
+            return expected_count
+        return int(entry.trainee_count or registry_count or 0)
+    if entry.trainees_status in {"pending", "failed"}:
+        return 0
+    return int(entry.trainee_count or registry_count or 0)
 
 
 def _entry_needs_trainee_reimport(entry: JournalMonitorEntry) -> bool:
@@ -1031,7 +1066,10 @@ def process_journal_workload_entry(
         workbook_downloader = download_drive_file_bytes
     files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
     if not files:
-        raise ValueError("У папці журналу не знайдено Google Sheet або Excel-файл")
+        entry.workload_source_names = []
+        db.add(entry)
+        db.flush()
+        raise JournalMissingWorkbookError("У папці журналу не знайдено Google Sheet або Excel-файл")
     source_names = [
         display_name
         for display_name in (_workbook_display_name(str(file.get("name") or "")) for file in files)
@@ -1113,7 +1151,10 @@ def process_journal_trainees_entry(
         workbook_downloader = download_drive_file_bytes
     files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
     if not files:
-        raise JournalNoDataError("У папці журналу не знайдено Google Sheet або Excel-файл")
+        entry.trainees_source_names = []
+        db.add(entry)
+        db.flush()
+        raise JournalMissingWorkbookError("У папці журналу не знайдено Google Sheet або Excel-файл")
     source_names = [
         display_name
         for display_name in (_workbook_display_name(str(file.get("name") or "")) for file in files)
@@ -1173,6 +1214,8 @@ def process_journal_trainees_entry(
     if errors:
         entry.trainees_message = f"{entry.trainees_message}; частину файлів пропущено: {'; '.join(errors[:2])}"
     entry.trainees_processed_at = datetime.now(timezone.utc)
+    entry.has_trainees = total_seen > 0
+    entry.trainee_count = total_seen
     db.add(entry)
     db.flush()
     return {"entries": total_seen, "changed": changed_count, "import_result": import_result}
@@ -1238,6 +1281,10 @@ def process_next_journal_workload(
             process_journal_workload_entry(db, entry, service_account_json=section_service_account_json)
             processed += 1
             handled += 1
+        except JournalMissingWorkbookError:
+            remove_journal_entries_from_project(db, [entry])
+            handled += 1
+            continue
         except JournalNoDataError as exc:
             db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
                 synchronize_session=False
@@ -1319,6 +1366,10 @@ def process_journal_trainees_for_section(
             process_journal_trainees_entry(db, entry, service_account_json=section_service_account_json)
             processed += 1
             handled += 1
+        except JournalMissingWorkbookError:
+            remove_journal_entries_from_project(db, [entry])
+            handled += 1
+            continue
         except JournalNoDataError as exc:
             archived_missing = _archive_missing_group_trainees(db, entry.branch_id, entry.group_code, [])
             entry.trainees_status = "no_data"
@@ -1326,6 +1377,8 @@ def process_journal_trainees_for_section(
             entry.trainees_message = f"{str(exc)}{archive_suffix}"[:500]
             entry.trainees_processed_at = datetime.now(timezone.utc)
             entry.trainees_source_names = entry.trainees_source_names or []
+            entry.has_trainees = False
+            entry.trainee_count = 0
             db.add(entry)
             no_data += 1
             handled += 1
@@ -1409,6 +1462,8 @@ def process_journal_monitor_section_step(
                 f"педнавантаження: опрацьовано {workload_result['processed']}, "
                 f"помилок {workload_result['failed']}"
             )
+        db.flush()
+        db.refresh(section)
     if process_trainees:
         trainees_result = process_journal_trainees_for_section(
             db,
@@ -1423,6 +1478,8 @@ def process_journal_monitor_section_step(
                 f"слухачі: опрацьовано {trainees_result['processed']}, "
                 f"н/даних {trainees_result['no_data']}, помилок {trainees_result['failed']}"
             )
+        db.flush()
+        db.refresh(section)
         groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
@@ -1446,14 +1503,16 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
     }
     for entry in entries:
         has_workload = entry.workload_status == "processed"
-        if has_workload and entry.has_trainees and entry.has_schedule:
+        has_journal_trainees = _entry_journal_trainee_count(entry) > 0
+        effective_status = _status(entry.has_schedule, has_journal_trainees, entry.group_code)
+        if has_workload and has_journal_trainees and entry.has_schedule:
             stats["workload_trainees_schedule"] += 1
             continue
-        if has_workload and entry.has_trainees:
+        if has_workload and has_journal_trainees:
             stats["workload_and_trainees"] += 1
             continue
-        if not has_workload and entry.processing_status in stats:
-            stats[entry.processing_status] += 1
+        if not has_workload and effective_status in stats:
+            stats[effective_status] += 1
     return stats
 
 
@@ -1479,6 +1538,8 @@ def section_to_response_payload(section: JournalMonitorSection, include_entries:
 
 
 def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
+    journal_trainee_count = _entry_journal_trainee_count(entry)
+    journal_has_trainees = journal_trainee_count > 0
     return {
         "id": entry.id,
         "drive_file_id": entry.drive_file_id,
@@ -1488,10 +1549,10 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "matched_group_id": entry.matched_group_id,
         "has_group": entry.has_group,
         "has_schedule": entry.has_schedule,
-        "has_trainees": entry.has_trainees,
+        "has_trainees": journal_has_trainees,
         "schedule_lessons": entry.schedule_lessons,
-        "trainee_count": entry.trainee_count,
-        "processing_status": entry.processing_status,
+        "trainee_count": journal_trainee_count,
+        "processing_status": _status(entry.has_schedule, journal_has_trainees, entry.group_code),
         "workload_status": entry.workload_status,
         "workload_message": entry.workload_message,
         "workload_processed_at": entry.workload_processed_at,
@@ -1568,22 +1629,28 @@ def _refresh_entry_project_state(
     entry.matched_group_id = matched_group.id if matched_group else None
     entry.has_group = matched_group is not None
     entry.has_schedule = schedule_lessons > 0
-    entry.has_trainees = trainee_count > 0
+    journal_trainee_count = _entry_journal_trainee_count(entry, trainee_count)
+    entry.has_trainees = journal_trainee_count > 0
     entry.schedule_lessons = schedule_lessons
-    entry.trainee_count = trainee_count
+    entry.trainee_count = journal_trainee_count
     entry.processing_status = _status(entry.has_schedule, entry.has_trainees, entry.group_code)
 
 
 def sync_journal_monitor_section(
     db: Session,
     section: JournalMonitorSection,
-    folder_lister=list_drive_child_folders,
+    folder_lister=None,
+    workbook_lister=None,
     process_workload: bool = True,
     process_trainees: bool = True,
 ) -> JournalMonitorSection:
     now = datetime.now(timezone.utc)
     from app.core.crypto import cipher
 
+    if folder_lister is None:
+        folder_lister = list_drive_child_folders
+    if workbook_lister is None:
+        workbook_lister = list_drive_journal_workbook_files
     section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
     folders = folder_lister(section.folder_id, service_account_json=section_service_account_json)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
@@ -1595,11 +1662,19 @@ def sync_journal_monitor_section(
         name = str(folder.get("name") or "").strip() or drive_id
         if not drive_id:
             continue
+        entry = entries_by_drive_id.get(drive_id)
+        try:
+            workbook_files = workbook_lister(drive_id, service_account_json=section_service_account_json)
+        except Exception:
+            if not entry:
+                continue
+            workbook_files = None
+        if workbook_files is not None and not workbook_files:
+            continue
         seen_drive_ids.add(drive_id)
         group_code = extract_group_code(name)
         next_modified_at = _parse_datetime(folder.get("modified_time"))
 
-        entry = entries_by_drive_id.get(drive_id)
         if not entry:
             entry = JournalMonitorEntry(
                 section_id=section.id,
@@ -1638,11 +1713,7 @@ def sync_journal_monitor_section(
 
     removed_entries = [entry for entry in section.entries if entry.drive_file_id not in seen_drive_ids]
     if removed_entries:
-        hide_groups_for_deleted_journal_entries(db, removed_entries)
-        archive_trainees_for_deleted_journal_entries(db, removed_entries)
-        delete_workload_for_journal_entries(db, removed_entries)
-    for entry in removed_entries:
-        db.delete(entry)
+        remove_journal_entries_from_project(db, removed_entries)
 
     section.last_synced_at = now
     section.last_sync_status = "success"
@@ -1668,7 +1739,7 @@ def process_journal_monitor_background_step(
     target_year: int | None = None,
     sync_before: bool = True,
     workload_limit: int | None = None,
-    trainees_limit: int | None = 1,
+    trainees_limit: int | None = None,
 ) -> dict[str, Any]:
     section_id = section.id
     sync_warning: str | None = None
@@ -1699,6 +1770,8 @@ def process_journal_monitor_background_step(
         target_year=effective_target_year,
         retry_failed=True,
     )
+    db.flush()
+    db.refresh(section)
     trainees_result = process_journal_trainees_for_section(
         db,
         section,
@@ -1706,6 +1779,8 @@ def process_journal_monitor_background_step(
         target_year=effective_target_year,
         retry_failed=True,
     )
+    db.flush()
+    db.refresh(section)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     for entry in section.entries:
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)

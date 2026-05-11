@@ -451,8 +451,8 @@ def background_tick_section_processing(
             folder_lister=list_drive_child_folders,
             target_year=year,
             sync_before=True,
-            workload_limit=3,
-            trainees_limit=3,
+            workload_limit=None,
+            trainees_limit=None,
         )
         db.commit()
     except Exception as exc:
