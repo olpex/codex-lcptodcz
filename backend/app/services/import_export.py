@@ -11,6 +11,7 @@ from docx import Document as DocxDocument
 from fpdf import FPDF
 from fpdf.fonts import FontFace
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from pypdf import PdfReader
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -1428,6 +1429,70 @@ def _save_report_pdf(report_rows: list[dict] | dict[str, list[dict]], report_typ
     pdf.output(str(out_file))
 
 
+def _is_teacher_detailed_workload_sheet(report_type: str, rows: list[dict], request_payload: dict | None) -> bool:
+    return bool(report_type == "teacher_workload" and request_payload and request_payload.get("teacher_ids") and rows and len(rows[0]) >= 8)
+
+
+def _write_teacher_detailed_workload_sheet(sheet: Any, rows: list[dict]) -> None:
+    headers = list(rows[0].keys())
+    teacher_header = headers[1]
+    group_headers = headers[2:5]
+    total_header = headers[5]
+    annual_header = headers[6]
+    remaining_header = headers[7]
+    first_row = rows[0]
+
+    header_fill = PatternFill("solid", fgColor="E8F1F4")
+    subheader_fill = PatternFill("solid", fgColor="F6F8FA")
+    heading_font = Font(bold=True, color="1F3349")
+    value_font = Font(bold=True, color="0F172A")
+    centered = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    summary_headers = [teacher_header, total_header, annual_header, remaining_header]
+    summary_values = [
+        first_row.get(teacher_header),
+        first_row.get(total_header),
+        first_row.get(annual_header),
+        first_row.get(remaining_header),
+    ]
+    for column, header in enumerate(summary_headers, start=2):
+        cell = sheet.cell(row=1, column=column, value=header)
+        cell.font = heading_font
+        cell.fill = header_fill
+        cell.alignment = centered
+    for column, value in enumerate(summary_values, start=2):
+        cell = sheet.cell(row=2, column=column, value=value)
+        cell.font = value_font
+        cell.alignment = centered
+
+    for column, header in enumerate(group_headers, start=1):
+        cell = sheet.cell(row=4, column=column, value=header)
+        cell.font = heading_font
+        cell.fill = subheader_fill
+        cell.alignment = centered
+
+    for row_index, source_row in enumerate(rows, start=5):
+        for column, header in enumerate(group_headers, start=1):
+            cell = sheet.cell(row=row_index, column=column, value=source_row.get(header))
+            cell.alignment = centered if column != 2 else Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    widths = {
+        "A": 14,
+        "B": 42,
+        "C": 14,
+        "D": 18,
+        "E": 18,
+    }
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+
+    sheet.freeze_panes = "A5"
+    sheet.page_setup.orientation = "portrait"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+
+
 def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_type: str, export_format: str, request_payload: dict | None = None) -> tuple[str, DocumentType]:
     out_dir = storage_path()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -1465,7 +1530,9 @@ def save_report_file(report_rows: list[dict] | dict[str, list[dict]], report_typ
                 else:
                     sheet = workbook.create_sheet(title=str(sheet_name)[:31])
                     
-                if rows:
+                if _is_teacher_detailed_workload_sheet(report_type, rows, request_payload):
+                    _write_teacher_detailed_workload_sheet(sheet, rows)
+                elif rows:
                     headers = list(rows[0].keys())
                     sheet.append(headers)
                     for row in rows:

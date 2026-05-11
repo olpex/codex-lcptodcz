@@ -13,6 +13,7 @@ from app.services.import_export import (
     collect_teacher_workload_summary,
     parse_document_content,
     reconcile_teacher_workload_sources,
+    save_report_file,
     try_import_trainees,
 )
 
@@ -301,6 +302,86 @@ def test_teacher_workload_export_uses_card_summary_group_breakdown(db_session):
             "Залишок годин": 168.0,
         },
     ]
+
+
+def test_teacher_workload_xlsx_sheet_moves_teacher_totals_to_top(db_session):
+    teacher = Teacher(
+        branch_id="main",
+        first_name="First Middle",
+        last_name="Teacher",
+        annual_load_hours=180,
+        is_active=True,
+    )
+    first_group = Group(branch_id="main", code="16-26", name="Group 16", status="active")
+    second_group = Group(branch_id="main", code="17-26", name="Group 17", status="active")
+    subject = Subject(branch_id="main", name="Subject", hours_total=20)
+    room = Room(branch_id="main", name="Room", capacity=20)
+    db_session.add_all([teacher, first_group, second_group, subject, room])
+    db_session.flush()
+
+    starts_at = datetime(2026, 2, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=first_group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=2.0,
+                pair_number=1,
+            ),
+            ScheduleSlot(
+                group_id=second_group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at + timedelta(days=1),
+                ends_at=starts_at + timedelta(days=1, minutes=95),
+                academic_hours=6.0,
+                pair_number=2,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    sheets = collect_report_rows(
+        db_session,
+        "teacher_workload",
+        "main",
+        {"teacher_ids": [teacher.id], "start_date": None, "end_date": None},
+    )
+    teacher_rows = next(iter(sheets.values()))
+    headers = list(teacher_rows[0].keys())
+
+    xlsx_path, doc_type = save_report_file(
+        sheets,
+        "teacher_workload",
+        "xlsx",
+        {"teacher_ids": [teacher.id], "start_date": None, "end_date": None},
+    )
+
+    assert doc_type == DocumentType.XLSX
+    workbook = load_workbook(xlsx_path, data_only=True)
+    sheet = workbook[workbook.sheetnames[0]]
+    assert [sheet.cell(1, column).value for column in range(2, 6)] == [
+        headers[1],
+        headers[5],
+        headers[6],
+        headers[7],
+    ]
+    assert [sheet.cell(2, column).value for column in range(2, 6)] == [
+        teacher_rows[0][headers[1]],
+        8.0,
+        180.0,
+        172.0,
+    ]
+    assert [sheet.cell(4, column).value for column in range(1, 4)] == headers[2:5]
+    assert [sheet.cell(5, column).value for column in range(1, 4)] == ["16-26", "Group 16", 2.0]
+    assert [sheet.cell(6, column).value for column in range(1, 4)] == ["17-26", "Group 17", 6.0]
+    assert sheet["A1"].value is None
+    assert sheet["A4"].value != headers[0]
 
 
 def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entry_hours(db_session):
