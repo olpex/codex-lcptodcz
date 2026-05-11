@@ -917,45 +917,31 @@ def collect_teacher_detailed_workload(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> dict[str, list[dict]]:
-    teachers = (
-        db.query(Teacher)
-        .filter(Teacher.branch_id == branch_id, Teacher.id.in_(teacher_ids))
-        .all()
-    )
-    
-    teacher_map = {t.id: f"{t.last_name} {t.first_name}" for t in teachers}
-    result: dict[str, list[dict]] = {name: [] for name in teacher_map.values()}
-    
-    query = (
-        db.query(ScheduleSlot, Group)
-        .join(Group, Group.id == ScheduleSlot.group_id)
-        .filter(Group.branch_id == branch_id, ScheduleSlot.teacher_id.in_(teacher_ids))
-    )
-    if date_from:
-        query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
-    if date_to:
-        query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, datetime.max.time(), tzinfo=timezone.utc))
-        
-    query = query.order_by(ScheduleSlot.starts_at)
-    slots = query.all()
+    selected_teacher_ids = {int(teacher_id) for teacher_id in teacher_ids}
+    summary_rows = collect_teacher_workload_summary(db, branch_id, date_from=date_from, date_to=date_to)
+    result: dict[str, list[dict]] = {}
 
-    for slot, group in slots:
-        teacher_name = teacher_map.get(slot.teacher_id)
-        if not teacher_name:
+    for row in summary_rows:
+        if row["teacher_id"] not in selected_teacher_ids:
             continue
-            
-        academic_hours = slot.academic_hours
-        if academic_hours is None:
-            academic_hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
-            
-        result[teacher_name].append({
-            "Номер групи": group.code,
-            "Назва групи": group.name or "",
-            "Дата (день)": slot.starts_at.astimezone().strftime("%Y-%m-%d"),
-            "Пара": slot.pair_number if slot.pair_number is not None else "",
-            "Кількість годин": round(float(academic_hours), 2)
-        })
-        
+
+        groups = row.get("groups") or [{"group_code": "", "group_name": "", "hours": 0.0}]
+        teacher_rows: list[dict] = []
+        for group in groups:
+            teacher_rows.append(
+                {
+                    "Номер за порядком": row["row_number"],
+                    "Прізвище, ім'я та по батькові викладача": row["teacher_name"],
+                    "Групи": group.get("group_code", ""),
+                    "Назва групи": group.get("group_name", ""),
+                    "Годин у групі": round(float(group.get("hours") or 0.0), 2),
+                    "Загальна кількість годин": row["total_hours"],
+                    "Річне педнавантаження": row["annual_load_hours"],
+                    "Залишок годин": row["remaining_hours"],
+                }
+            )
+        result[row["teacher_name"]] = teacher_rows
+
     return result
 
 

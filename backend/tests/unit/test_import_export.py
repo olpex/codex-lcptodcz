@@ -8,6 +8,7 @@ from app.models import Group, GroupMembership, JournalMonitorEntry, JournalMonit
 from app.models import DocumentType
 from app.services.import_export import (
     analyze_trainee_import_duplicates,
+    collect_report_rows,
     collect_group_export_rows,
     collect_teacher_workload_summary,
     parse_document_content,
@@ -211,6 +212,94 @@ def test_teacher_workload_summary_does_not_double_count_journal_hours_for_schedu
     assert rows[0]["total_hours"] == 68
     assert rows[0]["groups"] == [
         {"group_code": "46-26", "group_name": "Група 46-26", "hours": 68.0},
+    ]
+
+
+def test_teacher_workload_export_uses_card_summary_group_breakdown(db_session):
+    teacher = Teacher(
+        branch_id="main",
+        first_name="Галина Михайлівна",
+        last_name="Войтихівська",
+        annual_load_hours=180,
+        is_active=True,
+    )
+    scheduled_group = Group(branch_id="main", code="16-26", name="Група 16-26", status="active")
+    subject = Subject(branch_id="main", name="Предмет 16-26", hours_total=20)
+    room = Room(branch_id="main", name="Аудиторія 16-26", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([teacher, scheduled_group, subject, room, section])
+    db_session.flush()
+    journal = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-17-26",
+        journal_name="17-26 Журнал",
+        group_code="17-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=10,
+    )
+    db_session.add(journal)
+    db_session.flush()
+
+    starts_at = datetime(2026, 2, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=scheduled_group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=2.0,
+                pair_number=1,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=journal.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Журнальна дисципліна",
+                hours=10,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    sheets = collect_report_rows(
+        db_session,
+        "teacher_workload",
+        "main",
+        {"teacher_ids": [teacher.id], "start_date": None, "end_date": None},
+    )
+
+    teacher_rows = sheets["Войтихівська Галина Михайлівна"]
+    assert teacher_rows == [
+        {
+            "Номер за порядком": 1,
+            "Прізвище, ім'я та по батькові викладача": "Войтихівська Галина Михайлівна",
+            "Групи": "16-26",
+            "Назва групи": "Група 16-26",
+            "Годин у групі": 2.0,
+            "Загальна кількість годин": 12.0,
+            "Річне педнавантаження": 180.0,
+            "Залишок годин": 168.0,
+        },
+        {
+            "Номер за порядком": 1,
+            "Прізвище, ім'я та по батькові викладача": "Войтихівська Галина Михайлівна",
+            "Групи": "17-26",
+            "Назва групи": "17-26 Журнал",
+            "Годин у групі": 10.0,
+            "Загальна кількість годин": 12.0,
+            "Річне педнавантаження": 180.0,
+            "Залишок годин": 168.0,
+        },
     ]
 
 
