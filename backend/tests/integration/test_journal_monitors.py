@@ -730,11 +730,11 @@ def test_journal_processing_start_is_fast_and_tick_processes_trainees(
     tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/tick", headers=auth_headers)
 
     assert tick_response.status_code == 200
-    assert tick_response.json()["workload_auto_enabled"] is False
+    assert tick_response.json()["workload_auto_enabled"] is True
     tick_entry = tick_response.json()["entries"][0]
     assert tick_entry["trainees_status"] == "processed"
     assert tick_entry["trainee_count"] == 1
-    assert "опрацювання завершено" in tick_response.json()["last_sync_message"]
+    assert "слухачі" in tick_response.json()["last_sync_message"]
 
 
 def test_journal_processing_tick_processes_pending_workload_before_trainees(
@@ -793,12 +793,12 @@ def test_journal_processing_tick_processes_pending_workload_before_trainees(
     assert tick_entry["workload_hours"] == 8
     assert tick_entry["trainees_status"] == "processed"
     assert tick_entry["trainee_count"] == 1
-    assert tick_response.json()["workload_auto_enabled"] is False
+    assert tick_response.json()["workload_auto_enabled"] is True
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
 
-def test_background_tick_processes_existing_queue_without_drive_folder_sync(
+def test_background_tick_processes_existing_queue_when_drive_folder_sync_fails(
     client,
     auth_headers,
     db_session,
@@ -850,10 +850,75 @@ def test_background_tick_processes_existing_queue_without_drive_folder_sync(
     response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
 
     assert response.status_code == 200
-    assert drive_sync_calls == 0
+    assert drive_sync_calls == 1
+    assert "Drive" in response.json()["last_sync_message"]
     entry = response.json()["entries"][0]
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"
+
+
+def test_background_tick_discovers_new_drive_folder_for_existing_section(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    initial_folders = [
+        {
+            "id": "drive-46-26",
+            "name": "46-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-46-26",
+            "modified_time": "2026-05-01T10:00:00Z",
+        },
+    ]
+    folders_with_new_journal = [
+        *initial_folders,
+        {
+            "id": "drive-85-26",
+            "name": "85-26 Журнал",
+            "url": "https://drive.google.com/drive/folders/drive-85-26",
+            "modified_time": "2026-05-01T11:00:00Z",
+        },
+    ]
+    drive_sync_calls = 0
+
+    def list_folders(_folder_id, service_account_json=None):
+        nonlocal drive_sync_calls
+        drive_sync_calls += 1
+        return initial_folders if drive_sync_calls == 1 else folders_with_new_journal
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", list_folders)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    first_sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert first_sync_response.status_code == 200
+    assert [entry["group_code"] for entry in first_sync_response.json()["entries"]] == ["46-26"]
+
+    tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+
+    assert tick_response.status_code == 200
+    entries = {entry["group_code"]: entry for entry in tick_response.json()["entries"]}
+    assert set(entries) == {"46-26", "85-26"}
+    assert entries["85-26"]["workload_status"] == "processed"
+    assert entries["85-26"]["trainees_status"] == "processed"
 
 
 def test_journal_auto_worker_processes_trainees_and_workload_together(db_session, monkeypatch):

@@ -1378,29 +1378,6 @@ def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSectio
     return changed
 
 
-def _section_auto_processing_complete(section: JournalMonitorSection) -> bool:
-    if not section.entries:
-        return False
-
-    target_year = section.workload_auto_year
-    workload_done_statuses = {"processed", "no_data", "skipped_year"}
-    trainees_done_statuses = {"processed", "no_data"}
-    has_target_entry = False
-
-    for entry in section.entries:
-        entry_year = _infer_journal_year(entry, section)
-        if target_year is not None and entry_year is not None and entry_year != target_year:
-            continue
-        if target_year is not None and entry_year is None and not entry.group_code:
-            continue
-        has_target_entry = True
-        if entry.workload_status not in workload_done_statuses:
-            return False
-        if entry.group_code and entry.trainees_status not in trainees_done_statuses:
-            return False
-    return has_target_entry
-
-
 def process_journal_monitor_section_step(
     db: Session,
     section: JournalMonitorSection,
@@ -1444,9 +1421,6 @@ def process_journal_monitor_section_step(
         groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-    if section.workload_auto_enabled and _section_auto_processing_complete(section):
-        section.workload_auto_enabled = False
-        message_parts.append("опрацювання завершено")
     if message_parts:
         section.last_sync_message = _clip_monitor_message("; ".join(message_parts))
     db.flush()
@@ -1730,8 +1704,6 @@ def process_journal_monitor_background_step(
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     for entry in section.entries:
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-    if section.workload_auto_enabled and _section_auto_processing_complete(section):
-        section.workload_auto_enabled = False
     processing_message = (
         "Фонове опрацювання: "
         f"педнавантаження {workload_result['processed']}/{workload_result['failed']}, "
