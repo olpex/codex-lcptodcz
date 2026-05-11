@@ -993,6 +993,84 @@ def test_journal_workload_no_data_keeps_visible_hours_when_subject_or_teacher_mi
     assert collect_teacher_workload_summary(db_session, "main") == []
 
 
+def test_journal_workload_uses_complete_workbook_when_another_file_has_incomplete_rows(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        workload_status="pending",
+        workload_year=2026,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "complete-disciplines",
+                "name": "85-26 Журнал.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+            {
+                "id": "incomplete-disciplines",
+                "name": "85-26 Журнал копія.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+        ],
+        raising=False,
+    )
+
+    def workbook_bytes(file_id, mime_type=None, service_account_json=None):
+        if file_id == "complete-disciplines":
+            return _journal_workbook_bytes(
+                [
+                    ("Охорона праці", 4, "3", "Паращук Олег Леонідович"),
+                    ("Роль AI у сучасному ринку праці", 5, "5", "Паращук Олег Леонідович"),
+                    ("Практичне використання AI у повсякденній роботі", 5, "7", "Паращук Олег Леонідович"),
+                    ("AI у творчих і технічних професіях", 5, "9", "Паращук Олег Леонідович"),
+                    ("Працевлаштування та кар'єрний ріст завдяки AI", 5, "11", "Паращук Олег Леонідович"),
+                    ("Етика, ризики та відповідальне", 2, "13", "Паращук Олег Леонідович"),
+                    ("Фінальне тестування", 2, "15", "Паращук Олег Леонідович"),
+                    ("Підсумкове заняття", 2, "19", "Паращук Олег Леонідович"),
+                ]
+            )
+        return _journal_workbook_bytes(
+            [
+                ("", 4, "3", ""),
+                ("", 5, "5", ""),
+                ("", 5, "7", ""),
+                ("", 5, "9", ""),
+                ("", 5, "11", ""),
+                ("", 2, "13", ""),
+                ("", 2, "15", ""),
+                ("", 2, "19", ""),
+            ]
+        )
+
+    monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", workbook_bytes, raising=False)
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 1, "failed": 0, "skipped_year": 0}
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 30
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 8
+
+
 def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teacher_workload(
     client,
     auth_headers,

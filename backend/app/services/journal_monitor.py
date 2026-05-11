@@ -1110,13 +1110,11 @@ def process_journal_workload_entry(
                 no_data_hours = round(no_data_hours + exc.workload_hours, 2)
         except Exception as exc:
             errors.append(f"{workbook_file.get('name') or workbook_file.get('id')}: {exc}")
-    if no_data_hours > 0:
+    if no_data_hours > 0 and not rows:
         detail = "; ".join(no_data_messages[:3])
-        valid_hours = round(sum(float(row["hours"] or 0.0) for row in rows), 2)
-        total_hours = round(valid_hours + no_data_hours, 2)
         raise JournalNoDataError(
             f"Педнавантаження не імпортовано через неповні дані на аркуші «Дисципліни»: {detail}",
-            workload_hours=total_hours,
+            workload_hours=no_data_hours,
         )
     if not rows:
         if errors and not no_data_messages:
@@ -1153,7 +1151,8 @@ def process_journal_workload_entry(
             )
         )
     entry.workload_status = "processed"
-    message_suffix = f"; частину файлів пропущено: {'; '.join(errors[:2])}" if errors else ""
+    skipped_messages = [*errors[:2], *no_data_messages[:2]]
+    message_suffix = f"; частину файлів пропущено: {'; '.join(skipped_messages)}" if skipped_messages else ""
     entry.workload_message = f"Додано годин із журналу: {round(total_hours, 2)}{message_suffix}"
     entry.workload_processed_at = datetime.now(timezone.utc)
     entry.workload_hours = round(total_hours, 2)
