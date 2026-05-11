@@ -330,6 +330,17 @@ def _parse_hours(value: Any) -> float:
     return float(match.group(1).replace(",", "."))
 
 
+def _is_total_hours_row(text: str) -> bool:
+    value = _norm(text).casefold()
+    return (
+        "загальний обсяг" in value
+        or "всього годин" in value
+        or "усього годин" in value
+        or ("всього" in value and "год" in value)
+        or ("усього" in value and "год" in value)
+    )
+
+
 def _split_teacher_name(full_name: str) -> tuple[str, str]:
     repaired = re.sub(r"(?<=[a-zа-яіїєґ])(?=[A-ZА-ЯІЇЄҐ])", " ", _norm(full_name))
     tokens = [part for part in repaired.split(" ") if part]
@@ -907,6 +918,9 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
     total_hours = 0.0
     incomplete_hours = 0.0
     for raw_row in rows[header_index + 1 :]:
+        row_text = " ".join(_norm(value) for value in raw_row)
+        if _is_total_hours_row(row_text):
+            continue
         subject_name = _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
         teacher_cell = _norm(raw_row[teacher_col] if teacher_col < len(raw_row) else "")
         hours = _parse_hours(raw_row[hours_col] if hours_col < len(raw_row) else "")

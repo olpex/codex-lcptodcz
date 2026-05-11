@@ -49,6 +49,20 @@ def _journal_workbook_bytes(
     return stream.getvalue()
 
 
+def _journal_workbook_with_total_row_bytes(rows: list[tuple[str, float, str, str]], total_hours: float) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["№", "назва предмету", "годин", "сторінка", "прізвище, ім'я, по батькові викладача"])
+    for index, row in enumerate(rows, start=1):
+        subject, hours, pages, teacher = row
+        sheet.append([index, subject, hours, pages, teacher])
+    sheet.append(["", "Загальний обсяг навчального часу", total_hours, "", ""])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, str, str]]) -> bytes:
     workbook = Workbook()
     workbook.active.title = "Дисципліни"
@@ -1060,6 +1074,56 @@ def test_journal_workload_uses_complete_workbook_when_another_file_has_incomplet
         )
 
     monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", workbook_bytes, raising=False)
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 1, "failed": 0, "skipped_year": 0}
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 30
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 8
+
+
+def test_journal_workload_ignores_disciplines_total_row_without_teacher(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        workload_status="pending",
+        workload_year=2026,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_with_total_row_bytes(
+            [
+                ("Охорона праці", 4, "3", "Паращук Олег Леонідович"),
+                ("Роль AI у сучасному ринку праці", 5, "5", "Паращук Олег Леонідович"),
+                ("Практичне використання AI у повсякденній роботі", 5, "7", "Паращук Олег Леонідович"),
+                ("AI у творчих і технічних професіях", 5, "9", "Паращук Олег Леонідович"),
+                ("Працевлаштування та кар'єрний ріст завдяки AI", 5, "11", "Паращук Олег Леонідович"),
+                ("Етика, ризики та відповідальне", 2, "13", "Паращук Олег Леонідович"),
+                ("Фінальне тестування", 2, "15", "Паращук Олег Леонідович"),
+                ("Підсумкове заняття", 2, "19", "Паращук Олег Леонідович"),
+            ],
+            30,
+        ),
+        raising=False,
+    )
 
     result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
     db_session.commit()
