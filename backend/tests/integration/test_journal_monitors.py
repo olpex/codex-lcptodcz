@@ -574,6 +574,177 @@ def test_journal_worker_marks_trainees_no_data_when_zv_sheet_has_no_rows(
     assert entry["trainees_message"] == "На аркуші «ЗВ» не знайдено рядків зі слухачами"
 
 
+def test_journal_worker_marks_trainees_no_data_when_zv_has_only_empty_positions(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-846-26",
+        journal_name="846-26 Journal",
+        group_code="846-26",
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": "empty-positions-zv", "name": "846-26.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [(index, "", "", "", "", "", "", "") for index in range(1, 29)]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_journal_trainees_for_section(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 0, "no_data": 1, "failed": 0}
+    assert entry.trainees_status == "no_data"
+    assert entry.trainee_count == 0
+    assert db_session.query(Trainee).filter(Trainee.group_code == "846-26", Trainee.is_deleted.is_(False)).count() == 0
+
+
+def test_journal_trainees_no_data_archives_previously_imported_group_trainees(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Journal",
+        group_code="85-26",
+        trainees_status="processed",
+        trainees_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    db_session.add_all(
+        [
+            entry,
+            Trainee(branch_id="main", first_name="Ivan", last_name="Petrenko", status="active", group_code="85-26"),
+            Trainee(branch_id="main", first_name="Olena", last_name="Koval", status="active", group_code="85-26"),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "empty-zv",
+                "name": "85-26.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-02T10:00:00Z",
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [(index, "", "", "", "", "", "", "") for index in range(1, 20)]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_journal_trainees_for_section(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 0, "no_data": 1, "failed": 0}
+    assert entry.trainees_status == "no_data"
+    assert db_session.query(Trainee).filter(Trainee.group_code == "85-26", Trainee.is_deleted.is_(False)).count() == 0
+    assert db_session.query(Trainee).filter(Trainee.is_deleted.is_(True)).count() == 2
+
+
+def test_journal_workload_no_data_clears_previously_imported_hours(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    teacher = Teacher(branch_id="main", first_name="Olena", last_name="Koval", annual_load_hours=100, is_active=True)
+    db_session.add_all([section, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-846-26",
+        journal_name="846-26 Journal",
+        group_code="846-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        workload_hours=12,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Subject",
+            hours=12,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "empty-disciplines",
+                "name": "846-26.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-02T10:00:00Z",
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes([]),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result == {"processed": 0, "failed": 1, "skipped_year": 0}
+    assert entry.workload_status == "no_data"
+    assert entry.workload_hours == 0
+    assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
+    summary = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert summary[teacher.id]["total_hours"] == 0
+
+
 def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teacher_workload(
     client,
     auth_headers,

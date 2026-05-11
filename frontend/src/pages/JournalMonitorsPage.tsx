@@ -658,6 +658,20 @@ export function JournalMonitorsPage() {
     );
   };
 
+  const renderWorkloadHours = (row: JournalMonitorEntry) => {
+    if (row.workload_status === "no_data") {
+      return <span className="font-semibold text-rose-700" title={row.workload_message || undefined}>Н/даних</span>;
+    }
+    return row.workload_hours || 0;
+  };
+
+  const renderTraineeCount = (row: JournalMonitorEntry) => {
+    if (row.trainees_status === "no_data") {
+      return <span className="font-semibold text-rose-700" title={row.trainees_message || undefined}>Н/даних</span>;
+    }
+    return row.trainee_count;
+  };
+
   const changeSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
@@ -1000,11 +1014,11 @@ export function JournalMonitorsPage() {
                             {formatWorkloadStatus(row.workload_status)}
                           </span>
                         </td>
-                        <td className="px-3 py-2">{row.workload_hours || 0}</td>
+                        <td className="px-3 py-2">{renderWorkloadHours(row)}</td>
                         <td className="px-3 py-2">{renderBoolean(row.has_schedule)}</td>
                         <td className="px-3 py-2">{renderTraineesState(row)}</td>
                         <td className="px-3 py-2">{row.schedule_lessons}</td>
-                        <td className="px-3 py-2">{row.trainee_count}</td>
+                        <td className="px-3 py-2">{renderTraineeCount(row)}</td>
                         <td className="px-3 py-2">
                           {row.drive_url ? (
                             <a className="font-semibold text-pine underline" href={row.drive_url} target="_blank" rel="noreferrer">

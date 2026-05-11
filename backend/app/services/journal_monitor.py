@@ -556,8 +556,6 @@ def _archive_missing_group_trainees(db: Session, branch_id: str, group_code: str
         }
         for row in rows
     ]
-    if not incoming:
-        return 0
     now = datetime.now(timezone.utc)
     archived = 0
     trainees = (
@@ -1241,10 +1239,14 @@ def process_next_journal_workload(
             processed += 1
             handled += 1
         except JournalNoDataError as exc:
+            db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
+                synchronize_session=False
+            )
             entry.workload_status = "no_data"
             entry.workload_message = str(exc)[:500]
             entry.workload_processed_at = datetime.now(timezone.utc)
             entry.workload_hours = 0.0
+            entry.workload_source_names = entry.workload_source_names or []
             db.add(entry)
             failed += 1
             handled += 1
@@ -1318,9 +1320,12 @@ def process_journal_trainees_for_section(
             processed += 1
             handled += 1
         except JournalNoDataError as exc:
+            archived_missing = _archive_missing_group_trainees(db, entry.branch_id, entry.group_code, [])
             entry.trainees_status = "no_data"
-            entry.trainees_message = str(exc)[:500]
+            archive_suffix = f"; архівовано відсутніх слухачів: {archived_missing}" if archived_missing else ""
+            entry.trainees_message = f"{str(exc)}{archive_suffix}"[:500]
             entry.trainees_processed_at = datetime.now(timezone.utc)
+            entry.trainees_source_names = entry.trainees_source_names or []
             db.add(entry)
             no_data += 1
             handled += 1
