@@ -2816,6 +2816,62 @@ def test_processed_workload_reimports_when_workbook_modified_time_is_newer(db_se
     assert [(row.subject_name, row.hours) for row in rows] == [("Новий предмет", 10)]
 
 
+def test_no_data_workload_retries_without_newer_modified_time(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-85-26",
+        journal_name="85-26 Журнал",
+        group_code="85-26",
+        workload_status="no_data",
+        workload_year=2026,
+        workload_processed_at=datetime(2026, 5, 2, 10, 0, tzinfo=timezone.utc),
+        workload_hours=30,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "disciplines-xlsx",
+                "name": "85-26 Журнал.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-01T10:00:00Z",
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_workbook_bytes(
+            [("Штучний інтелект", 30, "3-19", "Коваль Олена Петрівна")]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_next_journal_workload(db_session, section, limit=1, target_year=2026)
+    db_session.commit()
+
+    db_session.refresh(entry)
+    assert result["processed"] == 1
+    assert entry.workload_status == "processed"
+    assert entry.workload_hours == 30
+    rows = db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).all()
+    assert [(row.subject_name, row.hours) for row in rows] == [("Штучний інтелект", 30)]
+
+
 def test_bulk_delete_journal_entries_hides_related_groups(client, auth_headers, db_session, monkeypatch):
     db_session.add_all(
         [

@@ -1285,7 +1285,7 @@ def process_next_journal_workload(
         if entry.workload_status in {"processed", "no_data", "skipped_year"}:
             if _journal_workbooks_modified_after(entry, entry.workload_processed_at, section_service_account_json):
                 _requeue_entry_after_drive_change(db, entry)
-            else:
+            elif entry.workload_status != "no_data":
                 continue
         if entry.workload_status == "failed" and not retry_failed:
             continue
