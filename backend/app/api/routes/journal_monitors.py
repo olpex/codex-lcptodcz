@@ -18,6 +18,7 @@ from app.schemas.api import (
     JournalMonitorSectionUpdate,
 )
 from app.services.audit import write_audit
+from app.services.drive_intake import process_next_drive_intake_file
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     archive_trainees_for_deleted_journal_entries,
@@ -34,12 +35,16 @@ from app.services.journal_monitor import (
     process_next_journal_workload,
     sync_journal_monitor_section,
 )
+from app.tasks.worker import process_import_job_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> dict[str, int]:
+AutoTickPayload = dict[str, int | str | None]
+
+
+def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
     query = db.query(JournalMonitorSection.id).filter(JournalMonitorSection.is_active.is_(True))
     if branch_id is not None:
         query = query.filter(JournalMonitorSection.branch_id == branch_id)
@@ -69,12 +74,43 @@ def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None 
     return {"processed_sections": processed_sections, "failed_sections": failed_sections}
 
 
+def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
+    try:
+        result = process_next_drive_intake_file(
+            db,
+            branch_id=branch_id or settings.imap_branch_id or "main",
+            import_job_runner=process_import_job_task.run,
+        )
+        db.commit()
+        return {
+            "drive_intake_processed": int(result.get("processed") or 0),
+            "drive_intake_failed": 0,
+            "drive_intake_disabled": 1 if result.get("disabled") else 0,
+            "drive_intake_skipped_already_processed": int(result.get("skipped_already_processed") or 0),
+            "drive_intake_skipped_unsupported": int(result.get("skipped_unsupported") or 0),
+            "drive_intake_job_id": result.get("job_id"),
+            "drive_intake_filename": result.get("filename"),
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Google Drive intake auto tick failed: %s", exc)
+        return {
+            "drive_intake_processed": 0,
+            "drive_intake_failed": 1,
+            "drive_intake_disabled": 0,
+            "drive_intake_skipped_already_processed": 0,
+            "drive_intake_skipped_unsupported": 0,
+            "drive_intake_job_id": None,
+            "drive_intake_filename": None,
+        }
+
+
 @router.get("/auto-cron", status_code=status.HTTP_202_ACCEPTED)
 @router.post("/auto-cron", status_code=status.HTTP_202_ACCEPTED)
 def process_journal_monitor_auto_cron(
     db: DbSession,
     authorization: str | None = Header(default=None),
-) -> dict[str, int]:
+) -> AutoTickPayload:
     expected_secret = settings.cron_secret.strip()
     if not expected_secret:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="CRON_SECRET не налаштовано")
@@ -93,8 +129,10 @@ def process_journal_monitor_auto_cron(
 def process_journal_monitor_auto_tick(
     db: DbSession,
     current_user: CurrentUser,
-) -> dict[str, int]:
-    return _process_journal_monitor_auto_sections(db, branch_id=current_user.branch_id)
+) -> AutoTickPayload:
+    result = _process_journal_monitor_auto_sections(db, branch_id=current_user.branch_id)
+    result.update(_process_drive_intake_auto_file(db, branch_id=current_user.branch_id))
+    return result
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:
