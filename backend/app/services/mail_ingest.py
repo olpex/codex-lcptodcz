@@ -34,7 +34,7 @@ from app.services.storage import detect_document_type, storage_path
 from app.services.schedule_import import import_schedule_docx
 from app.models import Trainee
 
-GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[-/]\s*\d{1,4})")
+GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-/–—‑‒−﹘﹣]\s*\d{1,4})")
 CONTRACT_KEYWORD_FALLBACK = "договор"
 DASH_VARIANTS = "–—‑‒−﹘﹣"
 
@@ -80,7 +80,9 @@ def extract_excel_group_code(filename: str | None) -> str | None:
     if not match:
         return None
     raw_group = "".join(match.group(1).split())
-    return raw_group.replace("–", "-").replace("—", "-")
+    for dash in DASH_VARIANTS:
+        raw_group = raw_group.replace(dash, "-")
+    return raw_group.replace("/", "-")
 
 
 def _normalized_contract_filename_stem(filename: str | None) -> str | None:

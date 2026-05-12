@@ -58,6 +58,20 @@ def _contracts_workbook_bytes() -> bytes:
     return stream.read()
 
 
+def _contracts_workbook_without_group_context_bytes() -> bytes:
+    stream = BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Додаток"
+    sheet.append(["Реєстр слухачів"])
+    sheet.append([])
+    sheet.append(["№", "ПІБ безробітного", "Дата народження", "№ Договору", "Телефон"])
+    sheet.append([1, "Кравченко Олена Іванівна", "05.03.1991", "80-26/001", "+380501112233"])
+    workbook.save(stream)
+    stream.seek(0)
+    return stream.read()
+
+
 def _schedule_docx_bytes(group_code: str = "46-26") -> bytes:
     stream = BytesIO()
     document = DocxDocument()
@@ -140,6 +154,34 @@ def test_drive_intake_processes_one_contract_file_and_updates_existing_trainee(d
     assert cipher.decrypt(trainee.tax_id_encrypted) == "1234567890"
     assert cipher.decrypt(trainee.phone_encrypted) == "+380501112233"
     assert db_session.query(ScheduleSlot).count() == 0
+
+
+def test_drive_intake_uses_filename_group_code_when_contract_file_has_no_group_context(db_session):
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "contracts-80-26",
+                "name": "Договори 80-26 Організація трудових відносин.xls",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLS_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+                "webViewLink": "https://drive.google.com/file/d/contracts-80-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_without_group_context_bytes(),
+        import_job_runner=_run_import_job,
+    )
+
+    assert result["processed"] == 1
+    db_session.expire_all()
+
+    trainee = db_session.query(Trainee).filter(Trainee.last_name == "Кравченко").one()
+    assert trainee.group_code == "80-26"
+
+    group = db_session.query(Group).filter(Group.code == "80-26").one()
+    assert group.name == "Група 80-26"
 
 
 def test_drive_intake_schedule_creates_calendar_without_duplicating_journal_workload(db_session):

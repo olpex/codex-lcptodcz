@@ -600,6 +600,23 @@ def test_import_uses_dodatok_sheet_group_context_and_populates_fields(tmp_path: 
     assert trainee.phone_encrypted is not None
 
 
+def test_import_reads_group_context_with_colon_and_typographic_dash(tmp_path: Path):
+    file_path = tmp_path / "contracts_typographic_group.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Додаток"
+    sheet.append(["Група: 80–26 Організація трудових відносин"])
+    sheet.append([])
+    sheet.append(["№", "ПІБ безробітного", "Дата народження", "№ Договору"])
+    sheet.append([1, "Кравченко Олена Іванівна", "05.03.1991", "80-26/001"])
+    workbook.save(file_path)
+
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    assert parsed["default_group_code"] == "80-26"
+    assert parsed["default_group_name"] == "Організація трудових відносин"
+
+
 def test_import_prefers_dodatok_sheet_over_other_registry_like_sheets(tmp_path: Path, db_session):
     file_path = tmp_path / "listeners.xlsx"
     workbook = Workbook()

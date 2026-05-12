@@ -147,7 +147,11 @@ TRAINEE_HEADER_HINTS = (
     | GROUP_CODE_ALIASES
     | GROUP_NAME_ALIASES
 )
-GROUP_CONTEXT_PATTERN = re.compile(r"\bгрупа\s*([0-9a-zа-яіїєґ\/\-]+)\b", re.IGNORECASE)
+GROUP_CONTEXT_PATTERN = re.compile(
+    r"\bгрупа\s*(?:№|#)?\s*[:\-–—−.]?\s*"
+    r"([0-9]{1,4}\s*[a-zа-яіїєґ]?\s*[-–—−/.]\s*[0-9]{2,4})\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_group_code_key(value: str | None) -> str:
@@ -159,6 +163,17 @@ def _normalize_group_code_key(value: str | None) -> str:
     raw = re.sub(r"\s+", "", raw)
     raw = re.sub(r"-{2,}", "-", raw)
     return raw.casefold()
+
+
+def _normalize_group_code_value(value: str | None) -> str:
+    raw = _normalize_text_value(value)
+    if not raw:
+        return ""
+    for dash in ("–", "—", "−", "/", "."):
+        raw = raw.replace(dash, "-")
+    raw = re.sub(r"\s*-\s*", "-", raw)
+    raw = re.sub(r"\s+", "", raw)
+    return raw.strip("-")
 
 
 def _normalize_header(value: Any) -> str:
@@ -338,7 +353,7 @@ def _extract_group_context(rows: list[list[Any]], header_idx: int) -> dict[str, 
             match = GROUP_CONTEXT_PATTERN.search(raw_text)
             if not match:
                 continue
-            group_code = match.group(1).strip(" \"'«».,:;()[]{}")
+            group_code = _normalize_group_code_value(match.group(1).strip(" \"'«».,:;()[]{}"))
             group_name = raw_text[match.end() :].strip(" \"'«».,:;()[]{}-")
             payload: dict[str, Any] = {"default_group_code": group_code}
             if group_name:

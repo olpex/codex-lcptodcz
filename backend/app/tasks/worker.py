@@ -54,6 +54,19 @@ def _parsed_snapshot(parsed: dict) -> dict:
     return snapshot
 
 
+def _apply_group_hint(parsed: dict, payload: dict) -> dict:
+    group_code_hint = str(payload.get("group_code_hint") or "").strip()
+    if not group_code_hint or parsed.get("default_group_code"):
+        return parsed
+
+    return {
+        **parsed,
+        "default_group_code": group_code_hint,
+        "default_group_name": parsed.get("default_group_name") or f"Група {group_code_hint}",
+        "group_context_source": parsed.get("group_context_source") or "filename",
+    }
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.worker.process_import_job_task",
@@ -76,11 +89,13 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         db.add(job)
         db.commit()
 
-        raw_import_mode = (job.result_payload or {}).get("import_mode") if isinstance(job.result_payload, dict) else None
+        initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
+        raw_import_mode = initial_payload.get("import_mode")
         import_mode = raw_import_mode if raw_import_mode in IMPORT_UPDATE_MODES else "skip_existing"
         parsed = parse_document_content(job.document.file_path, job.document.file_type)
         import_result = {}
         if job.document.file_type.value in {"xlsx", "csv"}:
+            parsed = _apply_group_hint(parsed, initial_payload)
             import_result = try_import_trainees(db, parsed, job.branch_id, update_existing_mode=import_mode)
             touched_rows = (
                 int(import_result.get("inserted") or 0)
@@ -108,7 +123,6 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         else:
             raise ValueError("Автоматичний імпорт підтримує лише .xls/.xlsx, .csv та .docx")
 
-        initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
         payload = {
             **initial_payload,
             "parsed": _parsed_snapshot(parsed),
