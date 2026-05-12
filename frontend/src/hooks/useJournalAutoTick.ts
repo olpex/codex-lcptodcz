@@ -16,16 +16,15 @@ type AutoTickResult = {
   drive_intake_filename?: string | null;
 };
 
-export function useJournalAutoTick(request: ApiRequest, enabled = true) {
+export function useJournalAutoTick(request: ApiRequest, enabled = true): () => void {
   const lastRunRef = useRef(0);
   const inFlightRef = useRef<Promise<AutoTickResult | null> | null>(null);
 
   return useCallback(() => {
-    if (!enabled) return Promise.resolve(null);
-    if (inFlightRef.current) return inFlightRef.current;
+    if (!enabled || inFlightRef.current) return;
 
     const now = Date.now();
-    if (now - lastRunRef.current < MIN_INTERVAL_MS) return Promise.resolve(null);
+    if (now - lastRunRef.current < MIN_INTERVAL_MS) return;
 
     lastRunRef.current = now;
     const tickPromise = request<AutoTickResult>("/journal-monitors/auto-tick", {

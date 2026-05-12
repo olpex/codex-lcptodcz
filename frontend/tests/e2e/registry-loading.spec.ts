@@ -23,6 +23,10 @@ function authUserPayload() {
 }
 
 test("groups registry does not auto-load heavy detail data before a group is selected", async ({ page }) => {
+  let releaseAutoTick: () => void = () => {};
+  const autoTickGate = new Promise<void>((resolve) => {
+    releaseAutoTick = resolve;
+  });
   let detailRequests = 0;
   let auditRequests = 0;
   await installAuth(page);
@@ -37,6 +41,7 @@ test("groups registry does not auto-load heavy detail data before a group is sel
     }
 
     if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      await autoTickGate;
       return route.fulfill({
         status: 202,
         contentType: "application/json",
@@ -90,10 +95,14 @@ test("groups registry does not auto-load heavy detail data before a group is sel
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
   });
 
-  await page.goto("/groups");
-  await expect(page.getByText("73-26", { exact: true })).toBeVisible();
-  await expect.poll(() => detailRequests, { timeout: 1000 }).toBe(0);
-  await expect.poll(() => auditRequests, { timeout: 1000 }).toBe(0);
+  try {
+    await page.goto("/groups");
+    await expect(page.getByText("73-26", { exact: true })).toBeVisible({ timeout: 1000 });
+    await expect.poll(() => detailRequests, { timeout: 1000 }).toBe(0);
+    await expect.poll(() => auditRequests, { timeout: 1000 }).toBe(0);
+  } finally {
+    releaseAutoTick();
+  }
 });
 
 test("trainees registry does not wait for journal auto tick", async ({ page }) => {

@@ -303,7 +303,7 @@ export function TraineesPage() {
     const showLoading = !options.quiet || trainees.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      await triggerJournalAutoTick();
+      triggerJournalAutoTick();
       const [groupsData, data] = await Promise.all([
         request<Group[]>("/groups"),
         (async () => {

@@ -413,7 +413,7 @@ export function GroupsPage() {
     const showLoading = !options.quiet || groups.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      await triggerJournalAutoTick();
+      triggerJournalAutoTick();
       const data = await request<Group[]>("/groups");
       setGroups(data);
       setSelectedGroupIds((prev) => {
