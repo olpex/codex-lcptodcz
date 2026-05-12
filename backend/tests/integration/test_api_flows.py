@@ -3,6 +3,7 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
+from app.core.crypto import cipher
 from app.models import (
     Document,
     DocumentType,
@@ -143,6 +144,148 @@ def test_groups_api_falls_back_to_schedule_dates_when_group_dates_are_empty(clie
     assert detail_response.status_code == 200
     assert detail_response.json()["start_date"] == "2026-03-11"
     assert detail_response.json()["end_date"] == "2026-03-12"
+
+
+def test_trainees_summary_skips_sensitive_details_until_single_record_is_requested(client, auth_headers, db_session):
+    trainee = Trainee(
+        branch_id="main",
+        first_name="Summary",
+        last_name="Trainee",
+        contract_number="SUM-1",
+        group_code="SUM-26",
+        status="active",
+        employment_center_encrypted=cipher.encrypt("Summary Center"),
+        address_encrypted=cipher.encrypt("Summary Address"),
+        phone_encrypted=cipher.encrypt("+380000000001"),
+    )
+    db_session.add(trainee)
+    db_session.commit()
+
+    summary_response = client.get("/api/v1/trainees?summary=true", headers=auth_headers)
+    assert summary_response.status_code == 200
+    summary_row = next(item for item in summary_response.json() if item["id"] == trainee.id)
+    assert summary_row["first_name"] == "Summary"
+    assert summary_row["group_code"] == "SUM-26"
+    assert summary_row["employment_center"] is None
+    assert summary_row["address"] is None
+    assert summary_row["phone"] is None
+
+    detail_response = client.get(f"/api/v1/trainees/{trainee.id}", headers=auth_headers)
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["employment_center"] is not None
+    assert detail_payload["address"] is not None
+    assert detail_payload["phone"] is not None
+
+
+def test_group_detail_endpoint_returns_one_group_aggregates_without_full_register_load(client, auth_headers, db_session):
+    group = Group(branch_id="main", code="DET-26", name="Detail Group", status=GroupStatus.ACTIVE, capacity=20)
+    teacher = Teacher(branch_id="main", first_name="Ada", last_name="Lovelace", hourly_rate=0, is_active=True)
+    subject = Subject(branch_id="main", name="Algorithms", hours_total=8)
+    room = Room(branch_id="main", name="Room 1", capacity=20)
+    active_trainee = Trainee(
+        branch_id="main",
+        first_name="Active",
+        last_name="Learner",
+        source_row_number=2,
+        contract_number="DET-A",
+        group_code="DET-26",
+        status="active",
+        employment_center_encrypted=cipher.encrypt("center"),
+        address_encrypted=cipher.encrypt("address"),
+    )
+    archived_trainee = Trainee(
+        branch_id="main",
+        first_name="Archived",
+        last_name="Learner",
+        contract_number="DET-Z",
+        group_code="DET-26",
+        status="completed",
+        is_deleted=True,
+        deleted_at=datetime.now(timezone.utc),
+    )
+    other_trainee = Trainee(
+        branch_id="main",
+        first_name="Other",
+        last_name="Learner",
+        contract_number="OTHER",
+        group_code="OTHER-26",
+        status="active",
+    )
+    section = JournalMonitorSection(branch_id="main", name="Detail journals", folder_url="https://example.test", folder_id="detail")
+    db_session.add_all([group, teacher, subject, room, active_trainee, archived_trainee, other_trainee, section])
+    db_session.flush()
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(hours=2),
+                pair_number=1,
+                academic_hours=2,
+            ),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at + timedelta(days=1),
+                ends_at=starts_at + timedelta(days=1, hours=2),
+                pair_number=1,
+                academic_hours=3,
+            ),
+        ]
+    )
+    entry = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="detail-journal",
+        journal_name="DET-26 journal",
+        group_code="DET-26",
+        matched_group_id=group.id,
+        has_group=True,
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Algorithms",
+            hours=7,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/v1/groups/{group.id}/detail", headers=auth_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_trainees"] == 1
+    assert payload["archived_trainees"] == 1
+    assert payload["capacity_used_pct"] == 5
+    assert payload["schedule_slots"] == 2
+    assert payload["schedule_hours"] == 5
+    assert payload["schedule_date_from"] == "2026-04-01"
+    assert payload["schedule_date_to"] == "2026-04-02"
+    assert payload["trainees"] == [
+        {
+            "trainee_id": active_trainee.id,
+            "row_number": 2,
+            "name": "Learner Active",
+            "contract_number": "DET-A",
+            "phone": None,
+            "birth_date": None,
+            "employment_center": "center",
+            "address": "address",
+            "status": "active",
+        }
+    ]
+    assert payload["teachers"] == [{"teacher_id": teacher.id, "name": "Lovelace Ada", "hours": 7.0}]
 
 
 def test_schedule_workload_and_kpi_flow(client, auth_headers):

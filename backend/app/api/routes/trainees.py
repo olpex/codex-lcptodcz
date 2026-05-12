@@ -58,6 +58,37 @@ def _to_response(trainee: Trainee) -> TraineeResponse:
     )
 
 
+def _to_summary_response(trainee: Trainee) -> TraineeResponse:
+    return TraineeResponse(
+        id=trainee.id,
+        branch_id=trainee.branch_id,
+        source_row_number=trainee.source_row_number,
+        first_name=trainee.first_name,
+        last_name=trainee.last_name,
+        employment_center=None,
+        birth_date=trainee.birth_date,
+        contract_number=trainee.contract_number,
+        certificate_number=trainee.certificate_number,
+        certificate_issue_date=trainee.certificate_issue_date,
+        postal_index=trainee.postal_index,
+        address=None,
+        passport_series=None,
+        passport_number=None,
+        passport_issued_by=None,
+        passport_issued_date=trainee.passport_issued_date,
+        tax_id=None,
+        group_code=trainee.group_code,
+        status=trainee.status,
+        is_deleted=trainee.is_deleted,
+        deleted_at=trainee.deleted_at,
+        phone=None,
+        email=None,
+        id_document=None,
+        created_at=trainee.created_at,
+        updated_at=trainee.updated_at,
+    )
+
+
 def _purge_trainee_ids(db: DbSession, trainee_ids: list[int]) -> None:
     if not trainee_ids:
         return
@@ -72,6 +103,7 @@ def list_trainees(
     current_user: CurrentUser,
     search: str | None = Query(default=None),
     include_deleted: bool = Query(default=False),
+    summary: bool = Query(default=False),
 ) -> list[TraineeResponse]:
     query = apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
     if not include_deleted:
@@ -86,6 +118,8 @@ def list_trainees(
             )
         )
     trainees = query.order_by(Trainee.created_at.desc()).all()
+    if summary:
+        return [_to_summary_response(trainee) for trainee in trainees]
     return [_to_response(trainee) for trainee in trainees]
 
 

@@ -158,6 +158,8 @@ export function TraineesPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [loadedTraineeDetails, setLoadedTraineeDetails] = useState<Record<number, boolean>>({});
+  const [loadingTraineeDetails, setLoadingTraineeDetails] = useState<Record<number, boolean>>({});
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [selectedGroupIds, setSelectedGroupIds] = useState<Record<number, boolean>>({});
   const [bulkGroupCode, setBulkGroupCode] = useState("");
@@ -274,6 +276,11 @@ export function TraineesPage() {
     [groups, selectedGroupIds]
   );
 
+  const hasExpandedTrainees = useMemo(
+    () => Object.values(expanded).some(Boolean),
+    [expanded]
+  );
+
   const selectedActiveIds = useMemo(
     () =>
       selectedIds.filter((id) => {
@@ -292,14 +299,16 @@ export function TraineesPage() {
     [selectedIds, trainees]
   );
 
-  const fetchTrainees = async (term = "") => {
-    setIsLoading(true);
+  const fetchTrainees = async (term = "", options: { quiet?: boolean } = {}) => {
+    const showLoading = !options.quiet || trainees.length === 0;
+    if (showLoading) setIsLoading(true);
     try {
       await triggerJournalAutoTick();
       const [groupsData, data] = await Promise.all([
         request<Group[]>("/groups"),
         (async () => {
           const params = new URLSearchParams();
+          params.set("summary", "true");
           if (term.trim()) {
             params.set("search", term.trim());
           }
@@ -312,6 +321,7 @@ export function TraineesPage() {
       ]);
       setGroups(groupsData);
       setTrainees(data);
+      setLoadedTraineeDetails({});
       setSelected((prev) => {
         const next: Record<number, boolean> = {};
         for (const trainee of data) {
@@ -330,9 +340,31 @@ export function TraineesPage() {
     } catch (error) {
       const message = (error as Error).message;
       setLoadError(message);
-      showError(message);
+      if (!options.quiet) showError(message);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
+    }
+  };
+
+  const loadTraineeDetail = async (traineeId: number): Promise<Trainee | null> => {
+    if (loadedTraineeDetails[traineeId]) {
+      return trainees.find((item) => item.id === traineeId) || null;
+    }
+    setLoadingTraineeDetails((prev) => ({ ...prev, [traineeId]: true }));
+    try {
+      const detail = await request<Trainee>(`/trainees/${traineeId}`);
+      setTrainees((prev) => prev.map((item) => (item.id === traineeId ? detail : item)));
+      setLoadedTraineeDetails((prev) => ({ ...prev, [traineeId]: true }));
+      return detail;
+    } catch (error) {
+      showError((error as Error).message);
+      return null;
+    } finally {
+      setLoadingTraineeDetails((prev) => {
+        const next = { ...prev };
+        delete next[traineeId];
+        return next;
+      });
     }
   };
 
@@ -340,9 +372,19 @@ export function TraineesPage() {
     fetchTrainees(search);
   }, [showArchived, problemFilter]);
 
-  usePageRefresh(() => fetchTrainees(search), {
-    enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating,
-    intervalMs: 30_000
+  useEffect(() => {
+    for (const [id, isExpanded] of Object.entries(expanded)) {
+      const traineeId = Number(id);
+      if (isExpanded && !loadedTraineeDetails[traineeId] && !loadingTraineeDetails[traineeId]) {
+        void loadTraineeDetail(traineeId);
+      }
+    }
+  }, [expanded, loadedTraineeDetails, loadingTraineeDetails]);
+
+  usePageRefresh(() => fetchTrainees(search, { quiet: true }), {
+    enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating && !hasExpandedTrainees,
+    intervalMs: 120_000,
+    refreshOnFocus: false
   });
 
   const createTrainee = async (event: FormEvent) => {
@@ -384,7 +426,11 @@ export function TraineesPage() {
   };
 
   const toggleExpanded = (id: number) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+    setExpanded((prev) => {
+      const nextValue = !prev[id];
+      if (nextValue) void loadTraineeDetail(id);
+      return { ...prev, [id]: nextValue };
+    });
   };
 
   const toggleGroupExpanded = (groupKey: string) => {
@@ -659,17 +705,19 @@ export function TraineesPage() {
     }
   };
 
-  const startEdit = (trainee: Trainee) => {
+  const startEdit = async (trainee: Trainee) => {
     if (trainee.is_deleted) {
       showError("Слухач в архіві. Спочатку відновіть запис");
       return;
     }
-    setEditingId(trainee.id);
-    setEditForm(toEditForm(trainee));
+    const detail = loadedTraineeDetails[trainee.id] ? trainee : await loadTraineeDetail(trainee.id);
+    if (!detail) return;
+    setEditingId(detail.id);
+    setEditForm(toEditForm(detail));
     setEditErrors({});
-    const bucket = resolveGroupBucket(trainee.group_code);
+    const bucket = resolveGroupBucket(detail.group_code);
     setExpandedGroups((prev) => ({ ...prev, [bucket.key]: true }));
-    setExpanded((prev) => ({ ...prev, [trainee.id]: true }));
+    setExpanded((prev) => ({ ...prev, [detail.id]: true }));
   };
 
   const cancelEdit = () => {
@@ -1110,7 +1158,10 @@ export function TraineesPage() {
                           </div>
                           {isExpanded && (
                             <div className="space-y-3 border-t border-slate-200 px-4 py-3 text-sm">
-                              {!isEditing && (
+                              {loadingTraineeDetails[trainee.id] && (
+                                <p className="text-xs font-semibold text-slate-500">Завантаження деталей...</p>
+                              )}
+                              {!loadingTraineeDetails[trainee.id] && !isEditing && (
                                 <div className="grid gap-2 md:grid-cols-2">
                                   <p><span className="font-semibold">Номер:</span> {number}</p>
                                   <p><span className="font-semibold">Прізвище, ім'я, по батькові:</span> {buildDisplayName(trainee)}</p>
@@ -1137,7 +1188,7 @@ export function TraineesPage() {
                                     <button
                                       type="button"
                                       className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700"
-                                      onClick={() => startEdit(trainee)}
+                                      onClick={() => void startEdit(trainee)}
                                     >
                                       Редагувати
                                     </button>

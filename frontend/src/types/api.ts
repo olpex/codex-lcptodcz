@@ -89,6 +89,36 @@ export interface ActiveGroupBetweenDates {
   teachers: GroupTeacherHours[];
 }
 
+export interface GroupDetailTrainee {
+  trainee_id: number;
+  row_number: number | null;
+  name: string;
+  contract_number: string | null;
+  phone: string | null;
+  birth_date: string | null;
+  employment_center: string | null;
+  address: string | null;
+  status: string;
+}
+
+export interface GroupDetailTeacher {
+  teacher_id: number;
+  name: string;
+  hours: number;
+}
+
+export interface GroupDetail {
+  active_trainees: number;
+  archived_trainees: number;
+  capacity_used_pct: number;
+  trainees: GroupDetailTrainee[];
+  schedule_slots: number;
+  schedule_hours: number;
+  schedule_date_from: string | null;
+  schedule_date_to: string | null;
+  teachers: GroupDetailTeacher[];
+}
+
 export interface Teacher {
   id: number;
   first_name: string;

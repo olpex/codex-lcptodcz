@@ -252,6 +252,36 @@ class GroupTeacherHoursResponse(BaseModel):
     hours: float
 
 
+class GroupDetailTraineeResponse(BaseModel):
+    trainee_id: int
+    row_number: int | None = None
+    name: str
+    contract_number: str | None = None
+    phone: str | None = None
+    birth_date: date | None = None
+    employment_center: str | None = None
+    address: str | None = None
+    status: str
+
+
+class GroupDetailTeacherResponse(BaseModel):
+    teacher_id: int
+    name: str
+    hours: float
+
+
+class GroupDetailResponse(BaseModel):
+    active_trainees: int
+    archived_trainees: int
+    capacity_used_pct: int
+    trainees: list[GroupDetailTraineeResponse] = Field(default_factory=list)
+    schedule_slots: int
+    schedule_hours: float
+    schedule_date_from: date | None = None
+    schedule_date_to: date | None = None
+    teachers: list[GroupDetailTeacherResponse] = Field(default_factory=list)
+
+
 class ActiveGroupBetweenDatesResponse(BaseModel):
     group_id: int
     code: str
