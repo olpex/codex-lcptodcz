@@ -383,7 +383,7 @@ export function TraineesPage() {
 
   usePageRefresh(() => fetchTrainees(search, { quiet: true }), {
     enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating && !hasExpandedTrainees,
-    intervalMs: 120_000,
+    intervalMs: 45_000,
     refreshOnFocus: false
   });
 

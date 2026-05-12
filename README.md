@@ -92,10 +92,11 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 Окремо від папки журналів підтримується intake-папка для файлів розкладу (`.docx`) та даних слухачів (`.xls/.xlsx`, Google Sheets). За замовчуванням це:
 
 - `GOOGLE_DRIVE_INTAKE_FOLDER_URL=https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY`
-- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=30`
+- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=45`
 - `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED=true`
 
 Один tick обробляє один ще не оброблений файл. Запуск відбувається через Celery beat/worker та через сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново.
+Для доступу до приватної intake-папки використовується `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`; якщо він не заданий глобально, backend бере JSON-ключ з активного розділу `Журнали` тієї ж філії.
 
 ## Kubernetes
 

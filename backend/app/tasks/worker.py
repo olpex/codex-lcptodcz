@@ -17,7 +17,7 @@ from app.services.import_export import (
     save_report_file,
     try_import_trainees,
 )
-from app.services.drive_intake import process_next_drive_intake_file
+from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.mail_ingest import ingest_mailbox
 from app.services.journal_monitor import list_drive_child_folders, process_journal_monitor_background_step
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
@@ -251,9 +251,11 @@ def process_drive_intake_auto_task(self) -> dict:
         return {"processed": 0, "disabled": True}
     db = _get_db()
     try:
+        branch_id = settings.imap_branch_id or "main"
         result = process_next_drive_intake_file(
             db,
-            branch_id=settings.imap_branch_id or "main",
+            branch_id=branch_id,
+            service_account_json=resolve_drive_intake_service_account_json(db, branch_id),
             import_job_runner=process_import_job_task.run,
         )
         db.commit()

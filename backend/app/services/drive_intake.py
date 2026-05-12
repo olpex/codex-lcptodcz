@@ -11,7 +11,8 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Document, DocumentType, ImportJob, JobStatus
+from app.core.crypto import cipher
+from app.models import Document, DocumentType, ImportJob, JobStatus, JournalMonitorSection
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.journal_monitor import (
     GOOGLE_DRIVE_DOCS_MIME,
@@ -46,6 +47,26 @@ _MIME_EXTENSIONS = {
 FileLister = Callable[[str, str | None], list[dict[str, Any]]]
 Downloader = Callable[[str, str | None, str | None], bytes]
 ImportJobRunner = Callable[[int], Any]
+
+
+def resolve_drive_intake_service_account_json(db: Session, branch_id: str | None = None) -> str | None:
+    configured = settings.google_drive_service_account_json.strip()
+    if configured:
+        return configured
+
+    query = db.query(JournalMonitorSection).filter(
+        JournalMonitorSection.is_active.is_(True),
+        JournalMonitorSection.service_account_json_encrypted.is_not(None),
+    )
+    if branch_id:
+        query = query.filter(JournalMonitorSection.branch_id == branch_id)
+
+    sections = query.order_by(JournalMonitorSection.updated_at.desc(), JournalMonitorSection.id.desc()).all()
+    for section in sections:
+        decrypted = cipher.decrypt(section.service_account_json_encrypted)
+        if decrypted and decrypted.strip():
+            return decrypted
+    return None
 
 
 def list_drive_intake_files(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:

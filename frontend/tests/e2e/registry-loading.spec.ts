@@ -196,3 +196,52 @@ test("trainees registry does not wait for journal auto tick", async ({ page }) =
     releaseAutoTick();
   }
 });
+
+test("trainees registry schedules background intake sync every 45 seconds", async ({ page }) => {
+  await installAuth(page);
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval.bind(window);
+    (window as unknown as { __suptcIntervals: number[] }).__suptcIntervals = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      (window as unknown as { __suptcIntervals: number[] }).__suptcIntervals.push(Number(timeout));
+      return originalSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval;
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(authUserPayload()) });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ processed_sections: 0, failed_sections: 0, drive_intake_processed: 0, drive_intake_failed: 0 })
+      });
+    }
+
+    if (path.endsWith("/groups") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/trainees") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/trainees");
+
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __suptcIntervals: number[] }).__suptcIntervals), {
+      timeout: 1000
+    })
+    .toContain(45_000);
+});

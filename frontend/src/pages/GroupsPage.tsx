@@ -506,7 +506,7 @@ export function GroupsPage() {
 
   usePageRefresh(() => loadGroups({ quiet: true }), {
     enabled: !isSubmitting && !isDeleting && !isBulkDeleting,
-    intervalMs: 120_000,
+    intervalMs: 45_000,
     refreshOnFocus: false
   });
 

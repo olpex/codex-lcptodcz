@@ -1873,6 +1873,39 @@ def test_journal_auto_tick_endpoint_processes_one_drive_intake_file(client, auth
     assert captured["import_job_runner"] is not None
 
 
+def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, auth_headers, db_session, monkeypatch):
+    captured: dict[str, object] = {}
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        service_account_json_encrypted=cipher.encrypt("section-service-account-json"),
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_journal_monitor_background_step",
+        lambda db, section, **kwargs: None,
+    )
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["service_account_json"] = kwargs.get("service_account_json")
+        return {"processed": 0, "skipped_already_processed": 0, "skipped_unsupported": 0}
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fake_process_next_drive_intake_file,
+        raising=False,
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    assert captured["service_account_json"] == "section-service-account-json"
+
+
 def test_journal_auto_worker_processes_all_pending_trainees_after_workloads_processed(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {

@@ -18,7 +18,7 @@ from app.schemas.api import (
     JournalMonitorSectionUpdate,
 )
 from app.services.audit import write_audit
-from app.services.drive_intake import process_next_drive_intake_file
+from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     archive_trainees_for_deleted_journal_entries,
@@ -79,6 +79,7 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
         result = process_next_drive_intake_file(
             db,
             branch_id=branch_id or settings.imap_branch_id or "main",
+            service_account_json=resolve_drive_intake_service_account_json(db, branch_id),
             import_job_runner=process_import_job_task.run,
         )
         db.commit()

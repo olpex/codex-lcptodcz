@@ -20,7 +20,7 @@ from app.models import (
 )
 from app.services import drive_intake
 from app.services.import_export import collect_teacher_workload_summary
-from app.tasks.worker import process_import_job_task
+from app.tasks.worker import process_drive_intake_auto_task, process_import_job_task
 
 
 def _contracts_workbook_bytes() -> bytes:
@@ -234,3 +234,27 @@ def test_drive_intake_skips_files_that_were_already_processed(db_session):
     assert first["processed"] == 1
     assert second == {"processed": 0, "skipped_already_processed": 1, "skipped_unsupported": 0}
     assert db_session.query(ImportJob).count() == 1
+
+
+def test_drive_intake_worker_reuses_active_journal_section_credentials(db_session, monkeypatch):
+    captured: dict[str, object] = {}
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/journals",
+        folder_id="journals",
+        service_account_json_encrypted=cipher.encrypt("section-service-account-json"),
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["service_account_json"] = kwargs.get("service_account_json")
+        return {"processed": 0, "skipped_already_processed": 0, "skipped_unsupported": 0}
+
+    monkeypatch.setattr("app.tasks.worker.process_next_drive_intake_file", fake_process_next_drive_intake_file)
+
+    result = process_drive_intake_auto_task.run()
+
+    assert result["processed"] == 0
+    assert captured["service_account_json"] == "section-service-account-json"
