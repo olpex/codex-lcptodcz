@@ -31,7 +31,7 @@ function trainee(id: number, firstName: string, lastName: string, groupCode: str
   };
 }
 
-test("admin can delete selected trainee-register groups with their trainees", async ({ page }) => {
+test("admin can archive selected trainee-register group rosters without deleting groups", async ({ page }) => {
   const state = {
     groups: [
       { id: 1, code: "33-26", name: "Група 33", capacity: 30, status: "active", start_date: null, end_date: null },
@@ -44,7 +44,8 @@ test("admin can delete selected trainee-register groups with their trainees", as
       trainee(3, "Марія", "Петренко", "73-26"),
       trainee(4, "Павло", "Шевченко", "83-26")
     ],
-    bulkPayload: null as null | { group_ids: number[]; delete_trainees: boolean }
+    archivedTraineePayload: null as null | { trainee_ids: number[] },
+    groupsDeleteCalled: false
   };
 
   await page.addInitScript(() => {
@@ -93,22 +94,26 @@ test("admin can delete selected trainee-register groups with their trainees", as
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     }
 
-    if (path.endsWith("/groups/bulk/delete") && method === "POST") {
-      state.bulkPayload = request.postDataJSON() as { group_ids: number[]; delete_trainees: boolean };
-      const deletedCodes = new Set(
-        state.groups.filter((group) => state.bulkPayload?.group_ids.includes(group.id)).map((group) => group.code)
-      );
-      state.groups = state.groups.filter((group) => !state.bulkPayload?.group_ids.includes(group.id));
-      state.trainees = state.trainees.filter((item) => !deletedCodes.has(item.group_code));
+    if (path.endsWith("/trainees/bulk/delete") && method === "POST") {
+      state.archivedTraineePayload = request.postDataJSON() as { trainee_ids: number[] };
+      const archivedIds = new Set(state.archivedTraineePayload.trainee_ids);
+      state.trainees = state.trainees.filter((item) => !archivedIds.has(item.id));
       return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          deleted_count: state.bulkPayload.group_ids.length,
-          deleted_ids: state.bulkPayload.group_ids,
-          missing_ids: [],
-          deleted_trainees_count: 3
+          deleted_count: state.archivedTraineePayload.trainee_ids.length,
+          deleted_ids: state.archivedTraineePayload.trainee_ids
         })
+      });
+    }
+
+    if (path.endsWith("/groups/bulk/delete") && method === "POST") {
+      state.groupsDeleteCalled = true;
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Groups must not be deleted from the trainees registry" })
       });
     }
 
@@ -123,10 +128,12 @@ test("admin can delete selected trainee-register groups with their trainees", as
 
   await page.getByRole("checkbox", { name: "Вибрати групу 33-26" }).check();
   await page.getByRole("checkbox", { name: "Вибрати групу 73-26" }).check();
-  await page.getByRole("button", { name: "Видалити групи" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Видалити групи" }).click();
+  await page.getByRole("button", { name: "Архівувати слухачів груп" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Архівувати слухачів" }).click();
 
-  await expect.poll(() => state.bulkPayload).toEqual({ group_ids: [1, 2], delete_trainees: true });
+  await expect.poll(() => state.archivedTraineePayload).toEqual({ trainee_ids: [1, 2, 3] });
+  expect(state.groupsDeleteCalled).toBe(false);
+  expect(state.groups.map((group) => group.code)).toEqual(["33-26", "73-26", "83-26"]);
   await expect(page.getByRole("button", { name: /Група: 83-26/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Група: 33-26/ })).not.toBeVisible();
   await expect(page.getByRole("button", { name: /Група: 73-26/ })).not.toBeVisible();
