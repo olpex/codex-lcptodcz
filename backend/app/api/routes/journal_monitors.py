@@ -1,10 +1,12 @@
 import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
+from app.core.config import settings
 from app.core.crypto import cipher
 from app.models import JournalMonitorEntry, JournalMonitorSection, RoleName
 from app.schemas.api import (
@@ -35,6 +37,64 @@ from app.services.journal_monitor import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> dict[str, int]:
+    query = db.query(JournalMonitorSection.id).filter(JournalMonitorSection.is_active.is_(True))
+    if branch_id is not None:
+        query = query.filter(JournalMonitorSection.branch_id == branch_id)
+    section_ids = [row[0] for row in query.all()]
+    processed_sections = 0
+    failed_sections = 0
+
+    for section_id in section_ids:
+        try:
+            section = db.get(JournalMonitorSection, section_id)
+            if not section or not section.is_active:
+                continue
+            target_year = section.workload_auto_year or datetime.now(timezone.utc).year
+            process_journal_monitor_background_step(
+                db,
+                section,
+                folder_lister=list_drive_child_folders,
+                target_year=target_year,
+            )
+            db.commit()
+            processed_sections += 1
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Journal monitor cron processing failed for section %s: %s", section_id, exc)
+            failed_sections += 1
+
+    return {"processed_sections": processed_sections, "failed_sections": failed_sections}
+
+
+@router.get("/auto-cron", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/auto-cron", status_code=status.HTTP_202_ACCEPTED)
+def process_journal_monitor_auto_cron(
+    db: DbSession,
+    authorization: str | None = Header(default=None),
+) -> dict[str, int]:
+    expected_secret = settings.cron_secret.strip()
+    if not expected_secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="CRON_SECRET не налаштовано")
+    expected_header = f"Bearer {expected_secret}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
+
+    return _process_journal_monitor_auto_sections(db)
+
+
+@router.post(
+    "/auto-tick",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def process_journal_monitor_auto_tick(
+    db: DbSession,
+    current_user: CurrentUser,
+) -> dict[str, int]:
+    return _process_journal_monitor_auto_sections(db, branch_id=current_user.branch_id)
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:

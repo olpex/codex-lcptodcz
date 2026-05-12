@@ -7,6 +7,7 @@ import { API_URL } from "../api/client";
 import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { ActiveGroupBetweenDates, Group, GroupAuditLog, ScheduleSlot, Trainee, Workload } from "../types/api";
 
@@ -223,6 +224,7 @@ export function GroupsPage() {
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
+  const triggerJournalAutoTick = useJournalAutoTick(request, canEdit);
 
   const selectedGroups = useMemo(
     () => groups.filter((group) => selectedGroupIds[group.id]),
@@ -378,6 +380,7 @@ export function GroupsPage() {
   const loadGroups = async () => {
     setIsLoading(true);
     try {
+      await triggerJournalAutoTick();
       const [data, traineeRows, scheduleRows, workloadData] = await Promise.all([
         request<Group[]>("/groups"),
         request<Trainee[]>("/trainees?include_deleted=true"),

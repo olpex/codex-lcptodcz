@@ -1731,6 +1731,108 @@ def test_journal_auto_worker_processes_active_sections_without_manual_auto_toggl
     assert entry.trainee_count == 1
 
 
+def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(journal_monitor.settings, "cron_secret", "cron-secret")
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "1-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=False,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/journal-monitors/auto-cron",
+        headers={"Authorization": "Bearer cron-secret"},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"processed_sections": 1, "failed_sections": 0}
+    db_session.refresh(section)
+    entry = section.entries[0]
+    assert entry.group_code == "1-26"
+    assert entry.workload_status == "processed"
+    assert entry.trainees_status == "processed"
+    assert entry.trainee_count == 1
+
+
+def test_journal_auto_tick_endpoint_processes_current_branch_sections(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Журнал",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "1-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=False,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    assert response.json() == {"processed_sections": 1, "failed_sections": 0}
+    db_session.refresh(section)
+    entry = section.entries[0]
+    assert entry.group_code == "1-26"
+    assert entry.workload_status == "processed"
+    assert entry.trainees_status == "processed"
+    assert entry.trainee_count == 1
+
+
 def test_journal_auto_worker_processes_all_pending_trainees_after_workloads_processed(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {
