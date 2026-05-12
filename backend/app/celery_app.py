@@ -10,12 +10,17 @@ celery_app.conf.task_routes = {
     "app.tasks.worker.process_import_job_task": {"queue": "import_parse"},
     "app.tasks.worker.process_export_job_task": {"queue": "report_export"},
     "app.tasks.worker.process_journal_monitor_auto_task": {"queue": "journal_monitor"},
+    "app.tasks.worker.process_drive_intake_auto_task": {"queue": "drive_intake"},
 }
 
 celery_app.conf.beat_schedule = {
     "journal-monitor-workload-auto": {
         "task": "app.tasks.worker.process_journal_monitor_auto_task",
         "schedule": settings.journal_workload_auto_interval_seconds,
+    },
+    "google-drive-intake-auto": {
+        "task": "app.tasks.worker.process_drive_intake_auto_task",
+        "schedule": settings.google_drive_intake_interval_seconds,
     }
 }
 

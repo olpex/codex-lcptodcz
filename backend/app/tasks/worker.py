@@ -17,6 +17,7 @@ from app.services.import_export import (
     save_report_file,
     try_import_trainees,
 )
+from app.services.drive_intake import process_next_drive_intake_file
 from app.services.mail_ingest import ingest_mailbox
 from app.services.journal_monitor import list_drive_child_folders, process_journal_monitor_background_step
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
@@ -237,6 +238,30 @@ def process_journal_monitor_auto_task(self) -> dict:
                 db.rollback()
                 failed_sections += 1
         return {"processed_sections": processed_sections, "failed_sections": failed_sections}
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.worker.process_drive_intake_auto_task",
+)
+def process_drive_intake_auto_task(self) -> dict:
+    if not settings.google_drive_intake_auto_enabled:
+        return {"processed": 0, "disabled": True}
+    db = _get_db()
+    try:
+        result = process_next_drive_intake_file(
+            db,
+            branch_id=settings.imap_branch_id or "main",
+            import_job_runner=process_import_job_task.run,
+        )
+        db.commit()
+        return result
+    except Exception as exc:
+        logger.exception("Google Drive intake auto processing failed: %s", exc)
+        db.rollback()
+        return {"processed": 0, "failed": 1, "message": str(exc)}
     finally:
         db.close()
 

@@ -23,8 +23,10 @@ from app.services.import_export import save_report_file, try_import_trainees
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 GOOGLE_DRIVE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
+GOOGLE_DRIVE_DOCS_MIME = "application/vnd.google-apps.document"
 GOOGLE_DRIVE_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 GOOGLE_DRIVE_XLS_MIME = "application/vnd.ms-excel"
+GOOGLE_DRIVE_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 SERVICE_ACCOUNT_SETUP_MESSAGE = (
@@ -823,11 +825,18 @@ def download_drive_file_bytes(
             f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}/export"
             f"?mimeType={quote(GOOGLE_DRIVE_XLSX_MIME)}"
         )
+    elif mime_type == GOOGLE_DRIVE_DOCS_MIME:
+        url = (
+            f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}/export"
+            f"?mimeType={quote(GOOGLE_DRIVE_DOCX_MIME)}"
+        )
     else:
         url = f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}?alt=media"
     request_or_url = _drive_request_url(url, service_account_json)
     if isinstance(request_or_url, Request) and mime_type == GOOGLE_DRIVE_SHEETS_MIME:
         request_or_url.add_header("Accept", GOOGLE_DRIVE_XLSX_MIME)
+    if isinstance(request_or_url, Request) and mime_type == GOOGLE_DRIVE_DOCS_MIME:
+        request_or_url.add_header("Accept", GOOGLE_DRIVE_DOCX_MIME)
     with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
         return response.read()
 
