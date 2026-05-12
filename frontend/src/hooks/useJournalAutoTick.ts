@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 
 type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
 
-const MIN_INTERVAL_MS = 60_000;
+const MIN_INTERVAL_MS = 30_000;
 
 export function useJournalAutoTick(request: ApiRequest, enabled = true) {
   const lastRunRef = useRef(0);
