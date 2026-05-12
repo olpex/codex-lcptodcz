@@ -10,11 +10,13 @@ from openpyxl.styles import Font
 from sqlalchemy import func, or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
+from app.core.crypto import cipher
 from app.models import (
     AuditLog,
     Group,
     GroupMembership,
     JournalMonitorEntry,
+    JournalWorkloadEntry,
     MembershipStatus,
     Performance,
     RoleName,
@@ -31,6 +33,9 @@ from app.schemas.api import (
     ExpelRequest,
     GroupAuditLogResponse,
     GroupCreate,
+    GroupDetailResponse,
+    GroupDetailTeacherResponse,
+    GroupDetailTraineeResponse,
     GroupResponse,
     GroupTeacherHoursResponse,
     GroupUpdate,
@@ -91,6 +96,11 @@ def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]])
     return response.model_copy(
         update=updates
     )
+
+
+def _teacher_name(first_name: str | None, last_name: str | None, fallback_id: int) -> str:
+    name = " ".join(part for part in [last_name, first_name] if part).strip()
+    return name or f"Teacher #{fallback_id}"
 
 
 def _is_journal_backed_group(db: DbSession, group: Group) -> bool:
@@ -517,6 +527,115 @@ def list_group_audit(
         )
         for audit, actor_name in rows
     ]
+
+
+@router.get("/{group_id}/detail", response_model=GroupDetailResponse)
+def get_group_detail(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupDetailResponse:
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Р“СЂСѓРїСѓ РЅРµ Р·РЅР°Р№РґРµРЅРѕ")
+    ensure_same_branch(current_user, group, "Р“СЂСѓРїСѓ")
+
+    group_code = (group.code or "").strip()
+    trainee_rows = (
+        apply_branch_scope(db.query(Trainee), Trainee, current_user.branch_id)
+        .filter(Trainee.group_code == group_code)
+        .all()
+        if group_code
+        else []
+    )
+    active_rows = [trainee for trainee in trainee_rows if not trainee.is_deleted]
+    active_rows.sort(
+        key=lambda trainee: (
+            trainee.source_row_number if trainee.source_row_number is not None else 999999999,
+            f"{trainee.last_name} {trainee.first_name}".casefold(),
+        )
+    )
+
+    schedule_count, schedule_hours, schedule_start, schedule_end = (
+        db.query(
+            func.count(ScheduleSlot.id),
+            func.coalesce(func.sum(ScheduleSlot.academic_hours), 0),
+            func.min(ScheduleSlot.starts_at),
+            func.max(ScheduleSlot.starts_at),
+        )
+        .filter(ScheduleSlot.group_id == group.id)
+        .one()
+    )
+
+    journal_teacher_rows = (
+        db.query(
+            JournalWorkloadEntry.teacher_id,
+            Teacher.first_name,
+            Teacher.last_name,
+            func.coalesce(func.sum(JournalWorkloadEntry.hours), 0),
+        )
+        .join(Teacher, Teacher.id == JournalWorkloadEntry.teacher_id)
+        .join(JournalMonitorEntry, JournalMonitorEntry.id == JournalWorkloadEntry.journal_monitor_entry_id)
+        .filter(
+            JournalWorkloadEntry.branch_id == current_user.branch_id,
+            JournalMonitorEntry.branch_id == current_user.branch_id,
+            or_(
+                JournalMonitorEntry.matched_group_id == group.id,
+                JournalMonitorEntry.group_code == group_code,
+            ),
+        )
+        .group_by(JournalWorkloadEntry.teacher_id, Teacher.first_name, Teacher.last_name)
+        .all()
+    )
+    if journal_teacher_rows:
+        teacher_rows = journal_teacher_rows
+    else:
+        teacher_rows = (
+            db.query(
+                ScheduleSlot.teacher_id,
+                Teacher.first_name,
+                Teacher.last_name,
+                func.coalesce(func.sum(ScheduleSlot.academic_hours), 0),
+            )
+            .join(Teacher, Teacher.id == ScheduleSlot.teacher_id)
+            .filter(ScheduleSlot.group_id == group.id)
+            .group_by(ScheduleSlot.teacher_id, Teacher.first_name, Teacher.last_name)
+            .all()
+        )
+
+    teachers = [
+        GroupDetailTeacherResponse(
+            teacher_id=teacher_id,
+            name=_teacher_name(first_name, last_name, teacher_id),
+            hours=round(float(hours or 0), 2),
+        )
+        for teacher_id, first_name, last_name, hours in teacher_rows
+    ]
+    teachers.sort(key=lambda teacher: teacher.name.casefold())
+
+    active_count = len(active_rows)
+    archived_count = len(trainee_rows) - active_count
+    capacity_used_pct = round((active_count / group.capacity) * 100) if group.capacity > 0 else 0
+    return GroupDetailResponse(
+        active_trainees=active_count,
+        archived_trainees=archived_count,
+        capacity_used_pct=capacity_used_pct,
+        trainees=[
+            GroupDetailTraineeResponse(
+                trainee_id=trainee.id,
+                row_number=trainee.source_row_number,
+                name=f"{trainee.last_name} {trainee.first_name}".strip(),
+                contract_number=trainee.contract_number,
+                phone=None,
+                birth_date=trainee.birth_date,
+                employment_center=cipher.decrypt(trainee.employment_center_encrypted),
+                address=cipher.decrypt(trainee.address_encrypted),
+                status=trainee.status,
+            )
+            for trainee in active_rows
+        ],
+        schedule_slots=int(schedule_count or 0),
+        schedule_hours=round(float(schedule_hours or 0), 1),
+        schedule_date_from=schedule_start.date() if schedule_start else None,
+        schedule_date_to=schedule_end.date() if schedule_end else None,
+        teachers=teachers,
+    )
 
 
 @router.put(

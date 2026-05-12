@@ -9,7 +9,15 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ActiveGroupBetweenDates, Group, GroupAuditLog, ScheduleSlot, Trainee, Workload } from "../types/api";
+import type {
+  ActiveGroupBetweenDates,
+  Group,
+  GroupAuditLog,
+  GroupDetail as GroupDetailPayload,
+  ScheduleSlot,
+  Trainee,
+  Workload
+} from "../types/api";
 
 type GroupDetail = {
   activeTrainees: number;
@@ -182,13 +190,39 @@ function buildGroupDetail(group: Group | null, trainees: Trainee[], scheduleSlot
   };
 }
 
+function mapGroupDetail(payload: GroupDetailPayload): GroupDetail {
+  return {
+    activeTrainees: payload.active_trainees,
+    archivedTrainees: payload.archived_trainees,
+    capacityUsedPct: payload.capacity_used_pct,
+    trainees: payload.trainees.map((trainee) => ({
+      traineeId: trainee.trainee_id,
+      rowNumber: trainee.row_number,
+      name: trainee.name,
+      contractNumber: trainee.contract_number,
+      phone: trainee.phone,
+      birthDate: trainee.birth_date,
+      employmentCenter: trainee.employment_center,
+      address: trainee.address,
+      status: trainee.status
+    })),
+    scheduleSlots: payload.schedule_slots,
+    scheduleHours: payload.schedule_hours,
+    scheduleDateFrom: payload.schedule_date_from,
+    scheduleDateTo: payload.schedule_date_to,
+    teachers: payload.teachers.map((teacher) => ({
+      teacherId: teacher.teacher_id,
+      name: teacher.name,
+      hours: teacher.hours
+    }))
+  };
+}
+
 export function GroupsPage() {
   const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
-  const [trainees, setTrainees] = useState<Trainee[]>([]);
-  const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>([]);
-  const [workloadRows, setWorkloadRows] = useState<Workload[]>([]);
+  const [selectedGroupDetail, setSelectedGroupDetail] = useState<GroupDetail | null>(null);
   const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -199,9 +233,11 @@ export function GroupsPage() {
   const [activeGroupSearch, setActiveGroupSearch] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; capacity?: string }>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isFiltering, setIsFiltering] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -244,10 +280,6 @@ export function GroupsPage() {
   const selectedDetailGroup = useMemo(
     () => filteredGroups.find((group) => group.id === selectedDetailGroupId) || filteredGroups[0] || null,
     [filteredGroups, selectedDetailGroupId]
-  );
-  const selectedGroupDetail = useMemo(
-    () => buildGroupDetail(selectedDetailGroup, trainees, scheduleSlots, workloadRows),
-    [scheduleSlots, selectedDetailGroup, trainees, workloadRows]
   );
   const selectedTraineesExpanded = selectedDetailGroup ? Boolean(expandedTraineeTables[selectedDetailGroup.id]) : false;
 
@@ -377,20 +409,13 @@ export function GroupsPage() {
     []
   );
 
-  const loadGroups = async () => {
-    setIsLoading(true);
+  const loadGroups = async (options: { quiet?: boolean } = {}) => {
+    const showLoading = !options.quiet || groups.length === 0;
+    if (showLoading) setIsLoading(true);
     try {
       await triggerJournalAutoTick();
-      const [data, traineeRows, scheduleRows, workloadData] = await Promise.all([
-        request<Group[]>("/groups"),
-        request<Trainee[]>("/trainees?include_deleted=true"),
-        request<ScheduleSlot[]>("/schedule"),
-        request<Workload[]>("/teacher-workload")
-      ]);
+      const data = await request<Group[]>("/groups");
       setGroups(data);
-      setTrainees(traineeRows);
-      setScheduleSlots(scheduleRows);
-      setWorkloadRows(workloadData);
       setSelectedGroupIds((prev) => {
         const availableIds = new Set(data.map((group) => group.id));
         return Object.fromEntries(
@@ -407,9 +432,9 @@ export function GroupsPage() {
     } catch (error) {
       const message = (error as Error).message;
       setLoadError(message);
-      showError(message);
+      if (!options.quiet) showError(message);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   };
 
@@ -422,6 +447,36 @@ export function GroupsPage() {
       setGroupYearFilter(String(groupYears[0]));
     }
   }, [groupYearFilter, groupYears]);
+
+  useEffect(() => {
+    if (!selectedDetailGroup) {
+      setSelectedGroupDetail(null);
+      setDetailError(null);
+      return;
+    }
+    let cancelled = false;
+    const loadDetail = async () => {
+      setIsDetailLoading(true);
+      setSelectedGroupDetail(null);
+      try {
+        const payload = await request<GroupDetailPayload>(`/groups/${selectedDetailGroup.id}/detail`);
+        if (cancelled) return;
+        setSelectedGroupDetail(mapGroupDetail(payload));
+        setDetailError(null);
+      } catch (error) {
+        if (cancelled) return;
+        const message = (error as Error).message;
+        setSelectedGroupDetail(null);
+        setDetailError(message);
+      } finally {
+        if (!cancelled) setIsDetailLoading(false);
+      }
+    };
+    void loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDetailGroup?.id]);
 
   const loadGroupAudit = async (groupId: number) => {
     setIsAuditLoading(true);
@@ -446,7 +501,11 @@ export function GroupsPage() {
     loadGroupAudit(selectedDetailGroup.id);
   }, [selectedDetailGroup?.id]);
 
-  usePageRefresh(loadGroups, { intervalMs: 30_000 });
+  usePageRefresh(() => loadGroups({ quiet: true }), {
+    enabled: !isSubmitting && !isDeleting && !isBulkDeleting,
+    intervalMs: 120_000,
+    refreshOnFocus: false
+  });
 
   const validatePeriod = () => {
     if (dateFrom && dateTo && dateTo < dateFrom) {
@@ -815,7 +874,15 @@ export function GroupsPage() {
         </div>
       </Panel>
       <Panel title="1.3 Детальна картка групи">
-        {selectedDetailGroup && selectedGroupDetail ? (
+        {selectedDetailGroup && isDetailLoading && !selectedGroupDetail ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+            Завантаження деталей групи...
+          </div>
+        ) : selectedDetailGroup && detailError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+            {detailError}
+          </div>
+        ) : selectedDetailGroup && selectedGroupDetail ? (
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1024,7 +1091,7 @@ export function GroupsPage() {
           <button
             type="button"
             className="rounded-lg bg-amber px-4 py-2 text-sm font-semibold text-ink disabled:opacity-50"
-            onClick={loadGroups}
+            onClick={() => loadGroups()}
             disabled={isLoading}
           >
             {isLoading ? "Оновлюємо..." : "Оновити"}
