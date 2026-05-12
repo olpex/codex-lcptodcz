@@ -93,9 +93,27 @@ def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]])
     )
 
 
+def _is_journal_backed_group(db: DbSession, group: Group) -> bool:
+    if not group.code:
+        return False
+    return (
+        db.query(JournalMonitorEntry.id)
+        .filter(
+            JournalMonitorEntry.branch_id == group.branch_id,
+            or_(
+                JournalMonitorEntry.matched_group_id == group.id,
+                JournalMonitorEntry.group_code == group.code,
+            ),
+        )
+        .first()
+        is not None
+    )
+
+
 def _delete_group_rows(db: DbSession, group: Group, delete_trainees: bool) -> dict[str, int | bool]:
     deleted_trainees_count = 0
     cleared_trainee_group_codes = 0
+    journal_backed_group = _is_journal_backed_group(db, group)
     if delete_trainees and group.code:
         now = datetime.now(timezone.utc)
         trainees_to_delete = (
@@ -137,24 +155,30 @@ def _delete_group_rows(db: DbSession, group: Group, delete_trainees: bool) -> di
         .filter(Performance.group_id == group.id)
         .delete(synchronize_session=False)
     )
-    cleared_journal_monitor_matches = (
-        db.query(JournalMonitorEntry)
-        .filter(
-            JournalMonitorEntry.branch_id == group.branch_id,
-            JournalMonitorEntry.matched_group_id == group.id,
+    if journal_backed_group:
+        cleared_journal_monitor_matches = 0
+        group.hidden_from_registry = True
+        db.add(group)
+    else:
+        cleared_journal_monitor_matches = (
+            db.query(JournalMonitorEntry)
+            .filter(
+                JournalMonitorEntry.branch_id == group.branch_id,
+                JournalMonitorEntry.matched_group_id == group.id,
+            )
+            .update(
+                {
+                    "matched_group_id": None,
+                    "has_group": False,
+                },
+                synchronize_session=False,
+            )
         )
-        .update(
-            {
-                "matched_group_id": None,
-                "has_group": False,
-            },
-            synchronize_session=False,
-        )
-    )
-
-    db.delete(group)
+        db.delete(group)
     return {
         "delete_trainees": delete_trainees,
+        "journal_backed_group": journal_backed_group,
+        "hidden_from_registry": journal_backed_group,
         "deleted_trainees_count": deleted_trainees_count,
         "cleared_trainee_group_codes": cleared_trainee_group_codes,
         "deleted_schedule_slots": deleted_schedule_slots,

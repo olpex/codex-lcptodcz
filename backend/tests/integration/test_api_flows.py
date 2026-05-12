@@ -13,6 +13,7 @@ from app.models import (
     ImportJob,
     JournalMonitorEntry,
     JournalMonitorSection,
+    JournalWorkloadEntry,
     JobStatus,
     MembershipStatus,
     OCRResult,
@@ -806,7 +807,7 @@ def test_delete_group_clears_trainee_group_code_when_trainees_kept(client, auth_
     assert trainee.group_code is None
 
 
-def test_delete_group_clears_journal_monitor_match(client, auth_headers, db_session):
+def test_delete_journal_backed_group_hides_it_and_keeps_monitor_match(client, auth_headers, db_session):
     group_response = client.post(
         "/api/v1/groups",
         json={"code": "GRP-JOURNAL-001", "name": "Група з журналом", "capacity": 20, "status": "active"},
@@ -838,9 +839,13 @@ def test_delete_group_clears_journal_monitor_match(client, auth_headers, db_sess
     delete_response = client.delete(f"/api/v1/groups/{group_id}", headers=auth_headers)
     assert delete_response.status_code == 204
 
+    db_session.expire_all()
+    group = db_session.get(Group, group_id)
+    assert group is not None
+    assert group.hidden_from_registry is True
     db_session.refresh(entry)
-    assert entry.matched_group_id is None
-    assert entry.has_group is False
+    assert entry.matched_group_id == group_id
+    assert entry.has_group is True
 
 
 def test_bulk_delete_groups_archives_matching_trainees(client, auth_headers, db_session):
@@ -900,6 +905,79 @@ def test_bulk_delete_groups_archives_matching_trainees(client, auth_headers, db_
     assert archived_by_id[first_trainee.json()["id"]]["is_deleted"] is True
     assert archived_by_id[second_trainee.json()["id"]]["is_deleted"] is True
     assert archived_by_id[kept_trainee.json()["id"]]["is_deleted"] is False
+
+
+def test_pages_endpoints_survive_group_delete_with_journal_workload(client, auth_headers, db_session):
+    teacher = Teacher(branch_id="main", first_name="Іван", last_name="Викладач", hourly_rate=0.0, annual_load_hours=100.0)
+    group = Group(branch_id="main", code="80-26", name="Група 80-26", status=GroupStatus.ACTIVE)
+    subject = Subject(branch_id="main", name="Журнальний предмет", hours_total=12)
+    room = Room(branch_id="main", name="Аудиторія 80", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([teacher, group, subject, room, section])
+    db_session.flush()
+    entry = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-80-26",
+        journal_name="80-26 Група",
+        group_code="80-26",
+        matched_group_id=group.id,
+        has_group=True,
+        workload_status="processed",
+        workload_year=2026,
+        trainees_status="processed",
+        trainees_message="Додано/оновлено слухачів із журналу: 1",
+        trainee_count=1,
+        has_trainees=True,
+    )
+    trainee = Trainee(branch_id="main", first_name="Петро", last_name="Слухач", status="active", group_code="80-26")
+    db_session.add_all([entry, trainee])
+    db_session.flush()
+    db_session.add_all(
+        [
+            GroupMembership(group_id=group.id, trainee_id=trainee.id, status=MembershipStatus.ACTIVE),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=datetime(2026, 5, 12, 9, 30, tzinfo=timezone.utc),
+                ends_at=datetime(2026, 5, 12, 11, 5, tzinfo=timezone.utc),
+                pair_number=1,
+                academic_hours=2,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=entry.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Журнальний предмет",
+                hours=2,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    delete_response = client.post(
+        "/api/v1/groups/bulk/delete",
+        json={"group_ids": [group.id], "delete_trainees": True},
+        headers=auth_headers,
+    )
+    assert delete_response.status_code == 200
+
+    for path in (
+        "/api/v1/groups",
+        "/api/v1/trainees?include_deleted=true",
+        "/api/v1/trainees?search=80-26",
+        "/api/v1/schedule",
+        "/api/v1/teacher-workload",
+    ):
+        response = client.get(path, headers=auth_headers)
+        assert response.status_code == 200, path
 
 
 def test_clear_orphan_group_codes_endpoint(client, auth_headers):
