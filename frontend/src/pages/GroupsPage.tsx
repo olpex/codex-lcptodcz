@@ -278,7 +278,7 @@ export function GroupsPage() {
   const selectedGroupCount = selectedGroups.length;
   const allGroupsSelected = filteredGroups.length > 0 && filteredGroups.every((group) => selectedGroupIds[group.id]);
   const selectedDetailGroup = useMemo(
-    () => filteredGroups.find((group) => group.id === selectedDetailGroupId) || filteredGroups[0] || null,
+    () => filteredGroups.find((group) => group.id === selectedDetailGroupId) || null,
     [filteredGroups, selectedDetailGroupId]
   );
   const selectedTraineesExpanded = selectedDetailGroup ? Boolean(expandedTraineeTables[selectedDetailGroup.id]) : false;
@@ -409,7 +409,7 @@ export function GroupsPage() {
     []
   );
 
-  const loadGroups = async (options: { quiet?: boolean } = {}) => {
+  const loadGroups = async (options: { quiet?: boolean; selectedGroupId?: number | null } = {}) => {
     const showLoading = !options.quiet || groups.length === 0;
     if (showLoading) setIsLoading(true);
     try {
@@ -425,8 +425,11 @@ export function GroupsPage() {
         );
       });
       setSelectedDetailGroupId((current) => {
+        if (options.selectedGroupId && data.some((group) => group.id === options.selectedGroupId)) {
+          return options.selectedGroupId;
+        }
         if (current && data.some((group) => group.id === current)) return current;
-        return data[0]?.id ?? null;
+        return null;
       });
       setLoadError(null);
     } catch (error) {
@@ -603,7 +606,7 @@ export function GroupsPage() {
     setFieldErrors({});
     setIsSubmitting(true);
     try {
-      await request<Group>("/groups", {
+      const createdGroup = await request<Group>("/groups", {
         method: "POST",
         body: JSON.stringify({
           name,
@@ -615,7 +618,7 @@ export function GroupsPage() {
       setName("");
       setCode("");
       setCapacity(25);
-      await loadGroups();
+      await loadGroups({ selectedGroupId: createdGroup.id });
       showSuccess("Групу створено");
     } catch (error) {
       showError((error as Error).message);

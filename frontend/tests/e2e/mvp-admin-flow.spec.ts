@@ -114,6 +114,48 @@ test("admin can run core MVP flow", async ({ page }) => {
       return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(group) });
     }
 
+    const groupDetailMatch = path.match(/\/groups\/(\d+)\/detail$/);
+    if (groupDetailMatch && method === "GET") {
+      const groupId = Number(groupDetailMatch[1]);
+      const group = state.groups.find((item) => item.id === groupId);
+      const groupTrainees = state.trainees.filter((trainee) => {
+        const traineeGroupId = "group_id" in trainee ? Number(trainee.group_id) : null;
+        return traineeGroupId === groupId;
+      });
+      if (!group) {
+        return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not found" }) });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          active_trainees: groupTrainees.length,
+          archived_trainees: 0,
+          capacity_used_pct: Math.round((groupTrainees.length / group.capacity) * 100),
+          trainees: groupTrainees.map((trainee, index) => ({
+            trainee_id: trainee.id,
+            row_number: index + 1,
+            name: `${trainee.last_name} ${trainee.first_name}`.trim(),
+            contract_number: null,
+            phone: trainee.phone,
+            birth_date: trainee.birth_date,
+            employment_center: null,
+            address: null,
+            status: trainee.status
+          })),
+          schedule_slots: state.slots.filter((slot) => slot.group_id === groupId).length,
+          schedule_hours: 0,
+          schedule_date_from: null,
+          schedule_date_to: null,
+          teachers: []
+        })
+      });
+    }
+
+    if (path.match(/\/groups\/\d+\/audit$/) && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
     if (path.includes("/trainees") && method === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(state.trainees) });
     }
