@@ -23,7 +23,12 @@ from app.models import (
     MailStatus,
     OCRResult,
 )
-from app.services.import_export import IMPORT_UPDATE_MODES, parse_document_content, try_import_trainees
+from app.services.import_export import (
+    IMPORT_UPDATE_MODES,
+    PREFERRED_TRAINEE_SHEET_NAMES,
+    parse_document_content,
+    try_import_trainees,
+)
 from app.services.ocr import guess_draft_from_text, ocr_image_file
 from app.services.storage import detect_document_type, storage_path
 from app.services.schedule_import import import_schedule_docx
@@ -63,11 +68,14 @@ def extract_contract_group_code(filename: str | None) -> str | None:
     if not is_contract_attachment_filename(filename):
         return None
 
+    return extract_excel_group_code(filename)
+
+
+def extract_excel_group_code(filename: str | None) -> str | None:
     stem = _normalized_contract_filename_stem(filename)
     if stem is None:
         return None
 
-    # Accept both "Договори 73-26 ..." and "73-26 ... Договори ...".
     match = GROUP_CODE_PATTERN.search(stem)
     if not match:
         return None
@@ -101,6 +109,11 @@ def is_contract_attachment_filename(filename: str | None) -> bool:
     if not keyword_matched:
         return False
     return True
+
+
+def _is_preferred_trainee_sheet(sheet_name: str | None) -> bool:
+    preferred_names = {name.casefold() for name in PREFERRED_TRAINEE_SHEET_NAMES}
+    return (sheet_name or "").strip().casefold() in preferred_names
 
 
 def _decode_header(value: str | None) -> str:
@@ -283,9 +296,8 @@ def ingest_mailbox(db: Session) -> dict:
             if record.raw_document_id is None:
                 record.raw_document_id = document.id
 
-            contract_group_code = extract_contract_group_code(filename)
-            is_contract_attachment = is_contract_attachment_filename(filename)
-            if sender_is_contract_source and is_contract_attachment and doc_type == DocumentType.XLSX:
+            contract_group_code = extract_excel_group_code(filename) if doc_type == DocumentType.XLSX else None
+            if sender_is_contract_source and doc_type == DocumentType.XLSX:
                 import_mode = settings.imap_contract_update_mode if settings.imap_contract_update_mode in IMPORT_UPDATE_MODES else "overwrite"
                 job = ImportJob(
                     branch_id=branch_id,
@@ -307,6 +319,9 @@ def ingest_mailbox(db: Session) -> dict:
                 db.flush()
                 try:
                     parsed_content = parse_document_content(str(out_path), doc_type)
+                    if not _is_preferred_trainee_sheet(parsed_content.get("sheet_name")):
+                        sheet_name = parsed_content.get("sheet_name") or "?"
+                        raise ValueError(f"Excel-файл має аркуш «{sheet_name}», очікується «Додаток»")
                     import_result = try_import_trainees(db, parsed_content, branch_id, update_existing_mode=import_mode)
                     job.status = JobStatus.SUCCEEDED
                     job.result_payload = {
@@ -335,7 +350,7 @@ def ingest_mailbox(db: Session) -> dict:
 
             if doc_type in {DocumentType.XLSX, DocumentType.CSV}:
                 attachment_notes.append(
-                    f"Excel-вкладення пропущено ({filename}): не відповідає правилу 'Договори' або відправнику"
+                    f"Excel-вкладення пропущено ({filename}): відправник не дозволений для автоімпорту або немає аркуша «Додаток»"
                 )
                 continue
 

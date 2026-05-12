@@ -600,7 +600,31 @@ def test_import_uses_dodatok_sheet_group_context_and_populates_fields(tmp_path: 
     assert trainee.phone_encrypted is not None
 
 
-def test_import_selects_first_sheet_when_it_contains_trainee_registry(tmp_path: Path, db_session):
+def test_import_prefers_dodatok_sheet_over_other_registry_like_sheets(tmp_path: Path, db_session):
+    file_path = tmp_path / "listeners.xlsx"
+    workbook = Workbook()
+    first_sheet = workbook.active
+    first_sheet.title = "Договори"
+    first_sheet.append(["Група 99-26 Архів"])
+    first_sheet.append([])
+    first_sheet.append(["№", "ПІБ безробітного", "Дата народження", "№ Договору"])
+    first_sheet.append([1, "Архівний Петро Іванович", "01.01.1990", "99-26/001"])
+
+    dodatok = workbook.create_sheet("Додаток")
+    dodatok.append(["Група 73-26 Штучний інтелект"])
+    dodatok.append([])
+    dodatok.append(["№", "ПІБ безробітного", "Дата народження", "№ Договору"])
+    dodatok.append([1, "Бортнік Тетяна Анатоліївна", "12.04.1984", "1499"])
+    workbook.save(file_path)
+
+    parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)
+
+    assert parsed["sheet_name"] == "Додаток"
+    assert parsed["default_group_code"] == "73-26"
+    assert parsed["data"][0]["№ Договору"] == "1499"
+
+
+def test_import_falls_back_to_first_registry_sheet_when_dodatok_is_absent(tmp_path: Path, db_session):
     file_path = tmp_path / "contracts_first_sheet.xlsx"
     _create_contract_like_workbook(file_path)
 
@@ -609,8 +633,8 @@ def test_import_selects_first_sheet_when_it_contains_trainee_registry(tmp_path: 
     first_sheet.title = "Перший аркуш"
     for row in load_workbook(file_path).active.iter_rows(values_only=True):
         first_sheet.append(list(row))
-    dodatok = workbook.create_sheet("Додаток")
-    dodatok.append(["Службовий аркуш без реєстру слухачів"])
+    service_sheet = workbook.create_sheet("Службовий аркуш")
+    service_sheet.append(["Службовий аркуш без реєстру слухачів"])
     workbook.save(file_path)
 
     parsed = parse_document_content(str(file_path), doc_type=DocumentType.XLSX)

@@ -28,7 +28,7 @@ def _contracts_workbook_bytes() -> bytes:
     workbook = Workbook()
     workbook.active.title = "Архів"
     workbook.active.append(["Службова вкладка"])
-    sheet = workbook.create_sheet("Договори")
+    sheet = workbook.create_sheet("Додаток")
     sheet.append(["Група 184-25 Цифровий світ"])
     sheet.append([])
     sheet.append(

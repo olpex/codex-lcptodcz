@@ -205,9 +205,13 @@ def _select_tabular_sheet(sheet_rows: list[tuple[str, list[list[Any]]]]) -> tupl
     if not sheet_rows:
         return None, []
 
+    preferred_names = {name.casefold() for name in PREFERRED_TRAINEE_SHEET_NAMES}
+    for sheet_name, rows in sheet_rows:
+        if sheet_name.strip().casefold() in preferred_names:
+            return sheet_name, rows
+
     best_name, best_rows = sheet_rows[0]
     best_score = -1
-    preferred_names = {name.lower() for name in PREFERRED_TRAINEE_SHEET_NAMES}
 
     for sheet_name, rows in sheet_rows:
         _header_idx, score = _find_header_row_candidate(rows)
@@ -216,9 +220,6 @@ def _select_tabular_sheet(sheet_rows: list[tuple[str, list[list[Any]]]]) -> tupl
             best_rows = rows
             best_score = score
             continue
-        if score == best_score <= 0 and sheet_name.lower() in preferred_names:
-            best_name = sheet_name
-            best_rows = rows
 
     return best_name, best_rows
 

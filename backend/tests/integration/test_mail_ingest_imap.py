@@ -283,10 +283,48 @@ def test_ingest_mailbox_auto_imports_when_group_code_is_before_keyword(db_sessio
     assert import_job.result_payload.get("group_code_hint") == "73-26"
 
 
-def test_ingest_mailbox_skips_non_matching_excel_attachment(db_session, monkeypatch, tmp_path: Path):
+def test_ingest_mailbox_auto_imports_excel_with_dodatok_sheet_even_if_filename_differs(
+    db_session, monkeypatch, tmp_path: Path
+):
     xlsx_path = _build_contract_registry_xlsx(tmp_path)
     raw_message = _build_message_with_attachment(
         sender="Львівський центр ПТО ДСЗ <lcptodcz@gmail.com>",
+        filename="Слухачі 73-26.xlsx",
+        payload=xlsx_path.read_bytes(),
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        message_id="<test-message-listeners-dodatok@example.com>",
+    )
+    fake_client = FakeIMAP4SSL(raw_message)
+
+    monkeypatch.setattr(mail_ingest.settings, "imap_host", "imap.example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_port", 993)
+    monkeypatch.setattr(mail_ingest.settings, "imap_user", "inbox@example.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_password", "secret")
+    monkeypatch.setattr(mail_ingest.settings, "imap_mailbox", "INBOX")
+    monkeypatch.setattr(mail_ingest.settings, "imap_contract_sender_name", "Львівський центр ПТО ДСЗ")
+    monkeypatch.setattr(mail_ingest.settings, "imap_contract_sender_email", "lcptodcz@gmail.com")
+    monkeypatch.setattr(mail_ingest.settings, "imap_contract_attachment_prefix", "Договори")
+    monkeypatch.setattr(mail_ingest.imaplib, "IMAP4_SSL", lambda host, port: fake_client)
+
+    result = mail_ingest.ingest_mailbox(db_session)
+    assert result["processed"] == 1
+
+    import_job = db_session.query(ImportJob).order_by(ImportJob.id.desc()).first()
+    assert import_job is not None
+    assert import_job.status == JobStatus.SUCCEEDED
+    assert import_job.result_payload is not None
+    assert import_job.result_payload.get("source") == "mail_auto_contracts"
+    assert import_job.result_payload.get("group_code_hint") == "73-26"
+    assert import_job.result_payload["parsed"]["sheet_name"] == "Додаток"
+
+    trainee = db_session.query(Trainee).filter(Trainee.contract_number == "73-26/001").first()
+    assert trainee is not None
+
+
+def test_ingest_mailbox_skips_excel_attachment_from_untrusted_sender(db_session, monkeypatch, tmp_path: Path):
+    xlsx_path = _build_contract_registry_xlsx(tmp_path)
+    raw_message = _build_message_with_attachment(
+        sender="Інший відправник <other@example.com>",
         filename="Слухачі 73-26.xlsx",
         payload=xlsx_path.read_bytes(),
         subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",

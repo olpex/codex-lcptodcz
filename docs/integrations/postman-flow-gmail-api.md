@@ -10,7 +10,7 @@
 | **Відправник** (від кого приходять договори) | `lcptodcz@gmail.com` або `olppara@gmail.com` |
 
 OAuth 2.0 токен (`gmailAccessToken`) має бути виданий для акаунту **`lcptodcz.audyt@gmail.com`**.  
-Flow читає вхідні листи цієї скриньки та шукає листи **від `lcptodcz@gmail.com` або `olppara@gmail.com`** з вкладеннями `Договори*.xlsx`.
+Flow читає вхідні листи цієї скриньки та шукає листи **від `lcptodcz@gmail.com` або `olppara@gmail.com`** з Excel-вкладеннями `.xls/.xlsx`. Назва файла може бути довільною; дані слухачів мають бути на аркуші `Додаток`.
 
 ## Архітектура workflow
 
@@ -18,7 +18,7 @@ Flow читає вхідні листи цієї скриньки та шука�
 [Start]
   │ gmailAccessToken (для lcptodcz.audyt@gmail.com), appEndpoint
   ▼
-[GET] List messages (Договори)
+[GET] List messages (Excel)
   https://gmail.googleapis.com/gmail/v1/users/me/messages
   ?q={from:lcptodcz@gmail.com from:olppara@gmail.com} has:attachment
   │  (читає скриньку lcptodcz.audyt@gmail.com)
@@ -32,8 +32,8 @@ Flow читає вхідні листи цієї скриньки та шука�
   https://gmail.googleapis.com/gmail/v1/users/me/messages/{{messageId}}?format=full
   │
   ▼
-[Evaluate] Find Договори attachment
-  — шукає у body.payload.parts файл з "договори" у назві (.xlsx/.xls)
+[Evaluate] Find Excel attachment
+  — шукає у body.payload.parts файл з розширенням .xlsx/.xls
   │
   ├─ Match found? ──[ELSE]──► наступний message у циклі
   │
@@ -65,7 +65,7 @@ Authorization: Bearer <MAIL_WEBHOOK_SECRET>
 Content-Type: application/json
 
 {
-  "filename": "Договори 73-26 ....xlsx",
+  "filename": "Слухачі 73-26 ....xlsx",
   "messageId": "<Gmail message ID>",
   "fileBase64": "<URL-safe Base64 від Gmail API>"
 }
@@ -103,7 +103,7 @@ Backend автоматично виконує нормалізацію пере�
 | `IMAP_CONTRACT_SENDER_EMAIL` | `lcptodcz@gmail.com` |
 | `IMAP_CONTRACT_SENDER_ALIASES` | `olppara@gmail.com` |
 | `IMAP_CONTRACT_SENDER_NAME` | `Львівський центр ПТО ДСЗ` |
-| `IMAP_CONTRACT_ATTACHMENT_PREFIX` | `Договори` |
+| `IMAP_CONTRACT_ATTACHMENT_PREFIX` | legacy-налаштування; назва Excel-файла більше не є умовою |
 | `IMAP_CONTRACT_UPDATE_MODE` | `overwrite` або `skip` |
 | `IMAP_BRANCH_ID` | `main` |
 
@@ -133,7 +133,7 @@ Backend автоматично виконує нормалізацію пере�
 
 ## Як перевірити
 
-1. Надішліть лист **від** `lcptodcz@gmail.com` або `olppara@gmail.com` **на** `lcptodcz.audyt@gmail.com` з вкладенням `Договори*.xlsx`.
+1. Надішліть лист **від** `lcptodcz@gmail.com` або `olppara@gmail.com` **на** `lcptodcz.audyt@gmail.com` з `.xls/.xlsx` вкладенням, у якому аркуш зі слухачами називається `Додаток`.
 2. Запустіть Postman Flow кнопкою **Run**.
 3. Flow знайде листи від налаштованих адрес у скриньці `lcptodcz.audyt@gmail.com`.
 4. Перевірте `/jobs` у додатку — має з'явитись новий імпорт з джерелом `mail_gmail_api`.
