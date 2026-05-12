@@ -2849,6 +2849,82 @@ def test_delete_journal_entry_archives_group_trainees_and_resync_restores_them(c
     assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 2
 
 
+def test_processed_journal_reimports_trainees_when_group_roster_was_deleted(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    entry = journal_monitor.JournalMonitorEntry(
+        section=section,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Журнал",
+        group_code="46-26",
+        workload_status="processed",
+        workload_year=2026,
+        trainees_status="processed",
+        trainees_message="Додано/оновлено слухачів із журналу: 2",
+        trainee_count=2,
+        has_trainees=True,
+    )
+    db_session.add_all(
+        [
+            section,
+            entry,
+            Trainee(
+                branch_id="main",
+                first_name="Іван Іванович",
+                last_name="Петренко",
+                contract_number="З-СНН-001",
+                status="active",
+                is_deleted=True,
+                deleted_at=datetime.now(timezone.utc),
+            ),
+            Trainee(
+                branch_id="main",
+                first_name="Олена Петрівна",
+                last_name="Коваль",
+                contract_number="З-СНН-002",
+                status="active",
+                is_deleted=True,
+                deleted_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [
+                (1, "З-СНН-001", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", ""),
+                (2, "З-СНН-002", "Коваль Олена Петрівна", "ж", "03.04.1992", "0987654321", "м. Київ", ""),
+            ]
+        ),
+        raising=False,
+    )
+
+    result = journal_monitor.process_journal_trainees_for_section(db_session, section, limit=None, target_year=2026)
+
+    assert result["processed"] == 1
+    assert db_session.query(Trainee).filter(Trainee.group_code == "46-26", Trainee.is_deleted.is_(False)).count() == 2
+    assert db_session.query(Trainee).count() == 2
+    db_session.refresh(entry)
+    assert entry.trainees_status == "processed"
+    assert entry.trainee_count == 2
+
+
 def test_drive_sync_cleanup_hides_group_and_archives_trainees_when_folder_removed(db_session):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",

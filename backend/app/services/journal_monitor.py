@@ -658,12 +658,28 @@ def _entry_journal_trainee_count(entry: JournalMonitorEntry, registry_count: int
     return int(entry.trainee_count or registry_count or 0)
 
 
-def _entry_needs_trainee_reimport(entry: JournalMonitorEntry) -> bool:
+def _entry_needs_trainee_reimport(entry: JournalMonitorEntry, active_trainee_count: int | None = None) -> bool:
     expected_count = _expected_trainee_count_from_message(entry.trainees_message)
-    return bool(
-        entry.trainees_status == "processed"
-        and expected_count is not None
-        and expected_count > int(entry.trainee_count or 0)
+    if entry.trainees_status != "processed" or expected_count is None:
+        return False
+    if expected_count > int(entry.trainee_count or 0):
+        return True
+    return active_trainee_count is not None and active_trainee_count < expected_count
+
+
+def _active_trainee_count_for_group(db: Session, branch_id: str, group_code: str | None) -> int:
+    display_code = display_group_code(group_code)
+    if not display_code:
+        return 0
+    return int(
+        db.query(func.count(Trainee.id))
+        .filter(
+            Trainee.branch_id == branch_id,
+            Trainee.group_code == display_code,
+            Trainee.is_deleted.is_(False),
+        )
+        .scalar()
+        or 0
     )
 
 
@@ -1411,7 +1427,8 @@ def process_journal_trainees_for_section(
             break
         if not entry.group_code:
             continue
-        if entry.trainees_status == "processed" and not _entry_needs_trainee_reimport(entry):
+        active_trainee_count = _active_trainee_count_for_group(db, entry.branch_id, entry.group_code)
+        if entry.trainees_status == "processed" and not _entry_needs_trainee_reimport(entry, active_trainee_count):
             if _journal_workbooks_modified_after(entry, entry.trainees_processed_at, section_service_account_json):
                 _requeue_entry_after_drive_change(db, entry)
             else:
