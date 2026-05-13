@@ -2,9 +2,11 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -177,8 +179,17 @@ def mark_drive_intake_file_processed(
     headers.update({"Accept": "application/json", "Content-Type": "application/json; charset=utf-8"})
     body = json.dumps({"name": processed_name}).encode("utf-8")
     request = Request(full_url, data=body, headers=headers, method="PATCH")
-    with urlopen(request, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        if exc.code in {HTTPStatus.FORBIDDEN, HTTPStatus.UNAUTHORIZED}:
+            raise RuntimeError(
+                "Google Drive не дозволив перейменувати файл. "
+                "Надайте service account доступ Editor до intake-папки або самого файлу."
+            ) from exc
+        raise RuntimeError(f"Google Drive file marking failed ({exc.code}): {detail[:300]}") from exc
 
 
 def _job_status_value(job: ImportJob) -> str:
@@ -310,7 +321,7 @@ def process_next_drive_intake_file(
                     **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
-            _mark_processed_after_success(
+            marked_processed, processed_name, marking_error = _mark_processed_after_success(
                 existing_job,
                 file_id=file_id,
                 original_name=raw_name,
@@ -318,6 +329,18 @@ def process_next_drive_intake_file(
                 processed_file_marker=processed_file_marker,
             )
             skipped_already_processed += 1
+            if marked_processed or marking_error:
+                return {
+                    "processed": 0,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": _job_status_value(existing_job),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
+                    **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
+                }
             continue
 
         payload = downloader(file_id, mime_type, service_account_json)

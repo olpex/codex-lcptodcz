@@ -500,6 +500,70 @@ test("schedule page shows Google Drive intake failures", async ({ page }) => {
   await expect(page.getByText("Не вдалося отримати доступ до папки Google Drive")).toBeVisible();
 });
 
+test("schedule page shows Google Drive processed-file marking failures", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "РЎРёСЃС‚РµРјРЅРёР№ Р°РґРјС–РЅС–СЃС‚СЂР°С‚РѕСЂ",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          processed_sections: 0,
+          failed_sections: 0,
+          drive_intake_processed: 1,
+          drive_intake_failed: 0,
+          drive_intake_job_id: 2202,
+          drive_intake_filename: "46-26 Р РѕР·РєР»Р°Рґ.docx",
+          drive_intake_marking_error: "Google Drive denied rename",
+          drive_intake_message: "Google Drive denied rename"
+        })
+      });
+    }
+
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/schedule");
+
+  await expect(page.getByText("Google Drive denied rename")).toBeVisible();
+});
+
 test("same time in the same auditorium is not treated as a conflict", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {

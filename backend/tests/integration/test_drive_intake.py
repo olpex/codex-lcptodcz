@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from urllib.error import HTTPError
 
 from docx import Document as DocxDocument
 from openpyxl import Workbook
@@ -266,6 +267,7 @@ def test_drive_intake_skips_files_that_were_already_processed(db_session):
         file_lister=lambda folder_id, service_account_json=None: [file_payload],
         downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_bytes(),
         import_job_runner=_run_import_job,
+        processed_file_marker=None,
     )
     second = drive_intake.process_next_drive_intake_file(
         db_session,
@@ -274,6 +276,7 @@ def test_drive_intake_skips_files_that_were_already_processed(db_session):
         file_lister=lambda folder_id, service_account_json=None: [file_payload],
         downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_bytes(),
         import_job_runner=_run_import_job,
+        processed_file_marker=None,
     )
 
     assert first["processed"] == 1
@@ -370,6 +373,89 @@ def test_drive_intake_does_not_mark_file_after_failed_import(db_session):
     assert result["status"] == JobStatus.FAILED.value
     assert result.get("marked_processed") is not True
     assert marker_calls == []
+
+
+def test_drive_intake_marker_explains_google_drive_permission_denial(monkeypatch):
+    class FakeErrorResponse:
+        def read(self):
+            return b'{"error":{"message":"The user does not have sufficient permissions"}}'
+
+        def close(self):
+            return None
+
+    def fake_drive_request_url(url: str, service_account_json: str | None = None):
+        return drive_intake.Request(url, headers={"Authorization": "Bearer service-token"})
+
+    def fake_urlopen(request, timeout):
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, FakeErrorResponse())
+
+    monkeypatch.setattr(drive_intake, "_drive_request_url", fake_drive_request_url)
+    monkeypatch.setattr(drive_intake, "urlopen", fake_urlopen)
+
+    try:
+        drive_intake.mark_drive_intake_file_processed("file-1", "File [processed].docx", "service-account-json")
+    except RuntimeError as exc:
+        assert "Editor" in str(exc)
+        assert "перейменувати" in str(exc)
+    else:
+        raise AssertionError("Expected permission error")
+
+
+def test_drive_intake_reports_marking_error_for_existing_successful_unmarked_file(db_session, tmp_path):
+    schedule_path = tmp_path / "successful-schedule.docx"
+    schedule_path.write_bytes(_schedule_docx_bytes())
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Schedule.docx",
+        file_path=str(schedule_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="already-succeeded",
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        ImportJob(
+            branch_id="main",
+            idempotency_key=drive_intake._idempotency_key(
+                "main",
+                "schedule-46-26",
+                "2026-05-12T07:00:00Z",
+                "46-26 Schedule.docx",
+            ),
+            document_id=document.id,
+            status=JobStatus.SUCCEEDED,
+            message="already imported",
+            result_payload={"source": "drive_intake"},
+        )
+    )
+    db_session.commit()
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Schedule.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: b"",
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: (_ for _ in ()).throw(
+            RuntimeError("Google Drive denied rename")
+        ),
+    )
+
+    assert result["processed"] == 0
+    assert result["skipped_already_processed"] == 1
+    assert result["processed_drive_file_name"] == "46-26 Schedule [processed].docx"
+    assert result["marking_error"] == "Google Drive denied rename"
+    assert db_session.query(ImportJob).count() == 1
 
 
 def test_drive_intake_reprocesses_when_processed_marker_is_removed(db_session):

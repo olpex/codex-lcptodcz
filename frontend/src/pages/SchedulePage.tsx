@@ -518,12 +518,17 @@ export function SchedulePage() {
       if (!tickPromise) return;
       tickPromise.then((result) => {
         if (!isActive) return;
+        if (result?.drive_intake_marking_error) {
+          setDriveSyncNotice(result.drive_intake_marking_error);
+        }
         if (result?.drive_intake_failed || result?.drive_intake_disabled) {
           setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
           return;
         }
         if (result?.drive_intake_processed || result?.drive_intake_job_id) {
-          setDriveSyncNotice(null);
+          if (!result.drive_intake_marking_error) {
+            setDriveSyncNotice(null);
+          }
           fetchSchedule();
         }
       });
