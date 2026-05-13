@@ -1873,6 +1873,25 @@ def test_journal_auto_tick_endpoint_processes_one_drive_intake_file(client, auth
     assert captured["import_job_runner"] is not None
 
 
+def test_journal_auto_tick_reports_drive_intake_error_message(client, auth_headers, monkeypatch):
+    def fail_drive_intake(db, **kwargs):
+        raise RuntimeError("Не вдалося отримати доступ до папки Google Drive")
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fail_drive_intake,
+        raising=False,
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["drive_intake_processed"] == 0
+    assert payload["drive_intake_failed"] == 1
+    assert payload["drive_intake_message"] == "Не вдалося отримати доступ до папки Google Drive"
+
+
 def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, auth_headers, db_session, monkeypatch):
     captured: dict[str, object] = {}
     section = journal_monitor.JournalMonitorSection(

@@ -192,7 +192,25 @@ def process_next_drive_intake_file(
 
         modified_time = str(item.get("modifiedTime") or "")
         idempotency_key = _idempotency_key(effective_branch_id, file_id, modified_time)
-        if db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first():
+        existing_job = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
+        if existing_job:
+            if existing_job.status == JobStatus.FAILED:
+                runner_result = None
+                if import_job_runner is not None:
+                    runner_result = import_job_runner(existing_job.id)
+                    db.expire_all()
+                    existing_job = db.get(ImportJob, existing_job.id) or existing_job
+                return {
+                    "processed": 1,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": existing_job.status.value if hasattr(existing_job.status, "value") else str(existing_job.status),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    "runner_result": runner_result,
+                    "retried_failed_job": True,
+                }
             skipped_already_processed += 1
             continue
 

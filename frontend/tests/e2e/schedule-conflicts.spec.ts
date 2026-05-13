@@ -286,6 +286,67 @@ test("schedule page pulls Google Drive intake and refreshes imported lessons", a
   await expect(page.locator("[draggable=true]", { hasText: "Войтехівська Г." }).first()).toBeVisible();
 });
 
+test("schedule page shows Google Drive intake failures", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          processed_sections: 0,
+          failed_sections: 0,
+          drive_intake_processed: 0,
+          drive_intake_failed: 1,
+          drive_intake_message: "Не вдалося отримати доступ до папки Google Drive"
+        })
+      });
+    }
+
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/schedule");
+
+  await expect(page.getByText("Не вдалося отримати доступ до папки Google Drive")).toBeVisible();
+});
+
 test("same time in the same auditorium is not treated as a conflict", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {

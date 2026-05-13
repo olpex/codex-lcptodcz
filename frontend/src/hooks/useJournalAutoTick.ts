@@ -14,6 +14,7 @@ type AutoTickResult = {
   drive_intake_skipped_unsupported?: number;
   drive_intake_job_id?: number | null;
   drive_intake_filename?: string | null;
+  drive_intake_message?: string | null;
 };
 
 export function useJournalAutoTick(request: ApiRequest, enabled = true): () => Promise<AutoTickResult | null> | undefined {

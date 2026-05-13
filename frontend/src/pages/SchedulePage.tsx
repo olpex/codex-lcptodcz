@@ -433,6 +433,7 @@ export function SchedulePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [driveSyncNotice, setDriveSyncNotice] = useState<string | null>(null);
   const [teacherToDelete, setTeacherToDelete] = useState<TeacherWithWorkload | null>(null);
   const [isDeletingTeacher, setIsDeletingTeacher] = useState(false);
   const [selectedScheduleGroupId, setSelectedScheduleGroupId] = useState("");
@@ -513,7 +514,12 @@ export function SchedulePage() {
     const tickPromise = triggerJournalAutoTick();
     if (!tickPromise) return;
     tickPromise.then((result) => {
+      if (result?.drive_intake_failed || result?.drive_intake_disabled) {
+        setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
+        return;
+      }
       if (result?.drive_intake_processed || result?.drive_intake_job_id) {
+        setDriveSyncNotice(null);
         fetchSchedule();
       }
     });
@@ -918,6 +924,11 @@ export function SchedulePage() {
             >
               Повторити
             </button>
+          </div>
+        )}
+        {driveSyncNotice && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {driveSyncNotice}
           </div>
         )}
 

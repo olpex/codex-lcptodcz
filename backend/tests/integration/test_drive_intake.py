@@ -6,9 +6,12 @@ from openpyxl import Workbook
 
 from app.core.crypto import cipher
 from app.models import (
+    Document,
+    DocumentType,
     Group,
     GroupStatus,
     ImportJob,
+    JobStatus,
     JournalMonitorEntry,
     JournalMonitorSection,
     JournalWorkloadEntry,
@@ -276,6 +279,69 @@ def test_drive_intake_skips_files_that_were_already_processed(db_session):
     assert first["processed"] == 1
     assert second == {"processed": 0, "skipped_already_processed": 1, "skipped_unsupported": 0}
     assert db_session.query(ImportJob).count() == 1
+
+
+def test_drive_intake_retries_failed_existing_schedule_job(db_session, tmp_path):
+    failed_path = tmp_path / "failed-schedule.docx"
+    failed_path.write_bytes(_schedule_docx_bytes())
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Розклад.docx",
+        file_path=str(failed_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="failed-once",
+    )
+    db_session.add(document)
+    db_session.flush()
+    failed_job = ImportJob(
+        branch_id="main",
+        idempotency_key=drive_intake._idempotency_key("main", "schedule-46-26", "2026-05-12T07:00:00Z"),
+        document_id=document.id,
+        status=JobStatus.FAILED,
+        message="Попередня обробка впала",
+        result_payload={
+            "source": "drive_intake",
+            "drive_file_id": "schedule-46-26",
+            "drive_file_name": "46-26 Розклад.docx",
+            "drive_modified_time": "2026-05-12T07:00:00Z",
+            "import_mode": "overwrite",
+        },
+    )
+    db_session.add(failed_job)
+    db_session.commit()
+
+    runner_calls: list[int] = []
+
+    def rerun_existing_job(job_id: int) -> dict:
+        runner_calls.append(job_id)
+        return process_import_job_task.run(job_id)
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Розклад.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: b"",
+        import_job_runner=rerun_existing_job,
+    )
+
+    assert result["processed"] == 1
+    assert result["retried_failed_job"] is True
+    assert result["job_id"] == failed_job.id
+    assert runner_calls == [failed_job.id]
+    db_session.expire_all()
+    assert db_session.get(ImportJob, failed_job.id).status == JobStatus.SUCCEEDED
+    assert db_session.query(ScheduleSlot).count() == 1
 
 
 def test_drive_intake_worker_reuses_active_journal_section_credentials(db_session, monkeypatch):

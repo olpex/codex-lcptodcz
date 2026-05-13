@@ -91,6 +91,7 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
             "drive_intake_skipped_unsupported": int(result.get("skipped_unsupported") or 0),
             "drive_intake_job_id": result.get("job_id"),
             "drive_intake_filename": result.get("filename"),
+            "drive_intake_message": result.get("message"),
         }
     except Exception as exc:
         db.rollback()
@@ -103,6 +104,7 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
             "drive_intake_skipped_unsupported": 0,
             "drive_intake_job_id": None,
             "drive_intake_filename": None,
+            "drive_intake_message": str(exc),
         }
 
 
