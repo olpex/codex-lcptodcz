@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
@@ -28,6 +28,7 @@ type ScheduleSnapshot = {
 };
 
 const STATS_HISTORY_LIMIT = 12;
+const DRIVE_INTAKE_AUTO_TICK_MS = 45_000;
 type ConflictInterval = {
   slotId: number;
   start: number;
@@ -420,7 +421,6 @@ const MonthCalendar = ({
 export function SchedulePage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
-  const driveIntakeTriggeredRef = useRef(false);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
@@ -510,20 +510,31 @@ export function SchedulePage() {
   }, []);
 
   useEffect(() => {
-    if (!canGenerate || driveIntakeTriggeredRef.current) return;
-    driveIntakeTriggeredRef.current = true;
-    const tickPromise = triggerJournalAutoTick();
-    if (!tickPromise) return;
-    tickPromise.then((result) => {
-      if (result?.drive_intake_failed || result?.drive_intake_disabled) {
-        setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
-        return;
-      }
-      if (result?.drive_intake_processed || result?.drive_intake_job_id) {
-        setDriveSyncNotice(null);
-        fetchSchedule();
-      }
-    });
+    if (!canGenerate) return;
+    let isActive = true;
+
+    const runDriveIntakeTick = () => {
+      const tickPromise = triggerJournalAutoTick();
+      if (!tickPromise) return;
+      tickPromise.then((result) => {
+        if (!isActive) return;
+        if (result?.drive_intake_failed || result?.drive_intake_disabled) {
+          setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
+          return;
+        }
+        if (result?.drive_intake_processed || result?.drive_intake_job_id) {
+          setDriveSyncNotice(null);
+          fetchSchedule();
+        }
+      });
+    };
+
+    runDriveIntakeTick();
+    const intervalId = window.setInterval(runDriveIntakeTick, DRIVE_INTAKE_AUTO_TICK_MS);
+    return () => {
+      isActive = false;
+      window.clearInterval(intervalId);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canGenerate, triggerJournalAutoTick]);
 

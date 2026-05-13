@@ -346,6 +346,99 @@ test("schedule page pulls Google Drive intake and refreshes imported lessons", a
   await expect(page.locator("[draggable=true]", { hasText: "Войтехівська Г." }).first()).toBeVisible();
 });
 
+test("schedule page keeps polling Google Drive intake while open", async ({ page }) => {
+  await page.clock.install();
+
+  const importedSlot: MockScheduleSlot = {
+    id: 46,
+    group_id: 46,
+    teacher_id: 12,
+    subject_id: 22,
+    room_id: 302,
+    starts_at: "2026-03-11T09:30:00Z",
+    ends_at: "2026-03-11T11:05:00Z",
+    pair_number: 1,
+    academic_hours: 2,
+    group_code: "46-26",
+    group_name: "РўРµС…РЅРѕР»РѕРіС–С— РєРѕРјРї'СЋС‚РµСЂРЅРѕС— РѕР±СЂРѕР±РєРё С–РЅС„РѕСЂРјР°С†С–С—",
+    teacher_name: "Р’РѕР№С‚РµС…С–РІСЃСЊРєР° Р“.Рњ.",
+    subject_name: "РџСЂР°РІРѕРІС– С‚Р° РѕСЂРіР°РЅС–Р·Р°С†С–Р№РЅС– РѕСЃРЅРѕРІРё",
+    room_name: "Р†РјРїРѕСЂС‚: 46-26"
+  };
+  let driveTickRequests = 0;
+  let scheduleImported = false;
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "РЎРёСЃС‚РµРјРЅРёР№ Р°РґРјС–РЅС–СЃС‚СЂР°С‚РѕСЂ",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      driveTickRequests += 1;
+      const processed = driveTickRequests >= 2;
+      scheduleImported = scheduleImported || processed;
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          processed_sections: 0,
+          failed_sections: 0,
+          drive_intake_processed: processed ? 1 : 0,
+          drive_intake_failed: 0,
+          drive_intake_job_id: processed ? 2002 : null,
+          drive_intake_filename: processed ? "46-26 Р РѕР·РєР»Р°Рґ.docx" : null
+        })
+      });
+    }
+
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(scheduleImported ? [importedSlot] : [])
+      });
+    }
+
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/schedule");
+  await expect.poll(() => driveTickRequests).toBe(1);
+  await page.clock.fastForward(45_000);
+
+  await expect.poll(() => driveTickRequests).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole("button", { name: /2026/ })).toContainText("46-26");
+});
+
 test("schedule page shows Google Drive intake failures", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(

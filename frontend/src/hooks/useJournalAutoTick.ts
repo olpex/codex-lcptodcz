@@ -26,7 +26,8 @@ export function useJournalAutoTick(request: ApiRequest, enabled = true): () => P
   const inFlightRef = useRef<Promise<AutoTickResult | null> | null>(null);
 
   return useCallback(() => {
-    if (!enabled || inFlightRef.current) return;
+    if (!enabled) return;
+    if (inFlightRef.current) return inFlightRef.current;
 
     const now = Date.now();
     if (now - lastRunRef.current < MIN_INTERVAL_MS) return;
