@@ -1240,6 +1240,34 @@ def test_journal_workload_reads_teacher_from_last_cell_of_numbered_table_row_whe
     assert "Костів Артур Романович" not in {row["teacher_name"] for row in rows}
 
 
+def test_journal_workload_accepts_teacher_list_header_from_disciplines_sheet():
+    workbook = Workbook()
+    workbook.active.title = "Титулка"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["ЖУРНАЛ ОБЛІКУ ТЕОРЕТИЧНОГО НАВЧАННЯ"])
+    sheet.append([])
+    sheet.append(["Відповідальний за навчання", "", "Ірина ПЕТРИК"])
+    sheet.append([])
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Артур КОСТІВ"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "Сторінки", "Список викладачів"])
+    sheet.append([1, "Охорона праці", 4, "3-4", "Петрик Ірина Миколаївна"])
+    sheet.append([2, "Ведення підприємницької діяльності", 16, "9-10", "Демська Юлія Василівна"])
+    sheet.append(["Загальний обсяг навчального часу", "", 20, "", ""])
+    stream = BytesIO()
+    workbook.save(stream)
+
+    rows = journal_monitor.parse_journal_disciplines_xlsx(stream.getvalue())
+
+    assert [(row["teacher_name"], row["hours"]) for row in rows] == [
+        ("Петрик Ірина Миколаївна", 4),
+        ("Демська Юлія Василівна", 16),
+    ]
+    assert "Артур КОСТІВ" not in {row["teacher_name"] for row in rows}
+
+
 def test_journal_workload_uses_complete_workbook_when_another_file_has_incomplete_rows(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
@@ -2986,6 +3014,47 @@ def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     assert folders[0]["id"] == "folder-1"
     assert "key=" not in str(captured["url"])
     assert captured["authorization"] == "Bearer service-token"
+
+
+def test_drive_download_retries_when_response_read_times_out(monkeypatch):
+    monkeypatch.setattr(journal_monitor, "_drive_request_url", lambda url, service_account_json=None: url)
+    monkeypatch.setattr(journal_monitor, "GOOGLE_DRIVE_REQUEST_RETRY_DELAY_SECONDS", 0)
+    calls = {"count": 0}
+
+    class TimeoutResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            raise TimeoutError("The read operation timed out")
+
+    class SuccessResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"workbook-bytes"
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        assert timeout == journal_monitor.GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS
+        return TimeoutResponse() if calls["count"] == 1 else SuccessResponse()
+
+    monkeypatch.setattr(journal_monitor, "urlopen", fake_urlopen)
+
+    payload = journal_monitor.download_drive_file_bytes(
+        "sheet-id",
+        mime_type=journal_monitor.GOOGLE_DRIVE_SHEETS_MIME,
+    )
+
+    assert payload == b"workbook-bytes"
+    assert calls["count"] == 2
 
 
 def test_journal_monitor_sync_without_credentials_explains_service_account_setup(client, auth_headers, monkeypatch):

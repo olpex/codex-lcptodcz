@@ -2,6 +2,7 @@ import csv
 import base64
 import json
 import re
+import socket
 import tempfile
 import time
 from datetime import datetime, time as datetime_time, timezone
@@ -9,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlencode, urlparse, parse_qs
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -40,7 +42,9 @@ GROUP_CODE_PATTERN = re.compile(r"^\s*([0-9]{1,4}\s*[A-Za-zА-Яа-яІіЇїЄ�
 EXPORT_FORMATS = {"xlsx", "pdf", "docx", "csv"}
 JOURNAL_WORKLOAD_START_YEAR = 2026
 JOURNAL_MONITOR_MESSAGE_LIMIT = 500
-GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 8
+GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 30
+GOOGLE_DRIVE_REQUEST_RETRY_ATTEMPTS = 3
+GOOGLE_DRIVE_REQUEST_RETRY_DELAY_SECONDS = 0.75
 SUBJECTLESS_WORKLOAD_SUBJECT_NAME = "Без назви предмета"
 JOURNAL_DAILY_ACTIVITY_ZONE = ZoneInfo("Europe/Kyiv")
 JOURNAL_DAILY_ACTIVITY_START_HOUR = 8
@@ -840,8 +844,7 @@ def _get_service_account_access_token(raw_json: str | None = None) -> str:
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = json.loads(_read_drive_response(request).decode("utf-8"))
     access_token = payload.get("access_token")
     if not access_token:
         raise RuntimeError("Google OAuth не повернув access_token для service account")
@@ -849,6 +852,31 @@ def _get_service_account_access_token(raw_json: str | None = None) -> str:
     _service_account_token_cache["cache_key"] = cache_key
     _service_account_token_cache["expires_at"] = now + int(payload.get("expires_in") or 3600)
     return str(access_token)
+
+
+def _is_retryable_drive_error(exc: BaseException) -> bool:
+    if isinstance(exc, HTTPError):
+        return exc.code in {429, 500, 502, 503, 504}
+    if isinstance(exc, URLError):
+        return True
+    return isinstance(exc, (TimeoutError, socket.timeout, ConnectionError))
+
+
+def _read_drive_response(request_or_url: str | Request) -> bytes:
+    last_error: Exception | None = None
+    for attempt in range(GOOGLE_DRIVE_REQUEST_RETRY_ATTEMPTS):
+        try:
+            with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
+                return response.read()
+        except Exception as exc:
+            last_error = exc
+            is_last_attempt = attempt >= GOOGLE_DRIVE_REQUEST_RETRY_ATTEMPTS - 1
+            if is_last_attempt or not _is_retryable_drive_error(exc):
+                raise
+            time.sleep(GOOGLE_DRIVE_REQUEST_RETRY_DELAY_SECONDS * (attempt + 1))
+    if last_error:
+        raise last_error
+    raise RuntimeError("Google Drive не повернув відповідь")
 
 
 def list_drive_child_folders(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
@@ -876,8 +904,7 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
         request_or_url: str | Request = url
         if access_token:
             request_or_url = Request(url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
-        with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = json.loads(_read_drive_response(request_or_url).decode("utf-8"))
         for item in payload.get("files", []):
             folders.append(
                 {
@@ -925,8 +952,7 @@ def list_drive_journal_workbook_files(folder_id: str, service_account_json: str 
         )
         if page_token:
             url += f"&pageToken={quote(page_token)}"
-        with urlopen(_drive_request_url(url, service_account_json), timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = json.loads(_read_drive_response(_drive_request_url(url, service_account_json)).decode("utf-8"))
         files.extend(payload.get("files", []))
         page_token = payload.get("nextPageToken") or ""
         if not page_token:
@@ -955,8 +981,7 @@ def download_drive_file_bytes(
         request_or_url.add_header("Accept", GOOGLE_DRIVE_XLSX_MIME)
     if isinstance(request_or_url, Request) and mime_type == GOOGLE_DRIVE_DOCS_MIME:
         request_or_url.add_header("Accept", GOOGLE_DRIVE_DOCX_MIME)
-    with urlopen(request_or_url, timeout=GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS) as response:
-        return response.read()
+    return _read_drive_response(request_or_url)
 
 
 def _find_disciplines_rows(workbook) -> list[list[Any]]:
