@@ -3241,6 +3241,88 @@ def test_drive_sync_renames_group_and_requeues_processed_entry_when_folder_chang
     assert entry.trainees_status == "pending"
 
 
+def test_drive_sync_keeps_processed_workload_when_only_folder_metadata_changes(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    group = Group(branch_id="main", code="46-26", name="Old name", status=GroupStatus.ACTIVE)
+    teacher = Teacher(branch_id="main", first_name="Ivan", last_name="Teacher", is_active=True)
+    db_session.add_all([section, group, teacher])
+    db_session.flush()
+    entry = journal_monitor.JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="drive-46-26",
+        journal_name="46-26 Old name",
+        group_code="46-26",
+        trainees_status="processed",
+        workload_status="processed",
+        workload_year=2026,
+        workload_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        trainees_processed_at=datetime(2026, 5, 1, 10, 0, tzinfo=timezone.utc),
+        drive_modified_at=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+        workload_hours=4,
+        workload_source_names=["46-26.xlsx"],
+        trainees_source_names=["46-26.xlsx"],
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=entry.id,
+            branch_id="main",
+            teacher_id=teacher.id,
+            subject_name="Existing subject",
+            hours=4,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "sheet-46-26",
+                "name": "46-26.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-01T09:30:00Z",
+            }
+        ],
+        raising=False,
+    )
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 New name",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-05-02T10:00:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    db_session.refresh(group)
+    db_session.refresh(entry)
+    workload_rows = db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).all()
+    summary = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+    assert group.name == "New name"
+    assert entry.journal_name == "46-26 New name"
+    assert entry.workload_status == "processed"
+    assert entry.trainees_status == "processed"
+    assert entry.workload_hours == 4
+    assert [(row.subject_name, row.hours) for row in workload_rows] == [("Existing subject", 4)]
+    assert summary[teacher.id]["total_hours"] == 4
+
+
 def test_journal_daily_activity_lists_created_and_changed_since_8_kyiv(db_session):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",

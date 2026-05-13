@@ -234,8 +234,14 @@ def remove_journal_entries_from_project(db: Session, entries: list[JournalMonito
     }
 
 
-def _requeue_entry_after_drive_change(db: Session, entry: JournalMonitorEntry) -> None:
-    if entry.workload_status != "pending":
+def _requeue_entry_after_drive_change(
+    db: Session,
+    entry: JournalMonitorEntry,
+    *,
+    requeue_workload: bool = True,
+    requeue_trainees: bool = True,
+) -> None:
+    if requeue_workload and entry.workload_status != "pending":
         entry.workload_status = "pending"
         entry.workload_message = "Поставлено в чергу після змін у Google Drive"
         entry.workload_processed_at = None
@@ -244,7 +250,7 @@ def _requeue_entry_after_drive_change(db: Session, entry: JournalMonitorEntry) -
         db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
             synchronize_session=False
         )
-    if entry.trainees_status != "pending":
+    if requeue_trainees and entry.trainees_status != "pending":
         entry.trainees_status = "pending"
         entry.trainees_message = "Поставлено в чергу після змін у Google Drive"
         entry.trainees_processed_at = None
@@ -266,7 +272,14 @@ def _journal_workbooks_modified_after(
         return False
     if not files:
         return bool(entry.workload_source_names or entry.trainees_source_names)
-    for workbook_file in files:
+    return _workbook_files_modified_after(files, processed_at)
+
+
+def _workbook_files_modified_after(workbook_files: list[dict[str, Any]] | None, processed_at: datetime | None) -> bool:
+    processed_at = _as_aware_utc(processed_at)
+    if processed_at is None or not workbook_files:
+        return False
+    for workbook_file in workbook_files:
         modified_at = _as_aware_utc(_parse_datetime(str(workbook_file.get("modifiedTime") or "")))
         if modified_at and modified_at > processed_at:
             return True
@@ -1880,11 +1893,10 @@ def sync_journal_monitor_section(
             )
             db.add(entry)
         old_group_code = display_group_code(entry.group_code)
-        old_journal_name = entry.journal_name
-        old_modified_at = _as_aware_utc(entry.drive_modified_at)
         next_group_code = display_group_code(group_code)
         renamed_group = old_group_code and next_group_code and normalize_group_code(old_group_code) != normalize_group_code(next_group_code)
-        modified_after_processing = bool(old_modified_at and next_modified_at and _as_aware_utc(next_modified_at) > old_modified_at)
+        workbook_changed_after_workload = _workbook_files_modified_after(workbook_files, entry.workload_processed_at)
+        workbook_changed_after_trainees = _workbook_files_modified_after(workbook_files, entry.trainees_processed_at)
 
         if renamed_group:
             hide_groups_for_deleted_journal_entries(db, [entry])
@@ -1905,8 +1917,13 @@ def sync_journal_monitor_section(
             workbook_files=workbook_files,
         )
         entry.last_seen_at = now
-        if old_journal_name != name or renamed_group or modified_after_processing:
-            _requeue_entry_after_drive_change(db, entry)
+        if renamed_group or workbook_changed_after_workload or workbook_changed_after_trainees:
+            _requeue_entry_after_drive_change(
+                db,
+                entry,
+                requeue_workload=workbook_changed_after_workload,
+                requeue_trainees=renamed_group or workbook_changed_after_trainees,
+            )
 
     db.flush()
     db.refresh(section)
