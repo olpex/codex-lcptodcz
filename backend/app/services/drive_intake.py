@@ -275,12 +275,14 @@ def process_next_drive_intake_file(
         modified_time = str(item.get("modifiedTime") or "")
         idempotency_key = _idempotency_key(effective_branch_id, file_id, modified_time, raw_name)
         legacy_idempotency_key = _idempotency_key(effective_branch_id, file_id, modified_time)
-        existing_job = (
-            db.query(ImportJob)
-            .filter(ImportJob.idempotency_key.in_([idempotency_key, legacy_idempotency_key]))
-            .order_by(ImportJob.id.desc())
-            .first()
-        )
+        existing_job = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
+        reprocesses_legacy_success_job = False
+        if not existing_job:
+            legacy_job = db.query(ImportJob).filter(ImportJob.idempotency_key == legacy_idempotency_key).first()
+            if legacy_job and legacy_job.status == JobStatus.SUCCEEDED:
+                reprocesses_legacy_success_job = True
+            else:
+                existing_job = legacy_job
         if existing_job:
             if existing_job.status == JobStatus.FAILED:
                 runner_result = None
@@ -381,6 +383,7 @@ def process_next_drive_intake_file(
             "runner_result": runner_result,
             **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
             **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
+            **({"reprocessed_legacy_success_job": True} if reprocesses_legacy_success_job else {}),
         }
 
     result = {

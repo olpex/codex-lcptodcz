@@ -425,6 +425,61 @@ def test_drive_intake_reprocesses_when_processed_marker_is_removed(db_session):
     assert db_session.query(ImportJob).count() == 2
 
 
+def test_drive_intake_reprocesses_unmarked_file_with_legacy_success_job(db_session):
+    original_name = "46-26 Schedule.docx"
+    db_session.add(
+        Document(
+            branch_id="main",
+            file_name=original_name,
+            file_path="legacy-schedule.docx",
+            file_type=DocumentType.DOCX,
+            source="drive_intake",
+            mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+            hash_sha256="legacy-success",
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        ImportJob(
+            branch_id="main",
+            idempotency_key=drive_intake._idempotency_key("main", "schedule-46-26", "2026-05-12T07:00:00Z"),
+            document_id=db_session.query(Document).filter(Document.hash_sha256 == "legacy-success").one().id,
+            status=JobStatus.SUCCEEDED,
+            message="imported before processed markers existed",
+            result_payload={"source": "drive_intake"},
+        )
+    )
+    db_session.commit()
+
+    marker_calls: list[tuple[str, str]] = []
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": original_name,
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _schedule_docx_bytes(),
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append((file_id, next_name)),
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.SUCCEEDED.value
+    assert result["marked_processed"] is True
+    assert result["reprocessed_legacy_success_job"] is True
+    assert marker_calls == [("schedule-46-26", "46-26 Schedule [processed].docx")]
+    assert db_session.query(ImportJob).count() == 2
+    assert db_session.query(ScheduleSlot).count() == 1
+
+
 def test_drive_intake_defaults_xlsx_import_to_overwrite_for_corrections():
     assert drive_intake._default_import_mode(DocumentType.XLSX) == "overwrite"
 
