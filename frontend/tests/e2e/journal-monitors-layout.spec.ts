@@ -16,6 +16,35 @@ const section = {
     workload_and_trainees: 1,
     workload_trainees_schedule: 1
   },
+  daily_activity: {
+    cutoff_at: "2026-05-13T05:00:00Z",
+    created_count: 1,
+    changed_count: 1,
+    created: [
+      {
+        id: 5,
+        drive_file_id: "drive-created",
+        drive_url: "https://drive.google.com/drive/folders/drive-created",
+        journal_name: "46-26 Новий журнал",
+        group_code: "46-26",
+        created_at: "2026-05-13T05:30:00Z",
+        change_started_at: null,
+        modified_at: "2026-05-13T05:30:00Z"
+      }
+    ],
+    changed: [
+      {
+        id: 6,
+        drive_file_id: "drive-changed",
+        drive_url: "https://drive.google.com/drive/folders/drive-changed",
+        journal_name: "47-26 Змінений журнал",
+        group_code: "47-26",
+        created_at: "2026-05-12T07:00:00Z",
+        change_started_at: "2026-05-13T06:10:00Z",
+        modified_at: "2026-05-13T08:45:00Z"
+      }
+    ]
+  },
   entries: [
     {
       id: 1,
@@ -342,6 +371,21 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "10п-26" }).getByText("Опрацьовано")).toBeVisible();
   await expect(page.getByText("Тільки слухачі:").locator("b")).toHaveText("0");
   await expect(page.getByText("Пед.+слухачі:").locator("b")).toHaveText("1");
+});
+
+test("journal monitor shows journals created and changed since 8 today", async ({ page }) => {
+  await loginAndMockJournals(page);
+
+  await page.goto("/journals");
+
+  await expect(page.getByRole("heading", { name: "Активність з 08:00" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Створені журнали" })).toBeVisible();
+  await expect(page.getByText("46-26 Новий журнал")).toBeVisible();
+  await expect(page.getByText("Створено: 08:30")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Змінені журнали" })).toBeVisible();
+  await expect(page.getByText("47-26 Змінений журнал")).toBeVisible();
+  await expect(page.getByText("Початок змін: 09:10")).toBeVisible();
+  await expect(page.getByText("Остання зміна: 11:45")).toBeVisible();
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {

@@ -7,7 +7,7 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, JournalMonitorSection } from "../types/api";
+import type { JournalDailyActivityItem, JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, JournalMonitorSection } from "../types/api";
 
 const EXPORT_FORMATS = ["xlsx", "pdf", "docx", "csv"] as const;
 
@@ -133,6 +133,15 @@ function formatDateTime(value: string | null): string {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit"
+  });
+}
+
+function formatKyivTime(value: string | null): string {
+  if (!value) return "—";
+  return new Date(value).toLocaleTimeString("uk-UA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Kyiv"
   });
 }
 
@@ -697,6 +706,30 @@ export function JournalMonitorsPage() {
     return row.trainee_count;
   };
 
+  const renderActivityRow = (item: JournalDailyActivityItem, kind: "created" | "changed") => (
+    <li key={`${kind}-${item.id}`} className="border-t border-slate-100 py-2 first:border-t-0 first:pt-0 last:pb-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-ink">{item.group_code || item.journal_name}</p>
+          <p className="truncate text-xs text-slate-600">{item.journal_name}</p>
+        </div>
+        {item.drive_url && (
+          <a className="shrink-0 text-xs font-semibold text-pine underline" href={item.drive_url} target="_blank" rel="noreferrer">
+            Drive
+          </a>
+        )}
+      </div>
+      {kind === "created" ? (
+        <p className="mt-1 text-xs text-slate-500">Створено: {formatKyivTime(item.created_at)}</p>
+      ) : (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span>Початок змін: {formatKyivTime(item.change_started_at)}</span>
+          <span>Остання зміна: {formatKyivTime(item.modified_at)}</span>
+        </div>
+      )}
+    </li>
+  );
+
   const changeSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
@@ -781,6 +814,43 @@ export function JournalMonitorsPage() {
             </label>
           )}
         </div>
+
+        {detail?.daily_activity && (
+          <div className="mb-4 border-y border-slate-200 py-4">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h3 className="font-heading text-lg font-semibold text-ink">Активність з 08:00</h3>
+                <p className="text-xs text-slate-500">Відлік: {formatKyivTime(detail.daily_activity.cutoff_at)}</p>
+              </div>
+              <div className="flex gap-2 text-xs font-semibold text-slate-600">
+                <span className="rounded-md bg-emerald-50 px-2 py-1 text-emerald-700">
+                  Створено: {detail.daily_activity.created_count}
+                </span>
+                <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-700">
+                  Змінено: {detail.daily_activity.changed_count}
+                </span>
+              </div>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div>
+                <h4 className="mb-2 text-sm font-semibold text-ink">Створені журнали</h4>
+                {detail.daily_activity.created.length > 0 ? (
+                  <ul>{detail.daily_activity.created.map((item) => renderActivityRow(item, "created"))}</ul>
+                ) : (
+                  <p className="text-sm text-slate-500">Нових журналів з 08:00 немає.</p>
+                )}
+              </div>
+              <div>
+                <h4 className="mb-2 text-sm font-semibold text-ink">Змінені журнали</h4>
+                {detail.daily_activity.changed.length > 0 ? (
+                  <ul>{detail.daily_activity.changed.map((item) => renderActivityRow(item, "changed"))}</ul>
+                ) : (
+                  <p className="text-sm text-slate-500">Змін у журналах з 08:00 немає.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

@@ -60,6 +60,8 @@ def ensure_runtime_schema() -> None:
             ("journal_monitor_entries", "trainees_message", "VARCHAR(500) NULL"),
             ("journal_monitor_entries", "trainees_processed_at", "TIMESTAMP NULL"),
             ("journal_monitor_entries", "trainees_source_names", "JSON NULL"),
+            ("journal_monitor_entries", "drive_created_at", "TIMESTAMP NULL"),
+            ("journal_monitor_entries", "drive_change_started_at", "TIMESTAMP NULL"),
         ]
         for table_name, column_name, ddl in column_plan:
             if table_name not in existing_tables:

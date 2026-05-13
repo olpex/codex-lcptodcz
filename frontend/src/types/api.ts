@@ -221,6 +221,25 @@ export interface JournalMonitorStats {
   workload_trainees_schedule: number;
 }
 
+export interface JournalDailyActivityItem {
+  id: number;
+  drive_file_id: string;
+  drive_url: string | null;
+  journal_name: string;
+  group_code: string | null;
+  created_at: string | null;
+  change_started_at: string | null;
+  modified_at: string | null;
+}
+
+export interface JournalDailyActivity {
+  cutoff_at: string;
+  created_count: number;
+  changed_count: number;
+  created: JournalDailyActivityItem[];
+  changed: JournalDailyActivityItem[];
+}
+
 export interface JournalMonitorEntry {
   id: number;
   drive_file_id: string;
@@ -249,7 +268,9 @@ export interface JournalMonitorEntry {
   trainees_message: string | null;
   trainees_processed_at: string | null;
   trainees_source_names: string[];
+  drive_created_at: string | null;
   drive_modified_at: string | null;
+  drive_change_started_at: string | null;
   last_seen_at: string;
 }
 
@@ -266,6 +287,7 @@ export interface JournalMonitorSection {
   last_sync_status: string;
   last_sync_message: string | null;
   stats: JournalMonitorStats;
+  daily_activity: JournalDailyActivity;
   entries?: JournalMonitorEntry[];
 }
 

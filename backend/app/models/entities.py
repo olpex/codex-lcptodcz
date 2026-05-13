@@ -359,7 +359,9 @@ class JournalMonitorEntry(Base):
     trainees_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trainees_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trainees_source_names: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    drive_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     drive_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    drive_change_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     section: Mapped[JournalMonitorSection] = relationship(back_populates="entries")

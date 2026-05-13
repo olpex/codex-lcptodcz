@@ -512,6 +512,25 @@ class JournalWorkloadTeacherResponse(BaseModel):
     hours: float
 
 
+class JournalDailyActivityItem(BaseModel):
+    id: int
+    drive_file_id: str
+    drive_url: str | None = None
+    journal_name: str
+    group_code: str | None = None
+    created_at: datetime | None = None
+    change_started_at: datetime | None = None
+    modified_at: datetime | None = None
+
+
+class JournalDailyActivityResponse(BaseModel):
+    cutoff_at: datetime
+    created_count: int = 0
+    changed_count: int = 0
+    created: list[JournalDailyActivityItem] = Field(default_factory=list)
+    changed: list[JournalDailyActivityItem] = Field(default_factory=list)
+
+
 class JournalMonitorEntryResponse(BaseModel):
     id: int
     drive_file_id: str
@@ -536,7 +555,9 @@ class JournalMonitorEntryResponse(BaseModel):
     trainees_message: str | None = None
     trainees_processed_at: datetime | None = None
     trainees_source_names: list[str] = Field(default_factory=list)
+    drive_created_at: datetime | None = None
     drive_modified_at: datetime | None = None
+    drive_change_started_at: datetime | None = None
     last_seen_at: datetime
 
 
@@ -553,6 +574,7 @@ class JournalMonitorSectionResponse(BaseModel):
     last_sync_status: str
     last_sync_message: str | None = None
     stats: JournalMonitorStats
+    daily_activity: JournalDailyActivityResponse
 
 
 class JournalMonitorDetailResponse(JournalMonitorSectionResponse):

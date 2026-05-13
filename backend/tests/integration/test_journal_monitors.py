@@ -3241,6 +3241,109 @@ def test_drive_sync_renames_group_and_requeues_processed_entry_when_folder_chang
     assert entry.trainees_status == "pending"
 
 
+def test_journal_daily_activity_lists_created_and_changed_since_8_kyiv(db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.flush()
+    db_session.add_all(
+        [
+            journal_monitor.JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="created-today",
+                journal_name="46-26 Новий журнал",
+                group_code="46-26",
+                drive_created_at=datetime(2026, 5, 13, 5, 30, tzinfo=timezone.utc),
+                drive_modified_at=datetime(2026, 5, 13, 5, 30, tzinfo=timezone.utc),
+            ),
+            journal_monitor.JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="changed-today",
+                journal_name="47-26 Змінений журнал",
+                group_code="47-26",
+                drive_created_at=datetime(2026, 5, 12, 7, 0, tzinfo=timezone.utc),
+                drive_modified_at=datetime(2026, 5, 13, 8, 45, tzinfo=timezone.utc),
+                drive_change_started_at=datetime(2026, 5, 13, 6, 10, tzinfo=timezone.utc),
+            ),
+            journal_monitor.JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="before-cutoff",
+                journal_name="48-26 Ранній журнал",
+                group_code="48-26",
+                drive_created_at=datetime(2026, 5, 13, 4, 59, tzinfo=timezone.utc),
+                drive_modified_at=datetime(2026, 5, 13, 4, 59, tzinfo=timezone.utc),
+                drive_change_started_at=datetime(2026, 5, 13, 4, 59, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    db_session.commit()
+    db_session.refresh(section)
+
+    activity = journal_monitor.collect_daily_journal_activity(
+        section,
+        now=datetime(2026, 5, 13, 9, 0, tzinfo=timezone.utc),
+    )
+
+    assert activity["cutoff_at"] == datetime(2026, 5, 13, 5, 0, tzinfo=timezone.utc)
+    assert [item["journal_name"] for item in activity["created"]] == ["46-26 Новий журнал"]
+    assert activity["created"][0]["created_at"] == datetime(2026, 5, 13, 5, 30, tzinfo=timezone.utc)
+    assert [item["journal_name"] for item in activity["changed"]] == ["47-26 Змінений журнал"]
+    assert activity["changed"][0]["change_started_at"] == datetime(2026, 5, 13, 6, 10, tzinfo=timezone.utc)
+    assert activity["changed"][0]["modified_at"] == datetime(2026, 5, 13, 8, 45, tzinfo=timezone.utc)
+
+
+def test_journal_sync_tracks_drive_created_time_and_daily_change_start(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "sheet-49-26",
+                "name": "49-26 Журнал.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "modifiedTime": "2026-05-13T06:20:00Z",
+            }
+        ],
+        raising=False,
+    )
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-49-26",
+                "name": "49-26 Денний журнал",
+                "url": "https://drive.google.com/drive/folders/drive-49-26",
+                "created_time": "2026-05-13T05:15:00Z",
+                "modified_time": "2026-05-13T06:20:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    entry = db_session.query(journal_monitor.JournalMonitorEntry).one()
+    assert journal_monitor._as_aware_utc(entry.drive_created_at) == datetime(2026, 5, 13, 5, 15, tzinfo=timezone.utc)
+    assert journal_monitor._as_aware_utc(entry.drive_change_started_at) == datetime(2026, 5, 13, 6, 20, tzinfo=timezone.utc)
+
+
 def test_reprocessing_journal_trainees_updates_changed_phone_and_archives_removed_rows(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",

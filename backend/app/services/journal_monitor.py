@@ -4,12 +4,13 @@ import json
 import re
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlencode, urlparse, parse_qs
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from docx import Document as DocxDocument
 from jose import jwt
@@ -41,6 +42,8 @@ JOURNAL_WORKLOAD_START_YEAR = 2026
 JOURNAL_MONITOR_MESSAGE_LIMIT = 500
 GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 8
 SUBJECTLESS_WORKLOAD_SUBJECT_NAME = "Без назви предмета"
+JOURNAL_DAILY_ACTIVITY_ZONE = ZoneInfo("Europe/Kyiv")
+JOURNAL_DAILY_ACTIVITY_START_HOUR = 8
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -312,6 +315,52 @@ def _as_aware_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _journal_daily_cutoff(now: datetime | None = None) -> datetime:
+    now_utc = _as_aware_utc(now or datetime.now(timezone.utc)) or datetime.now(timezone.utc)
+    local_now = now_utc.astimezone(JOURNAL_DAILY_ACTIVITY_ZONE)
+    local_cutoff = datetime.combine(
+        local_now.date(),
+        datetime_time(hour=JOURNAL_DAILY_ACTIVITY_START_HOUR),
+        tzinfo=JOURNAL_DAILY_ACTIVITY_ZONE,
+    )
+    return local_cutoff.astimezone(timezone.utc)
+
+
+def _drive_activity_modified_at(folder: dict[str, Any], workbook_files: list[dict[str, Any]] | None) -> datetime | None:
+    timestamps = [_as_aware_utc(_parse_datetime(str(folder.get("modified_time") or "")))]
+    for workbook_file in workbook_files or []:
+        timestamps.append(_as_aware_utc(_parse_datetime(str(workbook_file.get("modifiedTime") or ""))))
+    valid_timestamps = [item for item in timestamps if item is not None]
+    return max(valid_timestamps) if valid_timestamps else None
+
+
+def _update_daily_drive_change_start(
+    entry: JournalMonitorEntry,
+    *,
+    cutoff_at: datetime,
+    drive_created_at: datetime | None,
+    folder: dict[str, Any],
+    workbook_files: list[dict[str, Any]] | None,
+) -> None:
+    timestamps = [_as_aware_utc(_parse_datetime(str(folder.get("modified_time") or "")))]
+    for workbook_file in workbook_files or []:
+        timestamps.append(_as_aware_utc(_parse_datetime(str(workbook_file.get("modifiedTime") or ""))))
+    changed_after_cutoff = [item for item in timestamps if item is not None and item >= cutoff_at]
+    if not changed_after_cutoff:
+        return
+
+    candidate = min(changed_after_cutoff)
+    created_at = _as_aware_utc(drive_created_at)
+    if created_at and candidate <= created_at and all(item <= created_at for item in changed_after_cutoff):
+        return
+
+    existing = _as_aware_utc(entry.drive_change_started_at)
+    if existing and existing >= cutoff_at:
+        entry.drive_change_started_at = min(existing, candidate)
+    else:
+        entry.drive_change_started_at = candidate
 
 
 def _norm(text: Any) -> str:
@@ -757,7 +806,7 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
         raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
 
     query = f"'{folder_id}' in parents and mimeType = '{GOOGLE_DRIVE_FOLDER_MIME}' and trashed = false"
-    fields = "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)"
+    fields = "nextPageToken,files(id,name,mimeType,webViewLink,createdTime,modifiedTime)"
     page_token = ""
     folders: list[dict[str, Any]] = []
     access_token = _get_service_account_access_token(effective_service_account_json) if use_service_account else None
@@ -783,6 +832,7 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
                     "id": item.get("id") or "",
                     "name": item.get("name") or "",
                     "url": item.get("webViewLink") or f"https://drive.google.com/drive/folders/{item.get('id')}",
+                    "created_time": item.get("createdTime"),
                     "modified_time": item.get("modifiedTime"),
                 }
             )
@@ -1597,6 +1647,48 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
     return stats
 
 
+def _daily_activity_entry_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "drive_file_id": entry.drive_file_id,
+        "drive_url": entry.drive_url,
+        "journal_name": entry.journal_name,
+        "group_code": entry.group_code,
+        "created_at": _as_aware_utc(entry.drive_created_at),
+        "change_started_at": _as_aware_utc(entry.drive_change_started_at),
+        "modified_at": _as_aware_utc(entry.drive_modified_at),
+    }
+
+
+def collect_daily_journal_activity(section: JournalMonitorSection, now: datetime | None = None) -> dict[str, Any]:
+    cutoff_at = _journal_daily_cutoff(now)
+    entries = list(section.entries)
+    created = [
+        _daily_activity_entry_payload(entry)
+        for entry in entries
+        if (created_at := _as_aware_utc(entry.drive_created_at)) is not None and created_at >= cutoff_at
+    ]
+    changed = [
+        _daily_activity_entry_payload(entry)
+        for entry in entries
+        if (change_started_at := _as_aware_utc(entry.drive_change_started_at)) is not None and change_started_at >= cutoff_at
+    ]
+    created.sort(key=lambda item: (item["created_at"] or datetime.max.replace(tzinfo=timezone.utc), str(item["journal_name"]).casefold()))
+    changed.sort(
+        key=lambda item: (
+            item["change_started_at"] or datetime.max.replace(tzinfo=timezone.utc),
+            str(item["journal_name"]).casefold(),
+        )
+    )
+    return {
+        "cutoff_at": cutoff_at,
+        "created_count": len(created),
+        "changed_count": len(changed),
+        "created": created,
+        "changed": changed,
+    }
+
+
 def section_to_response_payload(section: JournalMonitorSection, include_entries: bool = False) -> dict[str, Any]:
     entries = sorted(section.entries, key=lambda item: ((item.group_code or "~~~~").casefold(), item.journal_name.casefold()))
     payload = {
@@ -1612,6 +1704,7 @@ def section_to_response_payload(section: JournalMonitorSection, include_entries:
         "last_sync_status": section.last_sync_status,
         "last_sync_message": section.last_sync_message,
         "stats": collect_monitor_stats(entries),
+        "daily_activity": collect_daily_journal_activity(section),
     }
     if include_entries:
         payload["entries"] = [entry_to_response_payload(entry) for entry in entries]
@@ -1662,7 +1755,9 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
         "trainees_message": entry.trainees_message,
         "trainees_processed_at": entry.trainees_processed_at,
         "trainees_source_names": _visible_source_names(entry, entry.trainees_source_names),
+        "drive_created_at": entry.drive_created_at,
         "drive_modified_at": entry.drive_modified_at,
+        "drive_change_started_at": entry.drive_change_started_at,
         "last_seen_at": entry.last_seen_at,
     }
 
@@ -1754,6 +1849,7 @@ def sync_journal_monitor_section(
     folders = folder_lister(section.folder_id, service_account_json=section_service_account_json)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     seen_drive_ids: set[str] = set()
+    daily_cutoff_at = _journal_daily_cutoff(now)
 
     entries_by_drive_id = {entry.drive_file_id: entry for entry in section.entries}
     for folder in folders:
@@ -1772,7 +1868,8 @@ def sync_journal_monitor_section(
             continue
         seen_drive_ids.add(drive_id)
         group_code = extract_group_code(name)
-        next_modified_at = _parse_datetime(folder.get("modified_time"))
+        next_created_at = _as_aware_utc(_parse_datetime(folder.get("created_time")))
+        next_modified_at = _drive_activity_modified_at(folder, workbook_files)
 
         if not entry:
             entry = JournalMonitorEntry(
@@ -1797,7 +1894,16 @@ def sync_journal_monitor_section(
         entry.journal_name = name
         entry.group_code = group_code
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+        if next_created_at is not None:
+            entry.drive_created_at = next_created_at
         entry.drive_modified_at = next_modified_at
+        _update_daily_drive_change_start(
+            entry,
+            cutoff_at=daily_cutoff_at,
+            drive_created_at=next_created_at,
+            folder=folder,
+            workbook_files=workbook_files,
+        )
         entry.last_seen_at = now
         if old_journal_name != name or renamed_group or modified_after_processing:
             _requeue_entry_after_drive_change(db, entry)
