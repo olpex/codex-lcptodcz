@@ -1810,6 +1810,10 @@ def test_journal_auto_tick_endpoint_processes_current_branch_sections(client, au
         lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
         raising=False,
     )
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        lambda db, **kwargs: {"processed": 0, "skipped_already_processed": 0, "skipped_unsupported": 0},
+    )
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
         name="Журнали 2026",
@@ -1824,13 +1828,101 @@ def test_journal_auto_tick_endpoint_processes_current_branch_sections(client, au
     response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
 
     assert response.status_code == 202
-    assert response.json() == {"processed_sections": 1, "failed_sections": 0}
+    payload = response.json()
+    assert payload["processed_sections"] == 1
+    assert payload["failed_sections"] == 0
+    assert payload["drive_intake_processed"] == 0
+    assert payload["drive_intake_failed"] == 0
     db_session.refresh(section)
     entry = section.entries[0]
     assert entry.group_code == "1-26"
     assert entry.workload_status == "processed"
     assert entry.trainees_status == "processed"
     assert entry.trainee_count == 1
+
+
+def test_journal_auto_tick_endpoint_processes_one_drive_intake_file(client, auth_headers, monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["branch_id"] = kwargs.get("branch_id")
+        captured["import_job_runner"] = kwargs.get("import_job_runner")
+        return {
+            "processed": 1,
+            "skipped_already_processed": 0,
+            "skipped_unsupported": 0,
+            "filename": "46-26 Розклад.docx",
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fake_process_next_drive_intake_file,
+        raising=False,
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["processed_sections"] == 0
+    assert payload["failed_sections"] == 0
+    assert payload["drive_intake_processed"] == 1
+    assert payload["drive_intake_failed"] == 0
+    assert payload["drive_intake_filename"] == "46-26 Розклад.docx"
+    assert captured["branch_id"] == "main"
+    assert captured["import_job_runner"] is not None
+
+
+def test_journal_auto_tick_reports_drive_intake_error_message(client, auth_headers, monkeypatch):
+    def fail_drive_intake(db, **kwargs):
+        raise RuntimeError("Не вдалося отримати доступ до папки Google Drive")
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fail_drive_intake,
+        raising=False,
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["drive_intake_processed"] == 0
+    assert payload["drive_intake_failed"] == 1
+    assert payload["drive_intake_message"] == "Не вдалося отримати доступ до папки Google Drive"
+
+
+def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, auth_headers, db_session, monkeypatch):
+    captured: dict[str, object] = {}
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        service_account_json_encrypted=cipher.encrypt("section-service-account-json"),
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_journal_monitor_background_step",
+        lambda db, section, **kwargs: None,
+    )
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["service_account_json"] = kwargs.get("service_account_json")
+        return {"processed": 0, "skipped_already_processed": 0, "skipped_unsupported": 0}
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fake_process_next_drive_intake_file,
+        raising=False,
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+
+    assert response.status_code == 202
+    assert captured["service_account_json"] == "section-service-account-json"
 
 
 def test_journal_auto_worker_processes_all_pending_trainees_after_workloads_processed(db_session, monkeypatch):

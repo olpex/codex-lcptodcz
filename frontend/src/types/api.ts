@@ -145,6 +145,14 @@ export interface ScheduleSlot {
   room_name?: string | null;
 }
 
+export interface ScheduleDeleteResult {
+  group_id: number;
+  group_code: string;
+  deleted_slots: number;
+  deleted_hours: number;
+  journal_workload_present: boolean;
+}
+
 export interface WorkloadGroup {
   group_code: string;
   group_name: string;

@@ -1,10 +1,11 @@
 from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
-from app.models import Group, GroupStatus, RoleName, Room, ScheduleSlot, Subject, Teacher
-from app.schemas.api import ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
+from app.models import Group, GroupStatus, JournalMonitorEntry, RoleName, Room, ScheduleSlot, Subject, Teacher
+from app.schemas.api import ScheduleDeleteResponse, ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
 from app.services.audit import write_audit
 
 router = APIRouter()
@@ -186,6 +187,68 @@ def list_schedule(
 
     slots = query.order_by(ScheduleSlot.starts_at.asc()).all()
     return _to_schedule_responses(db, slots)
+
+
+@router.delete(
+    "/groups/{group_id}",
+    response_model=ScheduleDeleteResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def delete_group_schedule(group_id: int, db: DbSession, current_user: CurrentUser) -> ScheduleDeleteResponse:
+    group = db.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
+    ensure_same_branch(current_user, group, "Групу")
+
+    slots = db.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).all()
+    if not slots:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розклад групи не знайдено")
+
+    deleted_hours = 0.0
+    for slot in slots:
+        if slot.academic_hours is not None:
+            deleted_hours += float(slot.academic_hours)
+        else:
+            deleted_hours += max(0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600)
+
+    journal_workload_present = (
+        db.query(JournalMonitorEntry.id)
+        .filter(
+            JournalMonitorEntry.branch_id == current_user.branch_id,
+            JournalMonitorEntry.workload_status == "processed",
+            or_(JournalMonitorEntry.matched_group_id == group.id, JournalMonitorEntry.group_code == group.code),
+        )
+        .first()
+        is not None
+    )
+
+    for slot in slots:
+        db.delete(slot)
+
+    deleted_slots = len(slots)
+    deleted_hours = round(deleted_hours, 2)
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="schedule.delete_group",
+        entity_type="schedule",
+        entity_id=str(group.id),
+        details={
+            "group_code": group.code,
+            "deleted_slots": deleted_slots,
+            "deleted_hours": deleted_hours,
+            "journal_workload_present": journal_workload_present,
+        },
+    )
+    db.commit()
+    return ScheduleDeleteResponse(
+        group_id=group.id,
+        group_code=group.code,
+        deleted_slots=deleted_slots,
+        deleted_hours=deleted_hours,
+        journal_workload_present=journal_workload_present,
+    )
+
 
 @router.patch(
     "/{slot_id}",

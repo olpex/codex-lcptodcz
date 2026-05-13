@@ -59,13 +59,6 @@ type BulkPurgeResponse = {
   missing_ids: number[];
 };
 
-type BulkGroupDeleteResponse = {
-  deleted_count: number;
-  deleted_ids: number[];
-  missing_ids: number[];
-  deleted_trainees_count: number;
-};
-
 type ClearOrphanGroupsResponse = {
   cleared_count: number;
   cleared_ids: number[];
@@ -276,6 +269,13 @@ export function TraineesPage() {
     [groups, selectedGroupIds]
   );
 
+  const selectedGroupTraineeIds = useMemo(() => {
+    const selectedGroupCodes = new Set(selectedGroupRows.map((group) => (group.code || "").trim()).filter(Boolean));
+    return trainees
+      .filter((trainee) => !trainee.is_deleted && selectedGroupCodes.has((trainee.group_code || "").trim()))
+      .map((trainee) => trainee.id);
+  }, [selectedGroupRows, trainees]);
+
   const hasExpandedTrainees = useMemo(
     () => Object.values(expanded).some(Boolean),
     [expanded]
@@ -303,7 +303,7 @@ export function TraineesPage() {
     const showLoading = !options.quiet || trainees.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      await triggerJournalAutoTick();
+      triggerJournalAutoTick();
       const [groupsData, data] = await Promise.all([
         request<Group[]>("/groups"),
         (async () => {
@@ -383,7 +383,7 @@ export function TraineesPage() {
 
   usePageRefresh(() => fetchTrainees(search, { quiet: true }), {
     enabled: !editingId && !isSavingEdit && !isSubmitting && !isBulkUpdating && !hasExpandedTrainees,
-    intervalMs: 120_000,
+    intervalMs: 45_000,
     refreshOnFocus: false
   });
 
@@ -613,21 +613,26 @@ export function TraineesPage() {
     setGroupDeleteDialogOpen(false);
   };
 
-  const runBulkDeleteGroups = async () => {
+  const runBulkArchiveGroupTrainees = async () => {
     if (isBulkUpdating) return;
     if (!selectedGroupIdList.length) {
       closeGroupDeleteDialog();
       return;
     }
+    if (!selectedGroupTraineeIds.length) {
+      showError("У вибраних групах немає активних слухачів для архівації");
+      closeGroupDeleteDialog();
+      return;
+    }
     setIsBulkUpdating(true);
     try {
-      const response = await request<BulkGroupDeleteResponse>("/groups/bulk/delete", {
+      const response = await request<BulkDeleteResponse>("/trainees/bulk/delete", {
         method: "POST",
-        body: JSON.stringify({ group_ids: selectedGroupIdList, delete_trainees: true })
+        body: JSON.stringify({ trainee_ids: selectedGroupTraineeIds })
       });
       await fetchTrainees(search);
       clearSelection();
-      showSuccess(`Видалено груп: ${response.deleted_count}. Видалено слухачів: ${response.deleted_trainees_count}`);
+      showSuccess(`Архівовано слухачів вибраних груп: ${response.deleted_count}`);
       setGroupDeleteDialogOpen(false);
     } catch (error) {
       showError((error as Error).message);
@@ -814,17 +819,14 @@ export function TraineesPage() {
   }, [purgeMode, selectedIds, trainees]);
 
   const groupDeleteDialogDescription = useMemo(() => {
-    if (!selectedGroupRows.length) return "Оберіть групи для видалення.";
+    if (!selectedGroupRows.length) return "Оберіть групи, слухачів яких потрібно архівувати.";
     const preview = selectedGroupRows
       .slice(0, 3)
       .map((group) => group.code)
       .join(", ");
     const hasMore = selectedGroupRows.length > 3 ? ` та ще ${selectedGroupRows.length - 3}` : "";
-    const traineeCount = trainees.filter((trainee) =>
-      selectedGroupRows.some((group) => group.code === (trainee.group_code || "").trim())
-    ).length;
-    return `Видалити групи: ${preview}${hasMore}? Разом із ними буде видалено слухачів цієї групи: ${traineeCount}.`;
-  }, [selectedGroupRows, trainees]);
+    return `Архівувати слухачів із груп: ${preview}${hasMore}? Самі групи залишаться в реєстрі груп. Слухачів до архівації: ${selectedGroupTraineeIds.length}.`;
+  }, [selectedGroupRows, selectedGroupTraineeIds.length]);
 
   return (
     <div className="space-y-5">
@@ -1032,7 +1034,7 @@ export function TraineesPage() {
                   onClick={openGroupDeleteDialog}
                   disabled={isBulkUpdating || !selectedGroupIdList.length}
                 >
-                  Видалити групи
+                  Архівувати слухачів груп
                 </button>
                 <button
                   className="rounded-lg bg-red-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -1347,14 +1349,14 @@ export function TraineesPage() {
       />
       <ConfirmDialog
         open={groupDeleteDialogOpen}
-        title={selectedGroupIdList.length === 1 ? "Видалити групу?" : "Видалити групи?"}
+        title={selectedGroupIdList.length === 1 ? "Архівувати слухачів групи?" : "Архівувати слухачів груп?"}
         description={groupDeleteDialogDescription}
-        confirmLabel={isBulkUpdating ? "Видалення..." : selectedGroupIdList.length === 1 ? "Видалити групу" : "Видалити групи"}
+        confirmLabel={isBulkUpdating ? "Архівація..." : "Архівувати слухачів"}
         cancelLabel="Скасувати"
-        onConfirm={runBulkDeleteGroups}
+        onConfirm={runBulkArchiveGroupTrainees}
         onCancel={closeGroupDeleteDialog}
         confirmVariant="danger"
-        confirmDisabled={isBulkUpdating || !selectedGroupIdList.length}
+        confirmDisabled={isBulkUpdating || !selectedGroupIdList.length || !selectedGroupTraineeIds.length}
       />
     </div>
   );

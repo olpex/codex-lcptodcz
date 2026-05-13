@@ -408,6 +408,14 @@ class ScheduleSlotUpdate(BaseModel):
     room_id: int | None = None
 
 
+class ScheduleDeleteResponse(BaseModel):
+    group_id: int
+    group_code: str
+    deleted_slots: int
+    deleted_hours: float
+    journal_workload_present: bool
+
+
 class WorkloadGroupResponse(BaseModel):
     group_code: str
     group_name: str

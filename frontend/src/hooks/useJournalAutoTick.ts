@@ -2,27 +2,43 @@ import { useCallback, useRef } from "react";
 
 type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
 
-const MIN_INTERVAL_MS = 60_000;
+const MIN_INTERVAL_MS = 45_000;
 
-export function useJournalAutoTick(request: ApiRequest, enabled = true) {
+type AutoTickResult = {
+  processed_sections: number;
+  failed_sections: number;
+  drive_intake_processed?: number;
+  drive_intake_failed?: number;
+  drive_intake_disabled?: number;
+  drive_intake_skipped_already_processed?: number;
+  drive_intake_skipped_unsupported?: number;
+  drive_intake_job_id?: number | null;
+  drive_intake_filename?: string | null;
+  drive_intake_message?: string | null;
+};
+
+export function useJournalAutoTick(request: ApiRequest, enabled = true): () => Promise<AutoTickResult | null> | undefined {
   const lastRunRef = useRef(0);
-  const inFlightRef = useRef(false);
+  const inFlightRef = useRef<Promise<AutoTickResult | null> | null>(null);
 
-  return useCallback(async () => {
+  return useCallback(() => {
     if (!enabled || inFlightRef.current) return;
+
     const now = Date.now();
     if (now - lastRunRef.current < MIN_INTERVAL_MS) return;
 
-    inFlightRef.current = true;
     lastRunRef.current = now;
-    try {
-      await request<{ processed_sections: number; failed_sections: number }>("/journal-monitors/auto-tick", {
-        method: "POST"
+    const tickPromise = request<AutoTickResult>("/journal-monitors/auto-tick", {
+      method: "POST"
+    })
+      .catch(() => {
+        // Data refresh must stay usable even if Drive is temporarily unavailable.
+        return null;
+      })
+      .finally(() => {
+        inFlightRef.current = null;
       });
-    } catch {
-      // Data refresh must stay usable even if Drive is temporarily unavailable.
-    } finally {
-      inFlightRef.current = false;
-    }
+    inFlightRef.current = tickPromise;
+    return tickPromise;
   }, [enabled, request]);
 }

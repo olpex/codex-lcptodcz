@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
@@ -7,8 +7,9 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { ScheduleSlot, Teacher } from "../types/api";
+import type { ScheduleDeleteResult, ScheduleSlot, Teacher } from "../types/api";
 
 type GroupedSchedule = {
   dateKey: string;
@@ -52,6 +53,14 @@ type MonthGroupSummary = {
 type TeacherWithWorkload = Teacher & {
   displayName: string;
   totalHours: number;
+};
+
+type ScheduleGroupDeleteOption = {
+  groupId: number;
+  code: string;
+  name: string;
+  lessons: number;
+  hours: number;
 };
 
 function shortName(name: string | undefined | null) {
@@ -411,6 +420,7 @@ const MonthCalendar = ({
 export function SchedulePage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
+  const driveIntakeTriggeredRef = useRef(false);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
@@ -423,10 +433,15 @@ export function SchedulePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [driveSyncNotice, setDriveSyncNotice] = useState<string | null>(null);
   const [teacherToDelete, setTeacherToDelete] = useState<TeacherWithWorkload | null>(null);
   const [isDeletingTeacher, setIsDeletingTeacher] = useState(false);
+  const [selectedScheduleGroupId, setSelectedScheduleGroupId] = useState("");
+  const [scheduleGroupToDelete, setScheduleGroupToDelete] = useState<ScheduleGroupDeleteOption | null>(null);
+  const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
+  const triggerJournalAutoTick = useJournalAutoTick(request, canGenerate);
 
   const appendSnapshot = (data: ScheduleSlot[]) => {
     const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
@@ -459,6 +474,7 @@ export function SchedulePage() {
 
       setSlots(data);
       setTeachers(teachersData);
+      setExpandedDates({});
       appendSnapshot(data);
       setLoadError(null);
     } catch (error) {
@@ -492,6 +508,24 @@ export function SchedulePage() {
     fetchSchedule();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!canGenerate || driveIntakeTriggeredRef.current) return;
+    driveIntakeTriggeredRef.current = true;
+    const tickPromise = triggerJournalAutoTick();
+    if (!tickPromise) return;
+    tickPromise.then((result) => {
+      if (result?.drive_intake_failed || result?.drive_intake_disabled) {
+        setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
+        return;
+      }
+      if (result?.drive_intake_processed || result?.drive_intake_job_id) {
+        setDriveSyncNotice(null);
+        fetchSchedule();
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canGenerate, triggerJournalAutoTick]);
 
   usePageRefresh(fetchSchedule, { intervalMs: 30_000 });
 
@@ -573,6 +607,41 @@ export function SchedulePage() {
       });
   }, [slots, teachers]);
 
+  const scheduleGroupsForDelete = useMemo<ScheduleGroupDeleteOption[]>(() => {
+    const byGroup = new Map<number, ScheduleGroupDeleteOption>();
+    for (const slot of slots) {
+      const existing = byGroup.get(slot.group_id);
+      const hours = toSlotHours(slot);
+      if (existing) {
+        existing.lessons += 1;
+        existing.hours = Number((existing.hours + hours).toFixed(2));
+        continue;
+      }
+      byGroup.set(slot.group_id, {
+        groupId: slot.group_id,
+        code: slot.group_code || String(slot.group_id),
+        name: slot.group_name || "Без назви",
+        lessons: 1,
+        hours: Number(hours.toFixed(2))
+      });
+    }
+    return Array.from(byGroup.values()).sort((left, right) =>
+      left.code.localeCompare(right.code, "uk-UA", { numeric: true, sensitivity: "base" })
+    );
+  }, [slots]);
+
+  const selectedScheduleGroup = useMemo(
+    () => scheduleGroupsForDelete.find((group) => String(group.groupId) === selectedScheduleGroupId) || null,
+    [scheduleGroupsForDelete, selectedScheduleGroupId]
+  );
+
+  useEffect(() => {
+    if (!selectedScheduleGroupId) return;
+    if (!scheduleGroupsForDelete.some((group) => String(group.groupId) === selectedScheduleGroupId)) {
+      setSelectedScheduleGroupId("");
+    }
+  }, [scheduleGroupsForDelete, selectedScheduleGroupId]);
+
   const seriesByKey = useMemo(
     () => ({
       totalLessons: statsHistory.map((item) => item.totalLessons),
@@ -592,12 +661,7 @@ export function SchedulePage() {
     const allowedDates = new Set(visibleGroupedSchedule.map((group) => group.dateKey));
     setExpandedDates((prev) => {
       const filteredEntries = Object.entries(prev).filter(([key]) => allowedDates.has(key));
-      const filteredState = Object.fromEntries(filteredEntries) as Record<string, boolean>;
-      const hasExpanded = Object.values(filteredState).some(Boolean);
-      if (hasExpanded) {
-        return filteredState;
-      }
-      return { ...filteredState, [visibleGroupedSchedule[0].dateKey]: true };
+      return Object.fromEntries(filteredEntries) as Record<string, boolean>;
     });
   }, [visibleGroupedSchedule]);
 
@@ -646,6 +710,42 @@ export function SchedulePage() {
       showError((error as Error).message);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const openDeleteScheduleDialog = () => {
+    if (!selectedScheduleGroup || isDeletingSchedule) return;
+    setScheduleGroupToDelete(selectedScheduleGroup);
+  };
+
+  const closeDeleteScheduleDialog = () => {
+    if (isDeletingSchedule) return;
+    setScheduleGroupToDelete(null);
+  };
+
+  const confirmDeleteSchedule = async () => {
+    if (!scheduleGroupToDelete || isDeletingSchedule) return;
+    setIsDeletingSchedule(true);
+    try {
+      const result = await request<ScheduleDeleteResult>(`/schedule/groups/${scheduleGroupToDelete.groupId}`, {
+        method: "DELETE"
+      });
+      setSlots((prev) => {
+        const next = prev.filter((slot) => slot.group_id !== scheduleGroupToDelete.groupId);
+        appendSnapshot(next);
+        return next;
+      });
+      setSelectedScheduleGroupId("");
+      setScheduleGroupToDelete(null);
+      showSuccess(
+        result.journal_workload_present
+          ? `Розклад групи «${result.group_code}» видалено. Години збережено з журналу.`
+          : `Розклад групи «${result.group_code}» видалено. Знято ${formatHours(result.deleted_hours)} год.`
+      );
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsDeletingSchedule(false);
     }
   };
 
@@ -775,6 +875,34 @@ export function SchedulePage() {
             />
             Лише конфлікти
           </label>
+          {canGenerate && scheduleGroupsForDelete.length > 0 && (
+            <>
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <span>Група</span>
+                <select
+                  aria-label="Група для видалення розкладу"
+                  className="min-w-[12rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal"
+                  value={selectedScheduleGroupId}
+                  onChange={(event) => setSelectedScheduleGroupId(event.target.value)}
+                >
+                  <option value="">Оберіть групу</option>
+                  {scheduleGroupsForDelete.map((group) => (
+                    <option key={group.groupId} value={group.groupId}>
+                      {group.code} - {formatHours(group.hours)} год
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!selectedScheduleGroup || isDeletingSchedule}
+                onClick={openDeleteScheduleDialog}
+              >
+                Видалити розклад групи
+              </button>
+            </>
+          )}
           </div>
         </StickyActionBar>
         {conflictAnalysis.overlapCount > 0 && (
@@ -792,6 +920,11 @@ export function SchedulePage() {
             >
               Повторити
             </button>
+          </div>
+        )}
+        {driveSyncNotice && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {driveSyncNotice}
           </div>
         )}
 
@@ -916,6 +1049,23 @@ export function SchedulePage() {
           )}
         </div>
       </Panel>
+      {canGenerate && (
+        <ConfirmDialog
+          open={Boolean(scheduleGroupToDelete)}
+          title="Видалити розклад групи"
+          description={
+            scheduleGroupToDelete
+              ? `Видалити розклад групи «${scheduleGroupToDelete.code}» (${scheduleGroupToDelete.lessons} занять, ${formatHours(scheduleGroupToDelete.hours)} год)?`
+              : ""
+          }
+          confirmLabel={isDeletingSchedule ? "Видаляємо..." : "Видалити"}
+          cancelLabel="Скасувати"
+          confirmVariant="danger"
+          confirmDisabled={isDeletingSchedule}
+          onConfirm={confirmDeleteSchedule}
+          onCancel={closeDeleteScheduleDialog}
+        />
+      )}
       {canGenerate && (
         <ConfirmDialog
           open={Boolean(teacherToDelete)}
