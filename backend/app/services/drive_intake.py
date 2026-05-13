@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.crypto import cipher
-from app.models import Document, DocumentType, ImportJob, JobStatus, JournalMonitorSection
+from app.models import Document, DocumentType, Group, ImportJob, JobStatus, JournalMonitorSection, ScheduleSlot
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.journal_monitor import (
     GOOGLE_DRIVE_DOCS_MIME,
@@ -28,6 +28,7 @@ from app.services.journal_monitor import (
     extract_drive_folder_id,
 )
 from app.services.mail_ingest import GROUP_CODE_PATTERN
+from app.services.schedule_import import parse_schedule_docx
 from app.services.storage import detect_document_type, storage_path
 
 SUPPORTED_INTAKE_MIME_TYPES = {
@@ -87,6 +88,8 @@ def list_drive_intake_files(folder_id: str, service_account_json: str | None = N
             f"&fields={quote(fields)}"
             "&pageSize=100"
             "&orderBy=modifiedTime"
+            "&supportsAllDrives=true"
+            "&includeItemsFromAllDrives=true"
         )
         if page_token:
             url += f"&pageToken={quote(page_token)}"
@@ -133,6 +136,22 @@ def _processed_drive_filename(name: str | None, marker: str | None = None) -> st
     return f"{filename.rstrip()} {effective_marker}"
 
 
+def _unprocessed_drive_filename(name: str | None, marker: str | None = None) -> str:
+    effective_marker = (marker or _processed_marker()).strip()
+    filename = (name or "drive-file").strip() or "drive-file"
+    if not effective_marker:
+        return filename
+
+    marker_pattern = re.compile(rf"\s*{re.escape(effective_marker)}\s*", re.IGNORECASE)
+    for extension in sorted(set(_MIME_EXTENSIONS.values()), key=len, reverse=True):
+        if filename.casefold().endswith(extension.casefold()):
+            base = filename[: -len(extension)]
+            cleaned_base = marker_pattern.sub(" ", base).strip()
+            return f"{cleaned_base or base.strip()}{filename[-len(extension):]}"
+    cleaned = marker_pattern.sub(" ", filename).strip()
+    return cleaned or filename
+
+
 def _document_type_for_drive_file(filename: str, mime_type: str | None) -> DocumentType:
     if mime_type in {GOOGLE_DRIVE_DOCS_MIME, GOOGLE_DRIVE_DOCX_MIME}:
         return DocumentType.DOCX
@@ -163,6 +182,112 @@ def _idempotency_key(branch_id: str, file_id: str, modified_time: str | None, fi
     return f"{branch_id}:drive-intake:{digest}"
 
 
+def _find_drive_intake_job(
+    db: Session,
+    *,
+    branch_id: str,
+    file_id: str,
+    modified_time: str | None,
+    filename: str,
+) -> ImportJob | None:
+    keys = [
+        _idempotency_key(branch_id, file_id, modified_time, filename),
+        _idempotency_key(branch_id, file_id, modified_time, _unprocessed_drive_filename(filename)),
+        _idempotency_key(branch_id, file_id, modified_time),
+    ]
+    seen_keys: set[str] = set()
+    for key in keys:
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        job = db.query(ImportJob).filter(ImportJob.idempotency_key == key).first()
+        if job:
+            return job
+    return None
+
+
+def _remember_processed_drive_name(
+    db: Session,
+    job: ImportJob,
+    *,
+    branch_id: str,
+    file_id: str,
+    modified_time: str | None,
+    processed_name: str | None,
+) -> None:
+    if not processed_name:
+        return
+    next_key = _idempotency_key(branch_id, file_id, modified_time, processed_name)
+    if job.idempotency_key != next_key:
+        key_owner = (
+            db.query(ImportJob)
+            .filter(ImportJob.idempotency_key == next_key, ImportJob.id != job.id)
+            .first()
+        )
+        if not key_owner:
+            job.idempotency_key = next_key
+
+    payload = dict(job.result_payload or {})
+    payload["drive_file_name"] = processed_name
+    job.result_payload = payload
+    db.add(job)
+
+
+def _schedule_docx_needs_resync(db: Session, job: ImportJob, branch_id: str) -> bool:
+    document = job.document
+    if not document or document.file_type != DocumentType.DOCX:
+        return False
+    try:
+        parsed_list = parse_schedule_docx(document.file_path)
+    except Exception:
+        return False
+
+    for parsed in parsed_list:
+        entries = parsed.get("entries") or []
+        if not entries:
+            continue
+
+        group_code = str(parsed.get("group_code") or "").strip()
+        group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+        if not group:
+            return True
+
+        min_start = min(item["starts_at"] for item in entries)
+        max_end = max(item["ends_at"] for item in entries)
+        existing_count = (
+            db.query(ScheduleSlot)
+            .filter(
+                ScheduleSlot.group_id == group.id,
+                ScheduleSlot.starts_at >= min_start,
+                ScheduleSlot.starts_at <= max_end,
+            )
+            .count()
+        )
+        if existing_count < len(entries):
+            return True
+    return False
+
+
+def _rerun_existing_import_job(
+    db: Session,
+    job: ImportJob,
+    import_job_runner: ImportJobRunner | None,
+) -> tuple[Any, ImportJob]:
+    if import_job_runner is None:
+        return None, job
+
+    job.status = JobStatus.QUEUED
+    job.message = "Повторна синхронізація розкладу з Google Drive"
+    job.started_at = None
+    job.finished_at = None
+    db.add(job)
+    db.commit()
+
+    runner_result = import_job_runner(job.id)
+    db.expire_all()
+    return runner_result, db.get(ImportJob, job.id) or job
+
+
 def mark_drive_intake_file_processed(
     file_id: str,
     processed_name: str,
@@ -172,7 +297,7 @@ def mark_drive_intake_file_processed(
     if not effective_service_account_json.strip():
         raise RuntimeError("Google Drive file marking requires service account write access")
 
-    url = f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}?fields=id,name,modifiedTime"
+    url = f"https://www.googleapis.com/drive/v3/files/{quote(file_id)}?fields=id,name,modifiedTime&supportsAllDrives=true"
     request_or_url = _drive_request_url(url, effective_service_account_json)
     full_url = request_or_url.full_url if isinstance(request_or_url, Request) else request_or_url
     headers = dict(request_or_url.header_items()) if isinstance(request_or_url, Request) else {}
@@ -265,6 +390,7 @@ def process_next_drive_intake_file(
     skipped_already_processed = 0
     skipped_marked_processed = 0
     skipped_unsupported = 0
+    last_existing_mark_result: dict[str, Any] = {}
     files = _sort_drive_files(file_lister(effective_folder_id, service_account_json))
     for item in files:
         file_id = str(item.get("id") or "").strip()
@@ -273,10 +399,6 @@ def process_next_drive_intake_file(
             continue
         mime_type = str(item.get("mimeType") or "")
         raw_name = str(item.get("name") or file_id)
-        if _drive_filename_has_processed_marker(raw_name):
-            skipped_marked_processed += 1
-            continue
-
         filename = _normalize_drive_filename(raw_name, mime_type)
         doc_type = _document_type_for_drive_file(filename, mime_type)
         if doc_type not in {DocumentType.XLSX, DocumentType.DOCX}:
@@ -286,14 +408,43 @@ def process_next_drive_intake_file(
         modified_time = str(item.get("modifiedTime") or "")
         idempotency_key = _idempotency_key(effective_branch_id, file_id, modified_time, raw_name)
         legacy_idempotency_key = _idempotency_key(effective_branch_id, file_id, modified_time)
-        existing_job = db.query(ImportJob).filter(ImportJob.idempotency_key == idempotency_key).first()
+        is_marked_processed = _drive_filename_has_processed_marker(raw_name)
+        existing_job = _find_drive_intake_job(
+            db,
+            branch_id=effective_branch_id,
+            file_id=file_id,
+            modified_time=modified_time,
+            filename=raw_name,
+        )
         reprocesses_legacy_success_job = False
-        if not existing_job:
-            legacy_job = db.query(ImportJob).filter(ImportJob.idempotency_key == legacy_idempotency_key).first()
-            if legacy_job and legacy_job.status == JobStatus.SUCCEEDED:
+        if existing_job and existing_job.idempotency_key == legacy_idempotency_key:
+            if existing_job.status == JobStatus.SUCCEEDED:
                 reprocesses_legacy_success_job = True
-            else:
-                existing_job = legacy_job
+                if not is_marked_processed:
+                    existing_job = None
+
+        if is_marked_processed:
+            if (
+                existing_job
+                and existing_job.status == JobStatus.SUCCEEDED
+                and doc_type == DocumentType.DOCX
+                and _schedule_docx_needs_resync(db, existing_job, effective_branch_id)
+            ):
+                runner_result, existing_job = _rerun_existing_import_job(db, existing_job, import_job_runner)
+                return {
+                    "processed": 1,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": _job_status_value(existing_job),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    "runner_result": runner_result,
+                    "resynced_schedule": True,
+                }
+            skipped_marked_processed += 1
+            continue
+
         if existing_job:
             if existing_job.status == JobStatus.FAILED:
                 runner_result = None
@@ -321,6 +472,41 @@ def process_next_drive_intake_file(
                     **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
+            if (
+                existing_job.status == JobStatus.SUCCEEDED
+                and doc_type == DocumentType.DOCX
+                and _schedule_docx_needs_resync(db, existing_job, effective_branch_id)
+            ):
+                runner_result, existing_job = _rerun_existing_import_job(db, existing_job, import_job_runner)
+                marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    existing_job,
+                    file_id=file_id,
+                    original_name=raw_name,
+                    service_account_json=service_account_json,
+                    processed_file_marker=processed_file_marker,
+                )
+                if marked_processed:
+                    _remember_processed_drive_name(
+                        db,
+                        existing_job,
+                        branch_id=effective_branch_id,
+                        file_id=file_id,
+                        modified_time=modified_time,
+                        processed_name=processed_name,
+                    )
+                return {
+                    "processed": 1,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": _job_status_value(existing_job),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    "runner_result": runner_result,
+                    "resynced_schedule": True,
+                    **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
+                    **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
+                }
             marked_processed, processed_name, marking_error = _mark_processed_after_success(
                 existing_job,
                 file_id=file_id,
@@ -328,12 +514,18 @@ def process_next_drive_intake_file(
                 service_account_json=service_account_json,
                 processed_file_marker=processed_file_marker,
             )
+            if marked_processed:
+                _remember_processed_drive_name(
+                    db,
+                    existing_job,
+                    branch_id=effective_branch_id,
+                    file_id=file_id,
+                    modified_time=modified_time,
+                    processed_name=processed_name,
+                )
             skipped_already_processed += 1
             if marked_processed or marking_error:
-                return {
-                    "processed": 0,
-                    "skipped_already_processed": skipped_already_processed,
-                    "skipped_unsupported": skipped_unsupported,
+                last_existing_mark_result = {
                     "job_id": existing_job.id,
                     "status": _job_status_value(existing_job),
                     "filename": filename,
@@ -394,6 +586,15 @@ def process_next_drive_intake_file(
             service_account_json=service_account_json,
             processed_file_marker=processed_file_marker,
         )
+        if marked_processed:
+            _remember_processed_drive_name(
+                db,
+                job,
+                branch_id=effective_branch_id,
+                file_id=file_id,
+                modified_time=modified_time,
+                processed_name=processed_name,
+            )
 
         return {
             "processed": 1,
@@ -416,4 +617,5 @@ def process_next_drive_intake_file(
     }
     if skipped_marked_processed:
         result["skipped_marked_processed"] = skipped_marked_processed
+    result.update(last_existing_mark_result)
     return result
