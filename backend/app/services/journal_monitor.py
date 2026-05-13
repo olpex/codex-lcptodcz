@@ -27,10 +27,10 @@ GOOGLE_DRIVE_DOCS_MIME = "application/vnd.google-apps.document"
 GOOGLE_DRIVE_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 GOOGLE_DRIVE_XLS_MIME = "application/vnd.ms-excel"
 GOOGLE_DRIVE_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-GOOGLE_DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 SERVICE_ACCOUNT_SETUP_MESSAGE = (
-    "Для приватної Google Drive папки залиште в доступі папки email service account "
+    "Для приватної Google Drive папки надайте доступ Editor для email service account "
     "suptc-drive-journal-monitor@gen-lang-client-0242013668.iam.gserviceaccount.com "
     "і задайте на backend змінну GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON з JSON-ключем цього service account. "
     "GOOGLE_DRIVE_API_KEY потрібен тільки для публічних папок."
@@ -721,7 +721,7 @@ def _get_service_account_access_token(raw_json: str | None = None) -> str:
     issued_at = int(now)
     claims = {
         "iss": account["client_email"],
-        "scope": GOOGLE_DRIVE_READONLY_SCOPE,
+        "scope": GOOGLE_DRIVE_SCOPE,
         "aud": token_uri,
         "iat": issued_at,
         "exp": issued_at + 3600,

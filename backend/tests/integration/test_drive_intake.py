@@ -281,6 +281,154 @@ def test_drive_intake_skips_files_that_were_already_processed(db_session):
     assert db_session.query(ImportJob).count() == 1
 
 
+def test_drive_intake_skips_files_with_processed_marker(db_session):
+    downloader_calls: list[str] = []
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "contracts-processed",
+                "name": "184-25 Contracts [processed].xlsx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: downloader_calls.append(file_id) or _contracts_workbook_bytes(),
+        import_job_runner=_run_import_job,
+    )
+
+    assert result == {
+        "processed": 0,
+        "skipped_already_processed": 0,
+        "skipped_unsupported": 0,
+        "skipped_marked_processed": 1,
+    }
+    assert downloader_calls == []
+    assert db_session.query(ImportJob).count() == 0
+
+
+def test_drive_intake_marks_file_after_successful_import(db_session):
+    marker_calls: list[tuple[str, str, str | None]] = []
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        service_account_json="service-account-json",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "contracts-184-25",
+                "name": "184-25 Contracts.xlsx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_bytes(),
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append(
+            (file_id, next_name, service_account_json)
+        ),
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.SUCCEEDED.value
+    assert result["marked_processed"] is True
+    assert marker_calls == [("contracts-184-25", "184-25 Contracts [processed].xlsx", "service-account-json")]
+
+
+def test_drive_intake_does_not_mark_file_after_failed_import(db_session):
+    marker_calls: list[tuple[str, str]] = []
+
+    def failing_runner(job_id: int) -> dict:
+        job = db_session.get(ImportJob, job_id)
+        job.status = JobStatus.FAILED
+        db_session.add(job)
+        db_session.commit()
+        return {"status": "failed"}
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "bad-contracts",
+                "name": "Bad Contracts.xlsx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_bytes(),
+        import_job_runner=failing_runner,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append((file_id, next_name)),
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.FAILED.value
+    assert result.get("marked_processed") is not True
+    assert marker_calls == []
+
+
+def test_drive_intake_reprocesses_when_processed_marker_is_removed(db_session):
+    processed_name = "184-25 Contracts [processed].xlsx"
+    db_session.add(
+        Document(
+            branch_id="main",
+            file_name=processed_name,
+            file_path="already-imported.xlsx",
+            file_type=DocumentType.XLSX,
+            source="drive_intake",
+            mime_type=drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+            hash_sha256="already-imported",
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        ImportJob(
+            branch_id="main",
+            idempotency_key=drive_intake._idempotency_key(
+                "main",
+                "contracts-184-25",
+                "2026-05-12T07:00:00Z",
+                processed_name,
+            ),
+            document_id=db_session.query(Document).filter(Document.file_name == processed_name).one().id,
+            status=JobStatus.SUCCEEDED,
+            message="already imported",
+            result_payload={"source": "drive_intake"},
+        )
+    )
+    db_session.commit()
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "contracts-184-25",
+                "name": "184-25 Contracts.xlsx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _contracts_workbook_bytes(),
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: None,
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.SUCCEEDED.value
+    assert db_session.query(ImportJob).count() == 2
+
+
+def test_drive_intake_defaults_xlsx_import_to_overwrite_for_corrections():
+    assert drive_intake._default_import_mode(DocumentType.XLSX) == "overwrite"
+
+
 def test_drive_intake_retries_failed_existing_schedule_job(db_session, tmp_path):
     failed_path = tmp_path / "failed-schedule.docx"
     failed_path.write_bytes(_schedule_docx_bytes())

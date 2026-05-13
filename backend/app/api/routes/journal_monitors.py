@@ -89,9 +89,13 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
             "drive_intake_disabled": 1 if result.get("disabled") else 0,
             "drive_intake_skipped_already_processed": int(result.get("skipped_already_processed") or 0),
             "drive_intake_skipped_unsupported": int(result.get("skipped_unsupported") or 0),
+            "drive_intake_skipped_marked_processed": int(result.get("skipped_marked_processed") or 0),
+            "drive_intake_marked_processed": 1 if result.get("marked_processed") else 0,
             "drive_intake_job_id": result.get("job_id"),
             "drive_intake_filename": result.get("filename"),
-            "drive_intake_message": result.get("message"),
+            "drive_intake_processed_drive_file_name": result.get("processed_drive_file_name"),
+            "drive_intake_marking_error": result.get("marking_error"),
+            "drive_intake_message": result.get("message") or result.get("marking_error"),
         }
     except Exception as exc:
         db.rollback()
@@ -102,8 +106,12 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
             "drive_intake_disabled": 0,
             "drive_intake_skipped_already_processed": 0,
             "drive_intake_skipped_unsupported": 0,
+            "drive_intake_skipped_marked_processed": 0,
+            "drive_intake_marked_processed": 0,
             "drive_intake_job_id": None,
             "drive_intake_filename": None,
+            "drive_intake_processed_drive_file_name": None,
+            "drive_intake_marking_error": None,
             "drive_intake_message": str(exc),
         }
 

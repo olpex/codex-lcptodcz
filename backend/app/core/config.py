@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     google_drive_intake_auto_enabled: bool = Field(default=True)
     google_drive_intake_folder_url: str = Field(default="https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY")
     google_drive_intake_interval_seconds: int = Field(default=45)
-    google_drive_intake_update_mode: str = Field(default="missing_only")
+    google_drive_intake_update_mode: str = Field(default="overwrite")
+    google_drive_intake_processed_marker: str = Field(default="[processed]")
 
     cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173")
 

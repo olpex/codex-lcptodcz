@@ -12,8 +12,12 @@ type AutoTickResult = {
   drive_intake_disabled?: number;
   drive_intake_skipped_already_processed?: number;
   drive_intake_skipped_unsupported?: number;
+  drive_intake_skipped_marked_processed?: number;
+  drive_intake_marked_processed?: number;
   drive_intake_job_id?: number | null;
   drive_intake_filename?: string | null;
+  drive_intake_processed_drive_file_name?: string | null;
+  drive_intake_marking_error?: string | null;
   drive_intake_message?: string | null;
 };
 
