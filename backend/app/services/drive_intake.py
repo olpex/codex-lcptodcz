@@ -233,14 +233,39 @@ def _remember_processed_drive_name(
     db.add(job)
 
 
-def _schedule_docx_needs_resync(db: Session, job: ImportJob, branch_id: str) -> bool:
+def _schedule_docx_payload_has_slots(db: Session, job: ImportJob, branch_id: str) -> bool | None:
+    payload = job.result_payload if isinstance(job.result_payload, dict) else {}
+    import_result = payload.get("import_result") if isinstance(payload.get("import_result"), dict) else {}
+    group_code = str(import_result.get("group_code") or payload.get("group_code_hint") or "").strip()
+    if not group_code:
+        return None
+
+    expected_slots = int(import_result.get("created_slots") or 0) + int(
+        import_result.get("skipped_existing_slots") or 0
+    )
+    expected_group_skip = int(import_result.get("skipped_existing_groups") or 0)
+    group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
+    if not group:
+        return False if expected_slots > 0 or expected_group_skip > 0 else None
+
+    slot_count = db.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).count()
+    if slot_count > 0:
+        return True
+    if expected_slots > 0 or expected_group_skip > 0:
+        return False
+    return None
+
+
+def _schedule_docx_resync_reason(db: Session, job: ImportJob, branch_id: str) -> str | None:
     document = job.document
     if not document or document.file_type != DocumentType.DOCX:
-        return False
+        return None
     try:
         parsed_list = parse_schedule_docx(document.file_path)
     except Exception:
-        return False
+        if _schedule_docx_payload_has_slots(db, job, branch_id) is True:
+            return None
+        return "unreadable_document"
 
     for parsed in parsed_list:
         entries = parsed.get("entries") or []
@@ -250,7 +275,7 @@ def _schedule_docx_needs_resync(db: Session, job: ImportJob, branch_id: str) -> 
         group_code = str(parsed.get("group_code") or "").strip()
         group = db.query(Group).filter(Group.branch_id == branch_id, Group.code == group_code).first()
         if not group:
-            return True
+            return "missing_slots"
 
         min_start = min(item["starts_at"] for item in entries)
         max_end = max(item["ends_at"] for item in entries)
@@ -264,17 +289,80 @@ def _schedule_docx_needs_resync(db: Session, job: ImportJob, branch_id: str) -> 
             .count()
         )
         if existing_count < len(entries):
-            return True
-    return False
+            return "missing_slots"
+    return None
+
+
+def _schedule_docx_needs_resync(db: Session, job: ImportJob, branch_id: str) -> bool:
+    return _schedule_docx_resync_reason(db, job, branch_id) is not None
+
+
+def _replace_existing_job_document_from_drive(
+    db: Session,
+    job: ImportJob,
+    *,
+    branch_id: str,
+    file_id: str,
+    filename: str,
+    mime_type: str | None,
+    doc_type: DocumentType,
+    modified_time: str | None,
+    web_view_link: str | None,
+    service_account_json: str | None,
+    downloader: Downloader,
+) -> ImportJob:
+    payload = downloader(file_id, mime_type, service_account_json)
+    if not payload:
+        raise ValueError("Не вдалося повторно завантажити DOCX розклад з Google Drive")
+
+    file_path, sha256 = _store_drive_file(filename, payload)
+    document = Document(
+        branch_id=branch_id,
+        file_name=filename,
+        file_path=file_path,
+        file_type=doc_type,
+        source="drive_intake",
+        mime_type=mime_type or "application/octet-stream",
+        hash_sha256=sha256,
+    )
+    db.add(document)
+    db.flush()
+
+    result_payload = dict(job.result_payload or {})
+    result_payload.update(
+        {
+            "source": result_payload.get("source") or "drive_intake",
+            "channel": result_payload.get("channel") or "google_drive_folder",
+            "drive_file_id": file_id,
+            "drive_file_name": filename,
+            "drive_modified_time": modified_time or None,
+            "drive_url": web_view_link or result_payload.get("drive_url"),
+            "group_code_hint": _extract_group_code_from_filename(filename),
+            "import_mode": _default_import_mode(doc_type),
+        }
+    )
+    job.document_id = document.id
+    job.result_payload = result_payload
+    db.add(job)
+    db.flush()
+    return job
 
 
 def _rerun_existing_import_job(
     db: Session,
     job: ImportJob,
     import_job_runner: ImportJobRunner | None,
+    *,
+    import_mode: str | None = None,
 ) -> tuple[Any, ImportJob]:
     if import_job_runner is None:
         return None, job
+
+    if import_mode:
+        payload = dict(job.result_payload or {})
+        if payload.get("import_mode") not in IMPORT_UPDATE_MODES:
+            payload["import_mode"] = import_mode
+            job.result_payload = payload
 
     job.status = JobStatus.QUEUED
     job.message = "Повторна синхронізація розкладу з Google Drive"
@@ -424,13 +512,32 @@ def process_next_drive_intake_file(
                     existing_job = None
 
         if is_marked_processed:
-            if (
-                existing_job
-                and existing_job.status == JobStatus.SUCCEEDED
-                and doc_type == DocumentType.DOCX
-                and _schedule_docx_needs_resync(db, existing_job, effective_branch_id)
-            ):
-                runner_result, existing_job = _rerun_existing_import_job(db, existing_job, import_job_runner)
+            resync_reason = (
+                _schedule_docx_resync_reason(db, existing_job, effective_branch_id)
+                if existing_job and existing_job.status == JobStatus.SUCCEEDED and doc_type == DocumentType.DOCX
+                else None
+            )
+            if existing_job and resync_reason:
+                if resync_reason == "unreadable_document":
+                    existing_job = _replace_existing_job_document_from_drive(
+                        db,
+                        existing_job,
+                        branch_id=effective_branch_id,
+                        file_id=file_id,
+                        filename=filename,
+                        mime_type=mime_type,
+                        doc_type=doc_type,
+                        modified_time=modified_time,
+                        web_view_link=item.get("webViewLink"),
+                        service_account_json=service_account_json,
+                        downloader=downloader,
+                    )
+                runner_result, existing_job = _rerun_existing_import_job(
+                    db,
+                    existing_job,
+                    import_job_runner,
+                    import_mode=_default_import_mode(doc_type),
+                )
                 return {
                     "processed": 1,
                     "skipped_already_processed": skipped_already_processed,
@@ -475,9 +582,31 @@ def process_next_drive_intake_file(
             if (
                 existing_job.status == JobStatus.SUCCEEDED
                 and doc_type == DocumentType.DOCX
-                and _schedule_docx_needs_resync(db, existing_job, effective_branch_id)
             ):
-                runner_result, existing_job = _rerun_existing_import_job(db, existing_job, import_job_runner)
+                resync_reason = _schedule_docx_resync_reason(db, existing_job, effective_branch_id)
+            else:
+                resync_reason = None
+            if resync_reason:
+                if resync_reason == "unreadable_document":
+                    existing_job = _replace_existing_job_document_from_drive(
+                        db,
+                        existing_job,
+                        branch_id=effective_branch_id,
+                        file_id=file_id,
+                        filename=filename,
+                        mime_type=mime_type,
+                        doc_type=doc_type,
+                        modified_time=modified_time,
+                        web_view_link=item.get("webViewLink"),
+                        service_account_json=service_account_json,
+                        downloader=downloader,
+                    )
+                runner_result, existing_job = _rerun_existing_import_job(
+                    db,
+                    existing_job,
+                    import_job_runner,
+                    import_mode=_default_import_mode(doc_type),
+                )
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
                     existing_job,
                     file_id=file_id,
