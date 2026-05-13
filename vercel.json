@@ -20,5 +20,11 @@
         }
       ]
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/api/v1/journal-monitors/auto-cron",
+      "schedule": "*/5 * * * *"
+    }
   ]
 }

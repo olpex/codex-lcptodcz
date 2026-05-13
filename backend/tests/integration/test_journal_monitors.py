@@ -2015,6 +2015,7 @@ def test_journal_auto_worker_processes_active_sections_without_manual_auto_toggl
 
 def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_headers, db_session, monkeypatch):
     monkeypatch.setattr(journal_monitor.settings, "cron_secret", "cron-secret")
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
         lambda _folder_id, service_account_json=None: [
@@ -2045,11 +2046,29 @@ def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_heade
         name="Журнали 2026",
         folder_url="https://drive.google.com/drive/folders/root-folder",
         folder_id="root-folder",
+        service_account_json_encrypted=cipher.encrypt("section-service-account-json"),
         workload_auto_enabled=False,
         workload_auto_year=2026,
     )
     db_session.add(section)
     db_session.commit()
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["branch_id"] = kwargs.get("branch_id")
+        captured["import_job_runner"] = kwargs.get("import_job_runner")
+        captured["service_account_json"] = kwargs.get("service_account_json")
+        return {
+            "processed": 1,
+            "skipped_already_processed": 0,
+            "skipped_unsupported": 0,
+            "filename": "46-26 Розклад.docx",
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fake_process_next_drive_intake_file,
+        raising=False,
+    )
 
     response = client.post(
         "/api/v1/journal-monitors/auto-cron",
@@ -2057,7 +2076,15 @@ def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_heade
     )
 
     assert response.status_code == 202
-    assert response.json() == {"processed_sections": 1, "failed_sections": 0}
+    payload = response.json()
+    assert payload["processed_sections"] == 1
+    assert payload["failed_sections"] == 0
+    assert payload["drive_intake_processed"] == 1
+    assert payload["drive_intake_failed"] == 0
+    assert payload["drive_intake_filename"] == "46-26 Розклад.docx"
+    assert captured["branch_id"] == "main"
+    assert captured["import_job_runner"] is not None
+    assert captured["service_account_json"] == "section-service-account-json"
     db_session.refresh(section)
     entry = section.entries[0]
     assert entry.group_code == "1-26"
