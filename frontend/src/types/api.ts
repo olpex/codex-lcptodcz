@@ -224,6 +224,7 @@ export interface JournalMonitorStats {
 export interface JournalDailyActivityItem {
   id: number;
   drive_file_id: string;
+  drive_folder_id?: string | null;
   drive_url: string | null;
   journal_name: string;
   group_code: string | null;
@@ -243,6 +244,7 @@ export interface JournalDailyActivity {
 export interface JournalMonitorEntry {
   id: number;
   drive_file_id: string;
+  drive_folder_id?: string | null;
   drive_url: string | null;
   journal_name: string;
   group_code: string | null;

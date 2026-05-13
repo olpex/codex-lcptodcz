@@ -515,6 +515,7 @@ class JournalWorkloadTeacherResponse(BaseModel):
 class JournalDailyActivityItem(BaseModel):
     id: int
     drive_file_id: str
+    drive_folder_id: str | None = None
     drive_url: str | None = None
     journal_name: str
     group_code: str | None = None
@@ -534,6 +535,7 @@ class JournalDailyActivityResponse(BaseModel):
 class JournalMonitorEntryResponse(BaseModel):
     id: int
     drive_file_id: str
+    drive_folder_id: str | None = None
     drive_url: str | None = None
     journal_name: str
     group_code: str | None = None

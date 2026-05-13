@@ -266,6 +266,9 @@ def _journal_workbooks_modified_after(
     processed_at = _as_aware_utc(processed_at)
     if processed_at is None:
         return False
+    if entry.drive_folder_id:
+        modified_at = _as_aware_utc(entry.drive_modified_at)
+        return bool(modified_at and modified_at > processed_at)
     try:
         files = list_drive_journal_workbook_files(entry.drive_file_id, service_account_json=service_account_json)
     except Exception:
@@ -284,6 +287,31 @@ def _workbook_files_modified_after(workbook_files: list[dict[str, Any]] | None, 
         if modified_at and modified_at > processed_at:
             return True
     return False
+
+
+def _entry_workbook_file_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": entry.drive_file_id,
+        "name": entry.journal_name,
+        "mimeType": entry.drive_mime_type or "",
+    }
+    if entry.drive_modified_at:
+        payload["modifiedTime"] = entry.drive_modified_at.isoformat()
+    if entry.drive_created_at:
+        payload["createdTime"] = entry.drive_created_at.isoformat()
+    if entry.drive_url:
+        payload["webViewLink"] = entry.drive_url
+    return payload
+
+
+def _entry_workbook_files(
+    entry: JournalMonitorEntry,
+    workbook_lister,
+    service_account_json: str | None = None,
+) -> list[dict[str, Any]]:
+    if entry.drive_folder_id:
+        return [_entry_workbook_file_payload(entry)]
+    return workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
 
 
 def extract_group_code(folder_name: str) -> str | None:
@@ -501,6 +529,17 @@ def _workbook_display_name(name: str | None) -> str:
         return ""
     value = re.sub(r"\.(?:xlsx|xlsm|xls|csv)$", "", value, flags=re.IGNORECASE)
     return value.strip(" \"'«»“”„`")
+
+
+def _journal_name_from_workbook(workbook_file: dict[str, Any], folder_name: str, folder_id: str) -> str:
+    workbook_name = _workbook_display_name(str(workbook_file.get("name") or ""))
+    workbook_id = str(workbook_file.get("id") or "").strip()
+    if not workbook_name or workbook_name.casefold() in {folder_id.casefold(), workbook_id.casefold()}:
+        return folder_name
+    workbook_group_code = display_group_code(extract_group_code(workbook_name))
+    if workbook_group_code and workbook_name.casefold() == workbook_group_code.casefold():
+        return folder_name
+    return workbook_name
 
 
 def _source_name_key(value: str | None, group_code: str | None = None) -> str:
@@ -874,7 +913,7 @@ def list_drive_journal_workbook_files(folder_id: str, service_account_json: str 
         ]
     )
     query = f"'{folder_id}' in parents and ({mime_filter}) and trashed = false"
-    fields = "nextPageToken,files(id,name,mimeType,modifiedTime)"
+    fields = "nextPageToken,files(id,name,mimeType,webViewLink,createdTime,modifiedTime)"
     page_token = ""
     files: list[dict[str, Any]] = []
     while True:
@@ -1255,7 +1294,7 @@ def process_journal_workload_entry(
         workbook_lister = list_drive_journal_workbook_files
     if workbook_downloader is None:
         workbook_downloader = download_drive_file_bytes
-    files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
+    files = _entry_workbook_files(entry, workbook_lister, service_account_json=service_account_json)
     if not files:
         entry.workload_source_names = []
         db.add(entry)
@@ -1350,7 +1389,7 @@ def process_journal_trainees_entry(
         workbook_lister = list_drive_journal_workbook_files
     if workbook_downloader is None:
         workbook_downloader = download_drive_file_bytes
-    files = workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
+    files = _entry_workbook_files(entry, workbook_lister, service_account_json=service_account_json)
     if not files:
         entry.trainees_source_names = []
         db.add(entry)
@@ -1724,6 +1763,7 @@ def _daily_activity_entry_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
     return {
         "id": entry.id,
         "drive_file_id": entry.drive_file_id,
+        "drive_folder_id": entry.drive_folder_id,
         "drive_url": entry.drive_url,
         "journal_name": entry.journal_name,
         "group_code": entry.group_code,
@@ -1807,6 +1847,7 @@ def entry_to_response_payload(entry: JournalMonitorEntry) -> dict[str, Any]:
     return {
         "id": entry.id,
         "drive_file_id": entry.drive_file_id,
+        "drive_folder_id": entry.drive_folder_id,
         "drive_url": entry.drive_url,
         "journal_name": entry.journal_name,
         "group_code": entry.group_code,
@@ -1930,60 +1971,79 @@ def sync_journal_monitor_section(
         name = str(folder.get("name") or "").strip() or drive_id
         if not drive_id:
             continue
-        entry = entries_by_drive_id.get(drive_id)
         try:
             workbook_files = workbook_lister(drive_id, service_account_json=section_service_account_json)
         except Exception:
-            if not entry:
-                continue
-            workbook_files = None
-        if workbook_files is not None and not workbook_files:
+            for existing_entry in section.entries:
+                if existing_entry.drive_folder_id == drive_id or (
+                    existing_entry.drive_folder_id is None and existing_entry.drive_file_id == drive_id
+                ):
+                    seen_drive_ids.add(existing_entry.drive_file_id)
             continue
-        seen_drive_ids.add(drive_id)
-        group_code = extract_group_code(name)
-        next_created_at = _as_aware_utc(_parse_datetime(folder.get("created_time")))
-        next_modified_at = _drive_activity_modified_at(folder, workbook_files)
-
-        if not entry:
-            entry = JournalMonitorEntry(
-                section_id=section.id,
-                branch_id=section.branch_id,
-                drive_file_id=drive_id,
-                journal_name=name,
+        if not workbook_files:
+            continue
+        legacy_folder_entry = entries_by_drive_id.get(drive_id)
+        folder_group_code = extract_group_code(name)
+        for workbook_file in workbook_files:
+            workbook_id = str(workbook_file.get("id") or "").strip()
+            if not workbook_id:
+                continue
+            seen_drive_ids.add(workbook_id)
+            workbook_name = _journal_name_from_workbook(workbook_file, name, drive_id)
+            group_code = extract_group_code(workbook_name) or folder_group_code
+            next_created_at = _as_aware_utc(_parse_datetime(str(workbook_file.get("createdTime") or ""))) or _as_aware_utc(
+                _parse_datetime(folder.get("created_time"))
             )
-            db.add(entry)
-        old_group_code = display_group_code(entry.group_code)
-        next_group_code = display_group_code(group_code)
-        renamed_group = old_group_code and next_group_code and normalize_group_code(old_group_code) != normalize_group_code(next_group_code)
-        workbook_changed_after_workload = _workbook_files_modified_after(workbook_files, entry.workload_processed_at)
-        workbook_changed_after_trainees = _workbook_files_modified_after(workbook_files, entry.trainees_processed_at)
+            next_modified_at = _drive_activity_modified_at(folder, [workbook_file])
+            entry = entries_by_drive_id.get(workbook_id)
+            if not entry and legacy_folder_entry and len(workbook_files) == 1:
+                entry = legacy_folder_entry
+                entries_by_drive_id.pop(drive_id, None)
+                entries_by_drive_id[workbook_id] = entry
+            if not entry:
+                entry = JournalMonitorEntry(
+                    section_id=section.id,
+                    branch_id=section.branch_id,
+                    drive_file_id=workbook_id,
+                    journal_name=workbook_name,
+                )
+                db.add(entry)
+                entries_by_drive_id[workbook_id] = entry
+            entry.drive_file_id = workbook_id
+            old_group_code = display_group_code(entry.group_code)
+            next_group_code = display_group_code(group_code)
+            renamed_group = old_group_code and next_group_code and normalize_group_code(old_group_code) != normalize_group_code(next_group_code)
+            workbook_changed_after_workload = _workbook_files_modified_after([workbook_file], entry.workload_processed_at)
+            workbook_changed_after_trainees = _workbook_files_modified_after([workbook_file], entry.trainees_processed_at)
 
-        if renamed_group:
-            hide_groups_for_deleted_journal_entries(db, [entry])
-            archive_trainees_for_deleted_journal_entries(db, [entry])
+            if renamed_group:
+                hide_groups_for_deleted_journal_entries(db, [entry])
+                archive_trainees_for_deleted_journal_entries(db, [entry])
 
-        entry.drive_url = str(folder.get("url") or f"https://drive.google.com/drive/folders/{drive_id}")
-        entry.journal_name = name
-        entry.group_code = group_code
-        _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
-        if next_created_at is not None:
-            entry.drive_created_at = next_created_at
-        entry.drive_modified_at = next_modified_at
-        _update_daily_drive_change_start(
-            entry,
-            cutoff_at=daily_cutoff_at,
-            drive_created_at=next_created_at,
-            folder=folder,
-            workbook_files=workbook_files,
-        )
-        entry.last_seen_at = now
-        if renamed_group or workbook_changed_after_workload or workbook_changed_after_trainees:
-            _requeue_entry_after_drive_change(
-                db,
+            entry.drive_folder_id = drive_id
+            entry.drive_mime_type = str(workbook_file.get("mimeType") or "")
+            entry.drive_url = str(workbook_file.get("webViewLink") or f"https://drive.google.com/file/d/{workbook_id}/view")
+            entry.journal_name = workbook_name
+            entry.group_code = group_code
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+            if next_created_at is not None:
+                entry.drive_created_at = next_created_at
+            entry.drive_modified_at = next_modified_at
+            _update_daily_drive_change_start(
                 entry,
-                requeue_workload=workbook_changed_after_workload,
-                requeue_trainees=renamed_group or workbook_changed_after_trainees,
+                cutoff_at=daily_cutoff_at,
+                drive_created_at=next_created_at,
+                folder=folder,
+                workbook_files=[workbook_file],
             )
+            entry.last_seen_at = now
+            if renamed_group or workbook_changed_after_workload or workbook_changed_after_trainees:
+                _requeue_entry_after_drive_change(
+                    db,
+                    entry,
+                    requeue_workload=workbook_changed_after_workload,
+                    requeue_trainees=renamed_group or workbook_changed_after_trainees,
+                )
 
     db.flush()
     db.refresh(section)
@@ -1999,7 +2059,7 @@ def sync_journal_monitor_section(
 
     section.last_synced_at = now
     section.last_sync_status = "success"
-    section.last_sync_message = f"Оновлено папок журналів: {len(seen_drive_ids)}"
+    section.last_sync_message = f"Оновлено журналів: {len(seen_drive_ids)}"
     db.flush()
     db.refresh(section)
     process_journal_monitor_section_step(
