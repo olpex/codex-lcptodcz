@@ -660,12 +660,7 @@ export function SchedulePage() {
     const allowedDates = new Set(visibleGroupedSchedule.map((group) => group.dateKey));
     setExpandedDates((prev) => {
       const filteredEntries = Object.entries(prev).filter(([key]) => allowedDates.has(key));
-      const filteredState = Object.fromEntries(filteredEntries) as Record<string, boolean>;
-      const hasExpanded = Object.values(filteredState).some(Boolean);
-      if (hasExpanded) {
-        return filteredState;
-      }
-      return { ...filteredState, [visibleGroupedSchedule[0].dateKey]: true };
+      return Object.fromEntries(filteredEntries) as Record<string, boolean>;
     });
   }, [visibleGroupedSchedule]);
 

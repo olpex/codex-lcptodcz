@@ -140,6 +140,33 @@ test("schedule filter shows only conflicting lessons", async ({ page }) => {
   await expect(page.getByText("Конфліктних: 2")).toBeVisible();
 });
 
+test("schedule months stay collapsed after page refresh", async ({ page }) => {
+  const slots: MockScheduleSlot[] = [
+    {
+      id: 51,
+      group_id: 51,
+      teacher_id: 15,
+      subject_id: 21,
+      room_id: 101,
+      starts_at: "2026-06-02T09:00:00Z",
+      ends_at: "2026-06-02T11:00:00Z",
+      pair_number: 1,
+      academic_hours: 2,
+      group_code: "47п-25",
+      group_name: "Штучний інтелект",
+      teacher_name: "Паращук О.Л.",
+      subject_name: "Основи",
+      room_name: "101"
+    }
+  ];
+
+  await mockAuthorizedSchedule(page, slots);
+  await page.goto("/schedule");
+
+  await expect(page.getByRole("button", { name: /червень 2026 р\./i })).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".grid.grid-cols-7")).toHaveCount(0);
+});
+
 test("schedule filter shows empty state when conflicts are absent", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {
