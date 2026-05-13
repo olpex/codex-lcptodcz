@@ -24,6 +24,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const PROCESSING_STATUS_FILTERS = new Set(["complete", "schedule_only", "trainees_only", "not_processed", "unknown_code"]);
 const WORKLOAD_STATUS_FILTERS = new Set(["workload_only", "with_workload", "without_workload"]);
+const JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS = 45_000;
 
 const STATUS_CLASSES: Record<string, string> = {
   complete: "bg-emerald-100 text-emerald-800",
@@ -427,6 +428,11 @@ export function JournalMonitorsPage() {
     await runBackgroundStep(sectionId, Number(workloadYear));
   };
 
+  const refreshSelectedActivity = async () => {
+    if (detail?.workload_auto_enabled || isSyncing) return;
+    await syncSelected(false);
+  };
+
   useEffect(() => {
     load();
   }, []);
@@ -444,6 +450,12 @@ export function JournalMonitorsPage() {
     enabled: Boolean(selectedId && detail?.workload_auto_enabled),
     intervalMs: 30_000,
     refreshOnFocus: false
+  });
+
+  usePageRefresh(refreshSelectedActivity, {
+    enabled: Boolean(selectedId && detail && !detail.workload_auto_enabled),
+    intervalMs: JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS,
+    refreshOnFocus: true
   });
 
   const createSection = async (event: FormEvent) => {

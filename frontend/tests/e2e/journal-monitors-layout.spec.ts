@@ -182,7 +182,7 @@ async function loginAndMockJournals(
     onProcessingStart?: (url: URL) => void;
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
-    onSync?: (url: URL) => void;
+    onSync?: (url: URL) => unknown | void;
   } = {}
 ) {
   await page.addInitScript(() => {
@@ -269,11 +269,11 @@ async function loginAndMockJournals(
     }
 
     if (path.endsWith("/journal-monitors/1/sync") && method === "POST") {
-      options.onSync?.(url);
+      const syncPayload = options.onSync?.(url);
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ ...section, workload_auto_enabled: true, workload_auto_year: 2026 })
+        body: JSON.stringify(syncPayload ?? { ...section, workload_auto_enabled: true, workload_auto_year: 2026 })
       });
     }
 
@@ -386,6 +386,58 @@ test("journal monitor shows journals created and changed since 8 today", async (
   await expect(page.getByText("47-26 Змінений журнал")).toBeVisible();
   await expect(page.getByText("Початок змін: 09:10")).toBeVisible();
   await expect(page.getByText("Остання зміна: 11:45")).toBeVisible();
+});
+
+test("journal monitor refreshes daily activity without workload auto-processing", async ({ page }) => {
+  let syncCalls = 0;
+  const idleSection = {
+    ...section,
+    workload_auto_enabled: false,
+    daily_activity: {
+      ...section.daily_activity,
+      created_count: 0,
+      changed_count: 0,
+      created: [],
+      changed: []
+    }
+  };
+  const refreshedSection = {
+    ...idleSection,
+    last_synced_at: "2026-05-13T09:05:00Z",
+    daily_activity: {
+      ...idleSection.daily_activity,
+      created_count: 1,
+      created: [
+        {
+          id: 50,
+          drive_file_id: "drive-auto-created",
+          drive_url: "https://drive.google.com/drive/folders/drive-auto-created",
+          journal_name: "50-26 Auto refreshed journal",
+          group_code: "50-26",
+          created_at: "2026-05-13T09:01:00Z",
+          change_started_at: null,
+          modified_at: "2026-05-13T09:01:00Z"
+        }
+      ]
+    }
+  };
+
+  await loginAndMockJournals(page, {
+    sections: [{ ...idleSection, entries: [] }],
+    detailSection: idleSection,
+    onSync: () => {
+      syncCalls += 1;
+      return refreshedSection;
+    }
+  });
+
+  await page.goto("/journals");
+  await expect(page.getByRole("heading", { name: /08:00/ })).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+
+  await expect.poll(() => syncCalls).toBe(1);
+  await expect(page.getByText("50-26 Auto refreshed journal")).toBeVisible();
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {
