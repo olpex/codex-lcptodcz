@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
@@ -7,6 +7,7 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { ScheduleDeleteResult, ScheduleSlot, Teacher } from "../types/api";
 
@@ -419,6 +420,7 @@ const MonthCalendar = ({
 export function SchedulePage() {
   const { request, user } = useAuth();
   const { showError, showSuccess } = useToast();
+  const driveIntakeTriggeredRef = useRef(false);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [statsHistory, setStatsHistory] = useState<ScheduleSnapshot[]>([]);
@@ -438,6 +440,7 @@ export function SchedulePage() {
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
+  const triggerJournalAutoTick = useJournalAutoTick(request, canGenerate);
 
   const appendSnapshot = (data: ScheduleSlot[]) => {
     const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
@@ -503,6 +506,19 @@ export function SchedulePage() {
     fetchSchedule();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!canGenerate || driveIntakeTriggeredRef.current) return;
+    driveIntakeTriggeredRef.current = true;
+    const tickPromise = triggerJournalAutoTick();
+    if (!tickPromise) return;
+    tickPromise.then((result) => {
+      if (result?.drive_intake_processed || result?.drive_intake_job_id) {
+        fetchSchedule();
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canGenerate, triggerJournalAutoTick]);
 
   usePageRefresh(fetchSchedule, { intervalMs: 30_000 });
 

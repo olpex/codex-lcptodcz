@@ -185,6 +185,107 @@ test("schedule filter shows empty state when conflicts are absent", async ({ pag
   await expect(page.locator("table")).toHaveCount(0);
 });
 
+test("schedule page pulls Google Drive intake and refreshes imported lessons", async ({ page }) => {
+  const importedSlot: MockScheduleSlot = {
+    id: 41,
+    group_id: 46,
+    teacher_id: 12,
+    subject_id: 22,
+    room_id: 302,
+    starts_at: "2026-03-11T09:30:00Z",
+    ends_at: "2026-03-11T11:05:00Z",
+    pair_number: 1,
+    academic_hours: 2,
+    group_code: "46-26",
+    group_name: "Технології комп'ютерної обробки інформації",
+    teacher_name: "Войтехівська Г.М.",
+    subject_name: "Правові та організаційні основи охорони праці",
+    room_name: "Імпорт: 46-26"
+  };
+  let driveTickRequests = 0;
+  let driveProcessed = false;
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      driveTickRequests += 1;
+      driveProcessed = true;
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          processed_sections: 0,
+          failed_sections: 0,
+          drive_intake_processed: 1,
+          drive_intake_failed: 0,
+          drive_intake_filename: "46-26 Розклад.docx",
+          drive_intake_job_id: 1001
+        })
+      });
+    }
+
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(driveProcessed ? [importedSlot] : [])
+      });
+    }
+
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: 12,
+            first_name: "Г.М.",
+            last_name: "Войтехівська",
+            is_active: true
+          }
+        ])
+      });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/schedule");
+
+  await expect.poll(() => driveTickRequests).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Розгорнути все" }).click();
+  await expect(page.locator("[draggable=true]", { hasText: "46-26" })).toBeVisible();
+  await expect(page.locator("[draggable=true]", { hasText: "Войтехівська Г." }).first()).toBeVisible();
+});
+
 test("same time in the same auditorium is not treated as a conflict", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {

@@ -16,7 +16,7 @@ type AutoTickResult = {
   drive_intake_filename?: string | null;
 };
 
-export function useJournalAutoTick(request: ApiRequest, enabled = true): () => void {
+export function useJournalAutoTick(request: ApiRequest, enabled = true): () => Promise<AutoTickResult | null> | undefined {
   const lastRunRef = useRef(0);
   const inFlightRef = useRef<Promise<AutoTickResult | null> | null>(null);
 
