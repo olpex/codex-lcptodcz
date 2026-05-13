@@ -167,6 +167,39 @@ test("schedule months stay collapsed after page refresh", async ({ page }) => {
   await expect(page.locator(".grid.grid-cols-7")).toHaveCount(0);
 });
 
+test("schedule refresh collapses an already opened month", async ({ page }) => {
+  const slots: MockScheduleSlot[] = [
+    {
+      id: 61,
+      group_id: 61,
+      teacher_id: 16,
+      subject_id: 22,
+      room_id: 102,
+      starts_at: "2026-06-03T09:00:00Z",
+      ends_at: "2026-06-03T11:00:00Z",
+      pair_number: 1,
+      academic_hours: 2,
+      group_code: "48п-25",
+      group_name: "Тестова група",
+      teacher_name: "Паращук О.Л.",
+      subject_name: "Основи",
+      room_name: "102"
+    }
+  ];
+
+  await mockAuthorizedSchedule(page, slots);
+  await page.goto("/schedule");
+
+  const monthButton = page.getByRole("button", { name: /червень 2026 р\./i });
+  await monthButton.click();
+  await expect(monthButton).toHaveAttribute("aria-expanded", "true");
+
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+
+  await expect(monthButton).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".grid.grid-cols-7")).toHaveCount(0);
+});
+
 test("schedule filter shows empty state when conflicts are absent", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {

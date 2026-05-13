@@ -474,6 +474,7 @@ export function SchedulePage() {
 
       setSlots(data);
       setTeachers(teachersData);
+      setExpandedDates({});
       appendSnapshot(data);
       setLoadError(null);
     } catch (error) {
