@@ -1372,6 +1372,7 @@ def process_next_journal_workload(
     start_year: int = JOURNAL_WORKLOAD_START_YEAR,
     target_year: int | None = None,
     retry_failed: bool = False,
+    entry_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     from app.core.crypto import cipher
 
@@ -1389,7 +1390,7 @@ def process_next_journal_workload(
         return 9
 
     entries = sorted(
-        section.entries,
+        [entry for entry in section.entries if entry_ids is None or entry.id in entry_ids],
         key=lambda item: (
             status_priority(item),
             _infer_journal_year(item, section) or 9999,
@@ -1460,6 +1461,7 @@ def process_journal_trainees_for_section(
     limit: int | None = 1,
     target_year: int | None = None,
     retry_failed: bool = True,
+    entry_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     from app.core.crypto import cipher
 
@@ -1477,7 +1479,7 @@ def process_journal_trainees_for_section(
         return 9
 
     entries = sorted(
-        section.entries,
+        [entry for entry in section.entries if entry_ids is None or entry.id in entry_ids],
         key=lambda item: (
             status_priority(item),
             _infer_journal_year(item, section) or 9999,
@@ -1953,6 +1955,82 @@ def sync_journal_monitor_section(
     return section
 
 
+def _workload_background_priority(
+    entry: JournalMonitorEntry,
+    section: JournalMonitorSection,
+    target_year: int | None,
+    *,
+    retry_failed: bool = True,
+) -> int | None:
+    year = _infer_journal_year(entry, section)
+    if target_year is not None:
+        eligible = year == target_year
+    else:
+        eligible = year is not None and year >= JOURNAL_WORKLOAD_START_YEAR
+    if not eligible:
+        return None
+    if entry.workload_status in {"pending", "needs_regeneration"}:
+        return 0
+    if retry_failed and entry.workload_status == "failed":
+        return 1
+    if entry.workload_status == "no_data":
+        return 2
+    return None
+
+
+def _trainees_background_priority(
+    db: Session,
+    entry: JournalMonitorEntry,
+    section: JournalMonitorSection,
+    target_year: int | None,
+    *,
+    retry_failed: bool = True,
+) -> int | None:
+    if not entry.group_code:
+        return None
+    entry_year = _infer_journal_year(entry, section)
+    if target_year is not None and entry_year is not None and entry_year != target_year:
+        return None
+    if entry.trainees_status == "pending":
+        return 0
+    if retry_failed and entry.trainees_status == "failed":
+        return 1
+    if entry.trainees_status == "processed":
+        active_count = _active_trainee_count_for_group(db, entry.branch_id, entry.group_code)
+        if _entry_needs_trainee_reimport(entry, active_count):
+            return 1
+    return None
+
+
+def _next_background_journal_entry(
+    db: Session,
+    section: JournalMonitorSection,
+    target_year: int | None,
+) -> JournalMonitorEntry | None:
+    candidates: list[tuple[int, int, str, str, JournalMonitorEntry]] = []
+    for entry in section.entries:
+        priorities = [
+            priority
+            for priority in (
+                _workload_background_priority(entry, section, target_year),
+                _trainees_background_priority(db, entry, section, target_year),
+            )
+            if priority is not None
+        ]
+        if not priorities:
+            continue
+        candidates.append(
+            (
+                min(priorities),
+                _infer_journal_year(entry, section) or 9999,
+                (entry.group_code or "~~~~").casefold(),
+                entry.journal_name.casefold(),
+                entry,
+            )
+        )
+    return min(candidates, default=None, key=lambda item: item[:4])[4] if candidates else None
+
+
 def process_journal_monitor_background_step(
     db: Session,
     section: JournalMonitorSection,
@@ -1960,8 +2038,8 @@ def process_journal_monitor_background_step(
     folder_lister=list_drive_child_folders,
     target_year: int | None = None,
     sync_before: bool = True,
-    workload_limit: int | None = None,
-    trainees_limit: int | None = None,
+    workload_limit: int | None = 1,
+    trainees_limit: int | None = 1,
 ) -> dict[str, Any]:
     section_id = section.id
     sync_warning: str | None = None
@@ -1985,12 +2063,17 @@ def process_journal_monitor_background_step(
             db.add(section)
             db.flush()
     effective_target_year = target_year if target_year is not None else section.workload_auto_year
+    entry_ids: set[int] | None = None
+    if workload_limit == 1 and trainees_limit == 1:
+        target_entry = _next_background_journal_entry(db, section, effective_target_year)
+        entry_ids = {target_entry.id} if target_entry and target_entry.id is not None else set()
     workload_result = process_next_journal_workload(
         db,
         section,
         limit=workload_limit,
         target_year=effective_target_year,
         retry_failed=True,
+        entry_ids=entry_ids,
     )
     db.flush()
     db.refresh(section)
@@ -2000,6 +2083,7 @@ def process_journal_monitor_background_step(
         limit=trainees_limit,
         target_year=effective_target_year,
         retry_failed=True,
+        entry_ids=entry_ids,
     )
     db.flush()
     db.refresh(section)

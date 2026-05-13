@@ -24,6 +24,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const PROCESSING_STATUS_FILTERS = new Set(["complete", "schedule_only", "trainees_only", "not_processed", "unknown_code"]);
 const WORKLOAD_STATUS_FILTERS = new Set(["workload_only", "with_workload", "without_workload"]);
+const JOURNAL_PROCESSING_REFRESH_INTERVAL_MS = 30_000;
 const JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS = 45_000;
 
 const STATUS_CLASSES: Record<string, string> = {
@@ -426,6 +427,7 @@ export function JournalMonitorsPage() {
     const sectionId = selectedId || selectedSection?.id;
     if (!sectionId) return;
     await runBackgroundStep(sectionId, Number(workloadYear));
+    await syncSelected(false);
   };
 
   const refreshSelectedActivity = async () => {
@@ -448,7 +450,7 @@ export function JournalMonitorsPage() {
 
   usePageRefresh(processSelectedBackgroundStep, {
     enabled: Boolean(selectedId && detail?.workload_auto_enabled),
-    intervalMs: 30_000,
+    intervalMs: JOURNAL_PROCESSING_REFRESH_INTERVAL_MS,
     refreshOnFocus: false
   });
 

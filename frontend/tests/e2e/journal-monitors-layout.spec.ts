@@ -440,6 +440,63 @@ test("journal monitor refreshes daily activity without workload auto-processing"
   await expect(page.getByText("50-26 Auto refreshed journal")).toBeVisible();
 });
 
+test("journal monitor audits Drive after a processing refresh", async ({ page }) => {
+  let backgroundCalls = 0;
+  let syncCalls = 0;
+  const processingSection = {
+    ...section,
+    workload_auto_enabled: true,
+    workload_auto_year: 2026,
+    daily_activity: {
+      ...section.daily_activity,
+      created_count: 0,
+      changed_count: 0,
+      created: [],
+      changed: []
+    }
+  };
+  const auditedSection = {
+    ...processingSection,
+    daily_activity: {
+      ...processingSection.daily_activity,
+      changed_count: 1,
+      changed: [
+        {
+          id: 51,
+          drive_file_id: "drive-auto-changed",
+          drive_url: "https://drive.google.com/drive/folders/drive-auto-changed",
+          journal_name: "51-26 Auto audited journal",
+          group_code: "51-26",
+          created_at: "2026-05-12T09:01:00Z",
+          change_started_at: "2026-05-13T09:15:00Z",
+          modified_at: "2026-05-13T09:20:00Z"
+        }
+      ]
+    }
+  };
+
+  await loginAndMockJournals(page, {
+    sections: [{ ...processingSection, entries: [] }],
+    detailSection: processingSection,
+    onBackgroundTick: () => {
+      backgroundCalls += 1;
+    },
+    onSync: () => {
+      syncCalls += 1;
+      return auditedSection;
+    }
+  });
+
+  await page.goto("/journals");
+  await expect(page.getByRole("button", { name: "Зупинити опрацювання" })).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+
+  await expect.poll(() => backgroundCalls).toBe(1);
+  await expect.poll(() => syncCalls).toBe(1);
+  await expect(page.getByText("51-26 Auto audited journal")).toBeVisible();
+});
+
 test("journal monitor opens the current-year section by default", async ({ page }) => {
   await loginAndMockJournals(page, {
     sections: [archiveSection, { ...section, entries: [] }]

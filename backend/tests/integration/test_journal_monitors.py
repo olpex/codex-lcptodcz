@@ -1367,6 +1367,7 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     from app.tasks.worker import process_journal_monitor_auto_task
 
     process_journal_monitor_auto_task.run()
+    process_journal_monitor_auto_task.run()
     second_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
     second_entries = {item["drive_file_id"]: item for item in second_response.json()["entries"]}
     assert second_entries["drive-74-26"]["workload_status"] == "processed"
@@ -1557,7 +1558,7 @@ def test_background_tick_processes_existing_queue_when_drive_folder_sync_fails(
     )
     db_session.commit()
 
-    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true", headers=auth_headers)
 
     assert response.status_code == 200
     assert drive_sync_calls == 1
@@ -1565,6 +1566,200 @@ def test_background_tick_processes_existing_queue_when_drive_folder_sync_fails(
     entry = response.json()["entries"][0]
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"
+
+
+def test_background_tick_skips_drive_sync_by_default_for_existing_queue(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    drive_sync_calls = 0
+
+    def forbidden_drive_sync(*args, **kwargs):
+        nonlocal drive_sync_calls
+        drive_sync_calls += 1
+        raise AssertionError("background tick should process the existing queue without Drive sync by default")
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", forbidden_drive_sync)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "46-26 Журнал.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section_id,
+            branch_id="main",
+            drive_file_id="drive-46-26",
+            drive_url="https://drive.google.com/drive/folders/drive-46-26",
+            journal_name="46-26 Журнал",
+            group_code="46-26",
+            workload_status="pending",
+            trainees_status="pending",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert drive_sync_calls == 0
+    entry = response.json()["entries"][0]
+    assert entry["workload_status"] == "processed"
+    assert entry["trainees_status"] == "processed"
+
+
+def test_background_tick_processes_only_first_pending_journal_by_default(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("background tick should not sync Drive by default")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add_all(
+        [
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-1-26",
+                drive_url="https://drive.google.com/drive/folders/drive-1-26",
+                journal_name="1-26 Журнал",
+                group_code="1-26",
+                workload_status="pending",
+                trainees_status="pending",
+            ),
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-10-26",
+                drive_url="https://drive.google.com/drive/folders/drive-10-26",
+                journal_name="10-26 Журнал",
+                group_code="10-26",
+                workload_status="pending",
+                trainees_status="pending",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    entries = {entry["group_code"]: entry for entry in response.json()["entries"]}
+    assert entries["1-26"]["workload_status"] == "processed"
+    assert entries["1-26"]["trainees_status"] == "processed"
+    assert entries["10-26"]["workload_status"] == "pending"
+    assert entries["10-26"]["trainees_status"] == "pending"
+
+
+def test_background_tick_finishes_one_partially_processed_journal_before_next_one(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("background tick should not sync Drive by default")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add_all(
+        [
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-1-26",
+                drive_url="https://drive.google.com/drive/folders/drive-1-26",
+                journal_name="1-26 Журнал",
+                group_code="1-26",
+                workload_status="processed",
+                workload_year=2026,
+                workload_hours=8,
+                trainees_status="pending",
+            ),
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-10-26",
+                drive_url="https://drive.google.com/drive/folders/drive-10-26",
+                journal_name="10-26 Журнал",
+                group_code="10-26",
+                workload_status="pending",
+                trainees_status="pending",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    entries = {entry["group_code"]: entry for entry in response.json()["entries"]}
+    assert entries["1-26"]["workload_status"] == "processed"
+    assert entries["1-26"]["trainees_status"] == "processed"
+    assert entries["10-26"]["workload_status"] == "pending"
+    assert entries["10-26"]["trainees_status"] == "pending"
 
 
 def test_background_tick_discovers_new_drive_folder_for_existing_section(
@@ -1622,7 +1817,10 @@ def test_background_tick_discovers_new_drive_folder_for_existing_section(
     assert first_sync_response.status_code == 200
     assert [entry["group_code"] for entry in first_sync_response.json()["entries"]] == ["46-26"]
 
-    tick_response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026", headers=auth_headers)
+    tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true&workload_limit=20&trainees_limit=20",
+        headers=auth_headers,
+    )
 
     assert tick_response.status_code == 200
     entries = {entry["group_code"]: entry for entry in tick_response.json()["entries"]}
@@ -1925,7 +2123,7 @@ def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, a
     assert captured["service_account_json"] == "section-service-account-json"
 
 
-def test_journal_auto_worker_processes_all_pending_trainees_after_workloads_processed(db_session, monkeypatch):
+def test_journal_auto_worker_processes_pending_trainees_one_journal_per_tick(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {
             "id": "drive-51-26",
@@ -1996,6 +2194,13 @@ def test_journal_auto_worker_processes_all_pending_trainees_after_workloads_proc
     assert result == {"processed_sections": 1, "failed_sections": 0}
     entries = {entry.group_code: entry for entry in section.entries}
     assert entries["51-26"].trainees_status == "processed"
+    assert entries["52-26"].trainees_status == "pending"
+
+    second_result = process_journal_monitor_auto_task.run()
+
+    db_session.expire_all()
+    assert second_result == {"processed_sections": 1, "failed_sections": 0}
+    entries = {entry.group_code: entry for entry in section.entries}
     assert entries["52-26"].trainees_status == "processed"
     assert downloaded == ["drive-51-26-xlsx", "drive-52-26-xlsx"]
     assert db_session.query(Trainee).filter(Trainee.group_code == "51-26").count() == 1
@@ -2964,7 +3169,7 @@ def test_background_tick_clears_all_pending_workloads_for_resynced_journals(
     section_id = create_response.json()["id"]
 
     tick_response = client.post(
-        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true&workload_limit=20&trainees_limit=20",
         headers=auth_headers,
     )
 
@@ -3031,7 +3236,7 @@ def test_delete_journal_entry_archives_group_trainees_and_resync_restores_them(c
     assert db_session.query(Trainee).filter(Trainee.is_deleted.is_(True)).count() == 1
 
     resync_response = client.post(
-        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026",
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
         headers=auth_headers,
     )
 

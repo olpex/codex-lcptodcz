@@ -551,6 +551,8 @@ def background_tick_section_processing(
     current_user: CurrentUser,
     year: int | None = Query(default=None, ge=2025, le=2100),
     sync: bool = Query(default=False),
+    workload_limit: int = Query(default=1, ge=1, le=20),
+    trainees_limit: int = Query(default=1, ge=1, le=20),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
     try:
@@ -559,9 +561,9 @@ def background_tick_section_processing(
             section,
             folder_lister=list_drive_child_folders,
             target_year=year,
-            sync_before=True,
-            workload_limit=None,
-            trainees_limit=None,
+            sync_before=sync,
+            workload_limit=workload_limit,
+            trainees_limit=trainees_limit,
         )
         db.commit()
     except Exception as exc:
