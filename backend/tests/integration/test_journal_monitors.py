@@ -75,6 +75,45 @@ def _journal_workbook_without_subject_column_bytes(rows: list[tuple[float, str, 
     return stream.getvalue()
 
 
+def _journal_workbook_with_numbered_disciplines_table_bytes(rows: list[tuple[str, float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Костів Артур Романович"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "сторінки", "Прізвище, ім'я, по батькові викладача"])
+    for index, row in enumerate(rows, start=1):
+        subject, hours, pages, teacher = row
+        sheet.append([index, subject, hours, pages, teacher])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def _journal_workbook_with_shifted_numbered_teacher_column_bytes(rows: list[tuple[str, float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Костів Артур Романович"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "сторінки", "Прізвище, ім'я, по батькові викладача", ""])
+    for index, row in enumerate(rows, start=1):
+        subject, hours, pages, teacher = row
+        sheet.append([index, subject, hours, pages, "", teacher])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, str, str]]) -> bytes:
     workbook = Workbook()
     workbook.active.title = "Дисципліни"
@@ -1154,6 +1193,51 @@ def test_journal_workload_no_data_keeps_visible_hours_when_teacher_missing(db_se
     assert "ПІБ викладачів" in (entry.workload_message or "")
     assert db_session.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).count() == 0
     assert collect_teacher_workload_summary(db_session, "main") == []
+
+
+def test_journal_workload_reads_only_numbered_table_rows_and_ignores_teacher_above_table():
+    rows = journal_monitor.parse_journal_disciplines_xlsx(
+        _journal_workbook_with_numbered_disciplines_table_bytes(
+            [
+                ("Вступ до теми. Ментальне здоров'я людини", 3, "3-4", "Матійків Ірина Миколаївна"),
+                ("Психологічна безпека в сучасному світі", 6, "5-6", "Матійків Ірина Миколаївна"),
+                ("Емоційне виснаження в реаліях сьогодення", 5, "7-8", "Матійків Ірина Миколаївна"),
+                ("Формування психологічної стійкості під час воєнного стану", 4, "9-10", "Плахотнюк Зоряна Іванівна"),
+                ("Травматичні події: психологічна підтримка та самодопомога", 4, "11-12", "Смеречак Леся Іванівна"),
+            ]
+        )
+    )
+
+    assert [(row["teacher_name"], row["hours"]) for row in rows] == [
+        ("Матійків Ірина Миколаївна", 3),
+        ("Матійків Ірина Миколаївна", 6),
+        ("Матійків Ірина Миколаївна", 5),
+        ("Плахотнюк Зоряна Іванівна", 4),
+        ("Смеречак Леся Іванівна", 4),
+    ]
+    assert all(row["teacher_name"] != "Костів Артур Романович" for row in rows)
+
+
+def test_journal_workload_reads_teacher_from_last_cell_of_numbered_table_row_when_column_is_shifted():
+    rows = journal_monitor.parse_journal_disciplines_xlsx(
+        _journal_workbook_with_shifted_numbered_teacher_column_bytes(
+            [
+                ("Вступ до теми. Ментальне здоров'я людини", 3, "3-4", "Матійків Ірина Миколаївна"),
+                ("Психологічна безпека в сучасному світі", 6, "5-6", "Матійків Ірина Миколаївна"),
+                ("Емоційне виснаження в реаліях сьогодення", 5, "7-8", "Матійків Ірина Миколаївна"),
+                ("Формування психологічної стійкості під час воєнного стану", 4, "9-10", "Плахотнюк Зоряна Іванівна"),
+                ("Травматичні події: психологічна підтримка та самодопомога", 4, "11-12", "Смеречак Леся Іванівна"),
+            ]
+        )
+    )
+
+    assert sum(row["hours"] for row in rows) == 22
+    assert {row["teacher_name"] for row in rows} == {
+        "Матійків Ірина Миколаївна",
+        "Плахотнюк Зоряна Іванівна",
+        "Смеречак Леся Іванівна",
+    }
+    assert "Костів Артур Романович" not in {row["teacher_name"] for row in rows}
 
 
 def test_journal_workload_uses_complete_workbook_when_another_file_has_incomplete_rows(db_session, monkeypatch):

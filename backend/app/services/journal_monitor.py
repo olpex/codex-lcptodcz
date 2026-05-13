@@ -987,6 +987,53 @@ def _looks_like_trainee_full_name(value: str) -> bool:
     return len(name_parts) >= 2
 
 
+def _parse_table_row_number(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float) and value.is_integer():
+        return int(value) if value > 0 else None
+    text = _norm(value)
+    match = re.match(r"^(\d+)\s*[.)]?$", text)
+    if not match:
+        return None
+    number = int(match.group(1))
+    return number if number > 0 else None
+
+
+def _looks_like_table_teacher_name(value: Any) -> bool:
+    text = _norm(value)
+    if not text or re.search(r"\d", text):
+        return False
+    normalized = text.casefold()
+    blocked_fragments = (
+        "викладач",
+        "майстер",
+        "піб",
+        "прізв",
+        "назва",
+        "дисципл",
+        "предмет",
+        "год",
+        "стор",
+        "загальний",
+        "всього",
+        "усього",
+    )
+    if any(fragment in normalized for fragment in blocked_fragments):
+        return False
+    name_parts = re.findall(r"[A-Za-zА-Яа-яЇїІіЄєҐґ]+", text)
+    return len(name_parts) >= 2
+
+
+def _last_teacher_cell_from_numbered_row(raw_row: list[Any], teacher_col: int | None) -> str:
+    start_index = max((teacher_col or 0) + 1, 0)
+    for value in reversed(raw_row[start_index:]):
+        text = _norm(value)
+        if _looks_like_table_teacher_name(text):
+            return text
+    return ""
+
+
 def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
     workbook = load_workbook(BytesIO(payload), data_only=True, read_only=True)
     try:
@@ -999,6 +1046,7 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
     hours_col: int | None = None
     pages_col: int | None = None
     teacher_col: int | None = None
+    row_number_col: int | None = None
     for index, raw_row in enumerate(rows[:30]):
         headers = [_norm(value) for value in raw_row]
         subject_candidate = _find_header_column(headers, ("дисципл", "предмет", "назва"), ("стор", "год", "виклада", "піб"))
@@ -1010,6 +1058,7 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
             hours_col = hours_candidate
             pages_col = _find_header_column(headers, ("стор", "сторін"))
             teacher_col = teacher_candidate
+            row_number_col = _find_header_column(headers, ("№", "номер", "п/п"), ("журнал", "з-снн", "догов"))
             break
 
     if header_index < 0 or hours_col is None or teacher_col is None:
@@ -1022,12 +1071,21 @@ def parse_journal_disciplines_xlsx(payload: bytes) -> list[dict[str, Any]]:
         row_text = " ".join(_norm(value) for value in raw_row)
         if _is_total_hours_row(row_text):
             continue
+        row_number = (
+            _parse_table_row_number(raw_row[row_number_col])
+            if row_number_col is not None and row_number_col < len(raw_row)
+            else None
+        )
+        if row_number_col is not None and row_number is None:
+            continue
         subject_name = (
             _norm(raw_row[subject_col] if subject_col < len(raw_row) else "")
             if subject_col is not None
             else ""
         ) or SUBJECTLESS_WORKLOAD_SUBJECT_NAME
         teacher_cell = _norm(raw_row[teacher_col] if teacher_col < len(raw_row) else "")
+        if row_number is not None and not teacher_cell:
+            teacher_cell = _last_teacher_cell_from_numbered_row(raw_row, teacher_col)
         hours = _parse_hours(raw_row[hours_col] if hours_col < len(raw_row) else "")
         pages = _norm(raw_row[pages_col] if pages_col is not None and pages_col < len(raw_row) else "")
         if hours <= 0:
