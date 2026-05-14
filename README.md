@@ -97,7 +97,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 - `GOOGLE_DRIVE_INTAKE_UPDATE_MODE=overwrite`
 - `GOOGLE_DRIVE_INTAKE_PROCESSED_MARKER=[processed]`
 
-Один tick обробляє один ще не оброблений файл. Запуск відбувається через Celery beat/worker та через сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново.
+Один tick обробляє один ще не оброблений файл. Запуск відбувається серверно через Celery beat/worker або через cron endpoint `/api/v1/journal-monitors/auto-cron`; сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново, є лише додатковим прискоренням під час відкритої вкладки.
 Після успішного імпорту backend додає маркер до назви Drive-файлу, наприклад `184-25 Contracts [processed].xlsx`, і наступні tick-и пропускають такі файли. Щоб повторно імпортувати та доповнити або скоригувати дані, приберіть маркер з назви файлу в Google Drive.
 Для доступу до приватної intake-папки використовується `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`; якщо він не заданий глобально, backend бере JSON-ключ з активного розділу `Журнали` тієї ж філії. Для маркування файлів service account має мати доступ `Editor`, бо система перейменовує успішно оброблені файли.
 

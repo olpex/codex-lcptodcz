@@ -339,6 +339,8 @@ class JournalMonitorEntry(Base):
     section_id: Mapped[int] = mapped_column(ForeignKey("journal_monitor_sections.id"), nullable=False, index=True)
     branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
     drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    drive_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    drive_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     drive_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     journal_name: Mapped[str] = mapped_column(String(500), nullable=False)
     group_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)

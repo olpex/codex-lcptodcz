@@ -297,6 +297,7 @@ export function JournalMonitorsPage() {
   const [selectedEntryIds, setSelectedEntryIds] = useState<Record<number, boolean>>({});
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [isBulkDeletingEntries, setIsBulkDeletingEntries] = useState(false);
+  const [activityExpanded, setActivityExpanded] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [journalSearch, setJournalSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -720,29 +721,41 @@ export function JournalMonitorsPage() {
     return row.trainee_count;
   };
 
-  const renderActivityRow = (item: JournalDailyActivityItem, kind: "created" | "changed") => (
-    <li key={`${kind}-${item.id}`} className="border-t border-slate-100 py-2 first:border-t-0 first:pt-0 last:pb-0">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-ink">{item.group_code || item.journal_name}</p>
-          <p className="truncate text-xs text-slate-600">{item.journal_name}</p>
-        </div>
-        {item.drive_url && (
-          <a className="shrink-0 text-xs font-semibold text-pine underline" href={item.drive_url} target="_blank" rel="noreferrer">
-            Drive
+  const renderActivityTitle = (item: JournalDailyActivityItem) => {
+    const subjectName = getJournalNameSortValue(item.journal_name);
+    if (!item.group_code) return item.journal_name;
+    if (!subjectName || subjectName === item.journal_name) return item.group_code;
+    return `${item.group_code} ${subjectName}`;
+  };
+
+  const renderActivityRow = (item: JournalDailyActivityItem, kind: "created" | "changed") => {
+    const title = renderActivityTitle(item);
+    const titleClass = clsx(
+      "block truncate text-sm font-semibold",
+      item.drive_url ? "text-pine underline decoration-pine/40 underline-offset-2 hover:text-ink" : "text-ink"
+    );
+
+    return (
+      <li key={`${kind}-${item.id}`} className="border-t border-slate-100 py-1.5 first:border-t-0 first:pt-0 last:pb-0">
+        {item.drive_url ? (
+          <a className={titleClass} href={item.drive_url} target="_blank" rel="noreferrer" title={item.journal_name}>
+            {title}
           </a>
+        ) : (
+          <p className={titleClass} title={item.journal_name}>
+            {title}
+          </p>
         )}
-      </div>
-      {kind === "created" ? (
-        <p className="mt-1 text-xs text-slate-500">Створено: {formatKyivTime(item.created_at)}</p>
-      ) : (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-          <span>Початок змін: {formatKyivTime(item.change_started_at)}</span>
-          <span>Остання зміна: {formatKyivTime(item.modified_at)}</span>
-        </div>
-      )}
-    </li>
-  );
+        {kind === "created" ? (
+          <p className="truncate text-xs text-slate-500">Створено: {formatKyivTime(item.created_at)}</p>
+        ) : (
+          <p className="truncate text-xs text-slate-500">
+            Початок змін: {formatKyivTime(item.change_started_at)} | Остання зміна: {formatKyivTime(item.modified_at)}
+          </p>
+        )}
+      </li>
+    );
+  };
 
   const changeSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -830,9 +843,15 @@ export function JournalMonitorsPage() {
         </div>
 
         {detail?.daily_activity && (
-          <div className="mb-4 border-y border-slate-200 py-4">
-            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-              <div>
+          <div className="mb-4 overflow-hidden border-y border-slate-200">
+            <button
+              type="button"
+              className="flex w-full items-start justify-between gap-3 py-3 text-left hover:bg-slate-50"
+              onClick={() => setActivityExpanded((value) => !value)}
+              aria-expanded={activityExpanded}
+              aria-controls="journal-monitor-activity"
+            >
+              <div className="min-w-0">
                 <h3 className="font-heading text-lg font-semibold text-ink">Активність з 08:00</h3>
                 <p className="text-xs text-slate-500">Відлік: {formatKyivTime(detail.daily_activity.cutoff_at)}</p>
               </div>
@@ -843,26 +862,31 @@ export function JournalMonitorsPage() {
                 <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-700">
                   Змінено: {detail.daily_activity.changed_count}
                 </span>
+                <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold leading-none text-white">
+                  {activityExpanded ? "−" : "+"}
+                </span>
               </div>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div>
-                <h4 className="mb-2 text-sm font-semibold text-ink">Створені журнали</h4>
-                {detail.daily_activity.created.length > 0 ? (
-                  <ul>{detail.daily_activity.created.map((item) => renderActivityRow(item, "created"))}</ul>
-                ) : (
-                  <p className="text-sm text-slate-500">Нових журналів з 08:00 немає.</p>
-                )}
+            </button>
+            {activityExpanded && (
+              <div id="journal-monitor-activity" className="grid gap-4 border-t border-slate-200 py-3 lg:grid-cols-2">
+                <div>
+                  <h4 className="mb-2 text-sm font-semibold text-ink">Створені журнали</h4>
+                  {detail.daily_activity.created.length > 0 ? (
+                    <ul>{detail.daily_activity.created.map((item) => renderActivityRow(item, "created"))}</ul>
+                  ) : (
+                    <p className="text-sm text-slate-500">Нових журналів з 08:00 немає.</p>
+                  )}
+                </div>
+                <div>
+                  <h4 className="mb-2 text-sm font-semibold text-ink">Змінені журнали</h4>
+                  {detail.daily_activity.changed.length > 0 ? (
+                    <ul>{detail.daily_activity.changed.map((item) => renderActivityRow(item, "changed"))}</ul>
+                  ) : (
+                    <p className="text-sm text-slate-500">Змін у журналах з 08:00 немає.</p>
+                  )}
+                </div>
               </div>
-              <div>
-                <h4 className="mb-2 text-sm font-semibold text-ink">Змінені журнали</h4>
-                {detail.daily_activity.changed.length > 0 ? (
-                  <ul>{detail.daily_activity.changed.map((item) => renderActivityRow(item, "changed"))}</ul>
-                ) : (
-                  <p className="text-sm text-slate-500">Змін у журналах з 08:00 немає.</p>
-                )}
-              </div>
-            </div>
+            )}
           </div>
         )}
 

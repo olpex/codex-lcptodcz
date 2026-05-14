@@ -129,7 +129,9 @@ def process_journal_monitor_auto_cron(
     if authorization != expected_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
 
-    return _process_journal_monitor_auto_sections(db)
+    result = _process_journal_monitor_auto_sections(db)
+    result.update(_process_drive_intake_auto_file(db))
+    return result
 
 
 @router.post(

@@ -75,6 +75,45 @@ def _journal_workbook_without_subject_column_bytes(rows: list[tuple[float, str, 
     return stream.getvalue()
 
 
+def _journal_workbook_with_numbered_disciplines_table_bytes(rows: list[tuple[str, float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append([])
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Костів Артур Романович"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "сторінки", "Прізвище, ім'я, по батькові викладача"])
+    for index, row in enumerate(rows, start=1):
+        subject, hours, pages, teacher = row
+        sheet.append([index, subject, hours, pages, teacher])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def _journal_workbook_with_shifted_numbered_teacher_column_bytes(rows: list[tuple[str, float, str, str]]) -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "Загальні"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Костів Артур Романович"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "сторінки", "Прізвище, ім'я, по батькові викладача", ""])
+    for index, row in enumerate(rows, start=1):
+        subject, hours, pages, teacher = row
+        sheet.append([index, subject, hours, pages, "", teacher])
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
 def _journal_zv_workbook_bytes(rows: list[tuple[int, str, str, str, str, str, str, str]]) -> bytes:
     workbook = Workbook()
     workbook.active.title = "Дисципліни"
@@ -1156,6 +1195,79 @@ def test_journal_workload_no_data_keeps_visible_hours_when_teacher_missing(db_se
     assert collect_teacher_workload_summary(db_session, "main") == []
 
 
+def test_journal_workload_reads_only_numbered_table_rows_and_ignores_teacher_above_table():
+    rows = journal_monitor.parse_journal_disciplines_xlsx(
+        _journal_workbook_with_numbered_disciplines_table_bytes(
+            [
+                ("Вступ до теми. Ментальне здоров'я людини", 3, "3-4", "Матійків Ірина Миколаївна"),
+                ("Психологічна безпека в сучасному світі", 6, "5-6", "Матійків Ірина Миколаївна"),
+                ("Емоційне виснаження в реаліях сьогодення", 5, "7-8", "Матійків Ірина Миколаївна"),
+                ("Формування психологічної стійкості під час воєнного стану", 4, "9-10", "Плахотнюк Зоряна Іванівна"),
+                ("Травматичні події: психологічна підтримка та самодопомога", 4, "11-12", "Смеречак Леся Іванівна"),
+            ]
+        )
+    )
+
+    assert [(row["teacher_name"], row["hours"]) for row in rows] == [
+        ("Матійків Ірина Миколаївна", 3),
+        ("Матійків Ірина Миколаївна", 6),
+        ("Матійків Ірина Миколаївна", 5),
+        ("Плахотнюк Зоряна Іванівна", 4),
+        ("Смеречак Леся Іванівна", 4),
+    ]
+    assert all(row["teacher_name"] != "Костів Артур Романович" for row in rows)
+
+
+def test_journal_workload_reads_teacher_from_last_cell_of_numbered_table_row_when_column_is_shifted():
+    rows = journal_monitor.parse_journal_disciplines_xlsx(
+        _journal_workbook_with_shifted_numbered_teacher_column_bytes(
+            [
+                ("Вступ до теми. Ментальне здоров'я людини", 3, "3-4", "Матійків Ірина Миколаївна"),
+                ("Психологічна безпека в сучасному світі", 6, "5-6", "Матійків Ірина Миколаївна"),
+                ("Емоційне виснаження в реаліях сьогодення", 5, "7-8", "Матійків Ірина Миколаївна"),
+                ("Формування психологічної стійкості під час воєнного стану", 4, "9-10", "Плахотнюк Зоряна Іванівна"),
+                ("Травматичні події: психологічна підтримка та самодопомога", 4, "11-12", "Смеречак Леся Іванівна"),
+            ]
+        )
+    )
+
+    assert sum(row["hours"] for row in rows) == 22
+    assert {row["teacher_name"] for row in rows} == {
+        "Матійків Ірина Миколаївна",
+        "Плахотнюк Зоряна Іванівна",
+        "Смеречак Леся Іванівна",
+    }
+    assert "Костів Артур Романович" not in {row["teacher_name"] for row in rows}
+
+
+def test_journal_workload_accepts_teacher_list_header_from_disciplines_sheet():
+    workbook = Workbook()
+    workbook.active.title = "Титулка"
+    sheet = workbook.create_sheet("Дисципліни")
+    sheet.append(["ЖУРНАЛ ОБЛІКУ ТЕОРЕТИЧНОГО НАВЧАННЯ"])
+    sheet.append([])
+    sheet.append(["Відповідальний за навчання", "", "Ірина ПЕТРИК"])
+    sheet.append([])
+    sheet.append(["Відповідальний за дотримання правил техніки безпеки", "", "", "", "Артур КОСТІВ"])
+    sheet.append([])
+    sheet.append(["Розділ журналу"])
+    sheet.append([])
+    sheet.append(["№", "Назва дисципліни", "години", "Сторінки", "Список викладачів"])
+    sheet.append([1, "Охорона праці", 4, "3-4", "Петрик Ірина Миколаївна"])
+    sheet.append([2, "Ведення підприємницької діяльності", 16, "9-10", "Демська Юлія Василівна"])
+    sheet.append(["Загальний обсяг навчального часу", "", 20, "", ""])
+    stream = BytesIO()
+    workbook.save(stream)
+
+    rows = journal_monitor.parse_journal_disciplines_xlsx(stream.getvalue())
+
+    assert [(row["teacher_name"], row["hours"]) for row in rows] == [
+        ("Петрик Ірина Миколаївна", 4),
+        ("Демська Юлія Василівна", 16),
+    ]
+    assert "Артур КОСТІВ" not in {row["teacher_name"] for row in rows}
+
+
 def test_journal_workload_uses_complete_workbook_when_another_file_has_incomplete_rows(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
@@ -1354,11 +1466,11 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     assert sync_response.status_code == 200
     assert sync_response.json()["workload_auto_enabled"] is True
     assert sync_response.json()["workload_auto_year"] == 2026
-    entries = {item["drive_file_id"]: item for item in sync_response.json()["entries"]}
-    assert entries["drive-73-26"]["workload_status"] == "processed"
-    assert entries["drive-73-26"]["workload_hours"] == 20
-    assert entries["drive-74-26"]["workload_status"] == "pending"
-    assert entries["drive-10-25"]["workload_status"] == "skipped_year"
+    entries = {item["group_code"]: item for item in sync_response.json()["entries"]}
+    assert entries["73-26"]["workload_status"] == "processed"
+    assert entries["73-26"]["workload_hours"] == 20
+    assert entries["74-26"]["workload_status"] == "pending"
+    assert entries["10-25"]["workload_status"] == "skipped_year"
 
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 12
@@ -1369,8 +1481,8 @@ def test_journal_workload_auto_start_processes_one_2026_journal_and_updates_teac
     process_journal_monitor_auto_task.run()
     process_journal_monitor_auto_task.run()
     second_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
-    second_entries = {item["drive_file_id"]: item for item in second_response.json()["entries"]}
-    assert second_entries["drive-74-26"]["workload_status"] == "processed"
+    second_entries = {item["group_code"]: item for item in second_response.json()["entries"]}
+    assert second_entries["74-26"]["workload_status"] == "processed"
 
     refreshed_summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert refreshed_summary["Коваль Олена Петрівна"]["total_hours"] == 24
@@ -1931,6 +2043,7 @@ def test_journal_auto_worker_processes_active_sections_without_manual_auto_toggl
 
 def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_headers, db_session, monkeypatch):
     monkeypatch.setattr(journal_monitor.settings, "cron_secret", "cron-secret")
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
         lambda _folder_id, service_account_json=None: [
@@ -1961,11 +2074,29 @@ def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_heade
         name="Журнали 2026",
         folder_url="https://drive.google.com/drive/folders/root-folder",
         folder_id="root-folder",
+        service_account_json_encrypted=cipher.encrypt("section-service-account-json"),
         workload_auto_enabled=False,
         workload_auto_year=2026,
     )
     db_session.add(section)
     db_session.commit()
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        captured["branch_id"] = kwargs.get("branch_id")
+        captured["import_job_runner"] = kwargs.get("import_job_runner")
+        captured["service_account_json"] = kwargs.get("service_account_json")
+        return {
+            "processed": 1,
+            "skipped_already_processed": 0,
+            "skipped_unsupported": 0,
+            "filename": "46-26 Розклад.docx",
+        }
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        fake_process_next_drive_intake_file,
+        raising=False,
+    )
 
     response = client.post(
         "/api/v1/journal-monitors/auto-cron",
@@ -1973,7 +2104,15 @@ def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_heade
     )
 
     assert response.status_code == 202
-    assert response.json() == {"processed_sections": 1, "failed_sections": 0}
+    payload = response.json()
+    assert payload["processed_sections"] == 1
+    assert payload["failed_sections"] == 0
+    assert payload["drive_intake_processed"] == 1
+    assert payload["drive_intake_failed"] == 0
+    assert payload["drive_intake_filename"] == "46-26 Розклад.docx"
+    assert captured["branch_id"] == "main"
+    assert captured["import_job_runner"] is not None
+    assert captured["service_account_json"] == "section-service-account-json"
     db_session.refresh(section)
     entry = section.entries[0]
     assert entry.group_code == "1-26"
@@ -2488,9 +2627,12 @@ def test_journal_workload_parses_two_workbooks_lowercase_sheet_and_splits_multip
     response = client.post(f"/api/v1/journal-monitors/{section_id}/workload-auto/start?year=2026", headers=auth_headers)
 
     assert response.status_code == 200
-    entry = response.json()["entries"][0]
-    assert entry["workload_status"] == "processed"
-    assert entry["workload_source_names"] == ["Теорія", "Виробниче навчання"]
+    client.post(f"/api/v1/journal-monitors/{section_id}/process-workload?year=2026&limit=2", headers=auth_headers)
+    response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
+    entries = {item["journal_name"]: item for item in response.json()["entries"]}
+    assert set(entries) == {"Виробниче навчання", "Теорія"}
+    assert entries["Теорія"]["workload_status"] == "processed"
+    assert entries["Виробниче навчання"]["workload_status"] == "processed"
     summary = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert summary["Брикін Віктор Євгенович"]["total_hours"] == 9
     assert summary["Старожук Людмила Василівна"]["total_hours"] == 5
@@ -2533,7 +2675,7 @@ def test_auto_sync_retries_failed_journal_after_access_is_fixed(client, auth_hea
     section_id = create_response.json()["id"]
     first_response = client.post(f"/api/v1/journal-monitors/{section_id}/workload-auto/start?year=2026", headers=auth_headers)
     assert first_response.json()["entries"][0]["workload_status"] == "failed"
-    assert first_response.json()["entries"][0]["workload_source_names"] == ["82-26 Трактористи виробн"]
+    assert first_response.json()["entries"][0]["journal_name"] == "82-26 Трактористи виробн"
 
     access_fixed["value"] = True
     from app.tasks.worker import process_journal_monitor_auto_task
@@ -2872,6 +3014,47 @@ def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     assert folders[0]["id"] == "folder-1"
     assert "key=" not in str(captured["url"])
     assert captured["authorization"] == "Bearer service-token"
+
+
+def test_drive_download_retries_when_response_read_times_out(monkeypatch):
+    monkeypatch.setattr(journal_monitor, "_drive_request_url", lambda url, service_account_json=None: url)
+    monkeypatch.setattr(journal_monitor, "GOOGLE_DRIVE_REQUEST_RETRY_DELAY_SECONDS", 0)
+    calls = {"count": 0}
+
+    class TimeoutResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            raise TimeoutError("The read operation timed out")
+
+    class SuccessResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"workbook-bytes"
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        assert timeout == journal_monitor.GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS
+        return TimeoutResponse() if calls["count"] == 1 else SuccessResponse()
+
+    monkeypatch.setattr(journal_monitor, "urlopen", fake_urlopen)
+
+    payload = journal_monitor.download_drive_file_bytes(
+        "sheet-id",
+        mime_type=journal_monitor.GOOGLE_DRIVE_SHEETS_MIME,
+    )
+
+    assert payload == b"workbook-bytes"
+    assert calls["count"] == 2
 
 
 def test_journal_monitor_sync_without_credentials_explains_service_account_setup(client, auth_headers, monkeypatch):
@@ -3526,6 +3709,220 @@ def test_drive_sync_keeps_processed_workload_when_only_folder_metadata_changes(d
     assert entry.workload_hours == 4
     assert [(row.subject_name, row.hours) for row in workload_rows] == [("Existing subject", 4)]
     assert summary[teacher.id]["total_hours"] == 4
+
+
+def test_drive_sync_creates_separate_entries_for_multiple_workbooks_in_one_group_folder(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    def workbook_files(folder_id, service_account_json=None):
+        assert folder_id == "drive-16p-26"
+        return [
+            {
+                "id": "sheet-16p-26-practice",
+                "name": "16п-26 Трактористи B1 виробн.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "webViewLink": "https://drive.google.com/file/d/sheet-16p-26-practice/view",
+                "createdTime": "2026-05-13T13:02:00Z",
+                "modifiedTime": "2026-05-13T13:02:00Z",
+            },
+            {
+                "id": "sheet-16p-26-theory",
+                "name": "16п-26 Трактористи B1.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "webViewLink": "https://drive.google.com/file/d/sheet-16p-26-theory/view",
+                "createdTime": "2026-05-13T13:12:00Z",
+                "modifiedTime": "2026-05-13T13:12:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(journal_monitor, "list_drive_journal_workbook_files", workbook_files, raising=False)
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-16p-26",
+                "name": "16п-26 Трактористи B1",
+                "url": "https://drive.google.com/drive/folders/drive-16p-26",
+                "created_time": "2026-05-13T13:00:00Z",
+                "modified_time": "2026-05-13T13:20:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    entries = (
+        db_session.query(journal_monitor.JournalMonitorEntry)
+        .filter(journal_monitor.JournalMonitorEntry.section_id == section.id)
+        .order_by(journal_monitor.JournalMonitorEntry.journal_name)
+        .all()
+    )
+    assert len(entries) == 2
+    assert {entry.drive_file_id for entry in entries} == {"sheet-16p-26-practice", "sheet-16p-26-theory"}
+    assert {entry.group_code for entry in entries} == {"16п-26"}
+    assert {entry.journal_name for entry in entries} == {
+        "16п-26 Трактористи B1",
+        "16п-26 Трактористи B1 виробн",
+    }
+    assert {entry.drive_url for entry in entries} == {
+        "https://drive.google.com/file/d/sheet-16p-26-practice/view",
+        "https://drive.google.com/file/d/sheet-16p-26-theory/view",
+    }
+
+
+def test_journal_workload_is_processed_separately_for_each_workbook_in_same_group_folder(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    workbook_files = [
+        {
+            "id": "sheet-16p-26-practice",
+            "name": "16п-26 Трактористи B1 виробн.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/sheet-16p-26-practice/view",
+            "modifiedTime": "2026-05-13T13:02:00Z",
+        },
+        {
+            "id": "sheet-16p-26-theory",
+            "name": "16п-26 Трактористи B1.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/sheet-16p-26-theory/view",
+            "modifiedTime": "2026-05-13T13:12:00Z",
+        },
+    ]
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: workbook_files,
+        raising=False,
+    )
+
+    def download_workbook(file_id, mime_type=None, service_account_json=None):
+        if file_id == "sheet-16p-26-practice":
+            return _journal_workbook_bytes([("Виробниче навчання", 122, "1-122", "Практик Петро Петрович")])
+        return _journal_workbook_bytes([("Теоретичне навчання", 153, "1-153", "Теоретик Тарас Тарасович")])
+
+    monkeypatch.setattr(journal_monitor, "download_drive_file_bytes", download_workbook, raising=False)
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-16p-26",
+                "name": "16п-26 Трактористи B1",
+                "url": "https://drive.google.com/drive/folders/drive-16p-26",
+                "modified_time": "2026-05-13T13:20:00Z",
+            }
+        ],
+        process_workload=True,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    entries = {
+        entry.journal_name: entry
+        for entry in db_session.query(journal_monitor.JournalMonitorEntry)
+        .filter(journal_monitor.JournalMonitorEntry.section_id == section.id)
+        .all()
+    }
+    assert entries["16п-26 Трактористи B1 виробн"].workload_hours == 122
+    assert entries["16п-26 Трактористи B1"].workload_hours == 153
+    assert entries["16п-26 Трактористи B1 виробн"].workload_status == "processed"
+    assert entries["16п-26 Трактористи B1"].workload_status == "processed"
+
+    workload_by_entry = {
+        entry.journal_name: {row.subject_name: row.hours for row in entry.workload_entries}
+        for entry in entries.values()
+    }
+    assert workload_by_entry["16п-26 Трактористи B1 виробн"] == {"Виробниче навчання": 122}
+    assert workload_by_entry["16п-26 Трактористи B1"] == {"Теоретичне навчання": 153}
+
+
+def test_duplicate_trainees_from_multiple_workbooks_in_same_group_are_registered_once(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    workbook_files = [
+        {
+            "id": "sheet-10p-26-practice",
+            "name": "10п-26 Трактори D1 в/н.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/sheet-10p-26-practice/view",
+            "modifiedTime": "2026-05-13T13:02:00Z",
+        },
+        {
+            "id": "sheet-10p-26-theory",
+            "name": "10п-26 Трактори D1. теорія.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/sheet-10p-26-theory/view",
+            "modifiedTime": "2026-05-13T13:12:00Z",
+        },
+    ]
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: workbook_files,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_zv_workbook_bytes(
+            [(1, "З-СНН-010", "Петренко Іван Іванович", "ч", "01.02.1990", "1234567890", "м. Львів", "+380501112233")]
+        ),
+        raising=False,
+    )
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-10p-26",
+                "name": "10п-26 Трактори D1",
+                "url": "https://drive.google.com/drive/folders/drive-10p-26",
+                "modified_time": "2026-05-13T13:20:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    result = journal_monitor.process_journal_trainees_for_section(db_session, section, limit=None, target_year=2026)
+    db_session.commit()
+
+    assert result["processed"] == 2
+    assert db_session.query(Trainee).filter(Trainee.group_code == "10п-26", Trainee.is_deleted.is_(False)).count() == 1
+    entries = db_session.query(journal_monitor.JournalMonitorEntry).filter(journal_monitor.JournalMonitorEntry.section_id == section.id).all()
+    assert len(entries) == 2
+    assert {entry.trainees_status for entry in entries} == {"processed"}
+    assert {entry.trainee_count for entry in entries} == {1}
 
 
 def test_journal_daily_activity_lists_created_and_changed_since_8_kyiv(db_session):

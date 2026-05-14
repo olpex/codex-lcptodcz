@@ -378,12 +378,16 @@ test("journal monitor shows journals created and changed since 8 today", async (
 
   await page.goto("/journals");
 
-  await expect(page.getByRole("heading", { name: "Активність з 08:00" })).toBeVisible();
+  const activityButton = page.getByRole("button", { name: /Активність з 08:00/ });
+  await expect(activityButton).toBeVisible();
+  await expect(activityButton).toHaveAttribute("aria-expanded", "false");
+  await activityButton.click();
+  await expect(activityButton).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("heading", { name: "Створені журнали" })).toBeVisible();
-  await expect(page.getByText("46-26 Новий журнал")).toBeVisible();
+  await expect(page.getByRole("link", { name: "46-26 Новий журнал" })).toHaveAttribute("href", "https://drive.google.com/drive/folders/drive-created");
   await expect(page.getByText("Створено: 08:30")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Змінені журнали" })).toBeVisible();
-  await expect(page.getByText("47-26 Змінений журнал")).toBeVisible();
+  await expect(page.getByRole("link", { name: "47-26 Змінений журнал" })).toHaveAttribute("href", "https://drive.google.com/drive/folders/drive-changed");
   await expect(page.getByText("Початок змін: 09:10")).toBeVisible();
   await expect(page.getByText("Остання зміна: 11:45")).toBeVisible();
 });
@@ -432,7 +436,7 @@ test("journal monitor refreshes daily activity without workload auto-processing"
   });
 
   await page.goto("/journals");
-  await expect(page.getByRole("heading", { name: /08:00/ })).toBeVisible();
+  await page.getByRole("button", { name: /Активність з 08:00/ }).click();
 
   await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
 
