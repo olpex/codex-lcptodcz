@@ -19,10 +19,12 @@ from app.schemas.api import (
     TraineeBulkStatusUpdateResponse,
     TraineeClearOrphanGroupsResponse,
     TraineeCreate,
+    TraineeDedupeResponse,
     TraineeResponse,
     TraineeUpdate,
 )
 from app.services.audit import write_audit
+from app.services.trainee_deduplication import deduplicate_trainees
 
 router = APIRouter()
 
@@ -470,6 +472,24 @@ def clear_orphan_group_codes(
         details={"cleared_count": len(cleared_ids)},
     )
     return TraineeClearOrphanGroupsResponse(cleared_count=len(cleared_ids), cleared_ids=cleared_ids)
+
+
+@router.post(
+    "/bulk/dedupe",
+    response_model=TraineeDedupeResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def dedupe_trainees(db: DbSession, current_user: CurrentUser) -> TraineeDedupeResponse:
+    result = deduplicate_trainees(db, current_user.branch_id, commit=True)
+    write_audit(
+        db,
+        actor_user_id=current_user.id,
+        action="trainee.bulk_dedupe",
+        entity_type="trainee_batch",
+        entity_id=current_user.branch_id,
+        details=result,
+    )
+    return TraineeDedupeResponse(**result)
 
 
 @router.get("/{trainee_id}", response_model=TraineeResponse)

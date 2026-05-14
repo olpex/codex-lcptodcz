@@ -70,6 +70,41 @@ def test_group_trainee_enrollment_flow(client, auth_headers):
     assert enroll_response.json()["status"] == "active"
 
 
+def test_trainee_dedupe_endpoint_removes_sparse_duplicate(client, auth_headers, db_session):
+    sparse = Trainee(
+        branch_id="main",
+        first_name="Olha Yuriivna",
+        last_name="Vrublevska",
+        birth_date=date(1988, 5, 4),
+        group_code="90-26",
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    complete = Trainee(
+        branch_id="main",
+        first_name="Olha Yuriivna",
+        last_name="Vrublevska",
+        birth_date=date(1988, 5, 4),
+        group_code="90-26",
+        contract_number="1826",
+        certificate_number="CERT-1826",
+        passport_number_encrypted=cipher.encrypt("937755"),
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    db_session.add_all([sparse, complete])
+    db_session.commit()
+
+    response = client.post("/api/v1/trainees/bulk/dedupe", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["removed_count"] == 1
+    db_session.expire_all()
+    remaining = db_session.query(Trainee).filter(Trainee.is_deleted.is_(False)).one()
+    assert remaining.id == complete.id
+    assert remaining.contract_number == "1826"
+
+
 def test_group_audit_returns_group_actions(client, auth_headers):
     trainee_response = client.post(
         "/api/v1/trainees",

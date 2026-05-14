@@ -37,6 +37,7 @@ from app.models import (
     Trainee,
 )
 from app.services.storage import storage_path
+from app.services.trainee_deduplication import deduplicate_trainees
 
 PREFERRED_TRAINEE_SHEET_NAMES = ("Додаток", "додаток")
 HEADER_SCAN_LIMIT = 30
@@ -647,7 +648,22 @@ def _find_existing_trainee(
     middle_name: str,
     birth_date: date | None,
     contract_number: str | None,
+    tax_id: str | None = None,
 ) -> tuple[Trainee | None, str | None]:
+    normalized_tax_id = re.sub(r"\D", "", tax_id or "")
+    if normalized_tax_id:
+        candidates = (
+            db.query(Trainee)
+            .filter(
+                Trainee.branch_id == branch_id,
+            )
+            .all()
+        )
+        for candidate in candidates:
+            candidate_tax_id = re.sub(r"\D", "", cipher.decrypt(candidate.tax_id_encrypted) or "")
+            if candidate_tax_id and candidate_tax_id == normalized_tax_id:
+                return candidate, "tax_id"
+
     if contract_number:
         existing = (
             db.query(Trainee)
@@ -661,17 +677,27 @@ def _find_existing_trainee(
             return existing, "contract_number"
 
     normalized_first_name = first_name if not middle_name else f"{first_name} {middle_name}"
-    existing_query = db.query(Trainee).filter(
-        Trainee.branch_id == branch_id,
-        Trainee.first_name == normalized_first_name,
-        Trainee.last_name == last_name,
-    )
-    if birth_date:
-        existing_query = existing_query.filter(
-            or_(Trainee.birth_date == birth_date, Trainee.birth_date.is_(None))
+    normalized_first_key = _normalize_text_value(normalized_first_name).casefold()
+    existing_candidates = (
+        db.query(Trainee)
+        .filter(
+            Trainee.branch_id == branch_id,
+            Trainee.last_name == last_name,
         )
-    existing = existing_query.first()
-    if existing:
+        .order_by(Trainee.id.asc())
+        .all()
+    )
+    for existing in existing_candidates:
+        existing_first_key = _normalize_text_value(existing.first_name).casefold()
+        names_match = (
+            existing_first_key == normalized_first_key
+            or existing_first_key.startswith(f"{normalized_first_key} ")
+            or normalized_first_key.startswith(f"{existing_first_key} ")
+        )
+        if not names_match:
+            continue
+        if birth_date and existing.birth_date not in {birth_date, None}:
+            continue
         return existing, "name_birth_date"
 
     if middle_name:
@@ -727,6 +753,7 @@ def analyze_trainee_import_duplicates(
             payload["middle_name"],
             payload["birth_date"],
             payload["contract_number"],
+            payload["tax_id"],
         )
         if not existing:
             new_count += 1
@@ -819,6 +846,7 @@ def try_import_trainees(
             middle_name,
             birth_date,
             contract_number,
+            tax_id,
         )
         if existing:
             if update_existing_mode == "skip_existing":
@@ -907,8 +935,10 @@ def try_import_trainees(
         memberships_created += memberships_added
 
     if commit:
+        deduplicate_trainees(db, branch_id, commit=False)
         db.commit()
     else:
+        deduplicate_trainees(db, branch_id, commit=False)
         db.flush()
     return {
         "inserted": inserted,

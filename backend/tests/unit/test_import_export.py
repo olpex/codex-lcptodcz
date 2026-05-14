@@ -16,6 +16,7 @@ from app.services.import_export import (
     save_report_file,
     try_import_trainees,
 )
+from app.services.trainee_deduplication import deduplicate_trainees
 
 
 def test_parse_xlsx_and_import_trainees(tmp_path: Path, db_session):
@@ -783,6 +784,100 @@ def test_import_overwrite_mode_updates_existing_non_empty_fields(tmp_path: Path,
     assert trainee.contract_number == "1499"
     assert trainee.group_code == "73-26"
     assert trainee.status == "active"
+
+
+def test_import_matches_existing_full_first_name_when_incoming_omits_middle_name(db_session):
+    db_session.add(
+        Trainee(
+            branch_id="main",
+            source_row_number=5,
+            first_name="РћР»СЊРіР° Р®СЂС–С—РІРЅР°",
+            last_name="Р’СЂСѓР±Р»РµРІСЃСЊРєР°",
+            birth_date=datetime(1988, 5, 4).date(),
+            group_code="90-26",
+            tax_id_encrypted=cipher.encrypt("3226619663"),
+            address_encrypted=cipher.encrypt("Р’РѕР»РёРЅСЊСЃРєР° РѕР±Р»Р°СЃС‚СЊ"),
+            status="active",
+        )
+    )
+    db_session.commit()
+    parsed = {
+        "rows": 1,
+        "headers": [
+            "source_row_number",
+            "last_name",
+            "first_name",
+            "birth_date",
+            "contract_number",
+            "tax_id",
+            "passport_number",
+        ],
+        "data": [
+            {
+                "source_row_number": 5,
+                "last_name": "Р’СЂСѓР±Р»РµРІСЊРєР°",
+                "first_name": "РћР»СЊРіР°",
+                "birth_date": "04.05.1988",
+                "contract_number": "1826",
+                "tax_id": "3226619663",
+                "passport_number": "937755",
+            }
+        ],
+        "default_group_code": "90-26",
+    }
+
+    result = try_import_trainees(db_session, parsed, "main", update_existing_mode="overwrite")
+
+    assert result["inserted"] == 0
+    assert result["updated_existing"] == 1
+    trainee = db_session.query(Trainee).filter(Trainee.last_name == "Р’СЂСѓР±Р»РµРІСЃСЊРєР°").one()
+    assert trainee.contract_number == "1826"
+    assert cipher.decrypt(trainee.passport_number_encrypted) == "937755"
+
+
+def test_deduplicate_trainees_keeps_most_complete_group_record_and_removes_sparse_copy(db_session):
+    sparse = Trainee(
+        branch_id="main",
+        source_row_number=5,
+        first_name="РћР»СЊРіР° Р®СЂС–С—РІРЅР°",
+        last_name="Р’СЂСѓР±Р»РµРІСЃСЊРєР°",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        address_encrypted=cipher.encrypt("Р’РѕР»РёРЅСЊСЃРєР° РѕР±Р»Р°СЃС‚СЊ"),
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    complete = Trainee(
+        branch_id="main",
+        source_row_number=5,
+        first_name="РћР»СЊРіР° Р®СЂС–С—РІРЅР°",
+        last_name="Р’СЂСѓР±Р»РµРІСЃСЊРєР°",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        employment_center_encrypted=cipher.encrypt("Р›СѓС†СЊРєР° С„С–Р»С–СЏ Р’РћР¦Р—"),
+        contract_number="1826",
+        certificate_number="03502605140025601Рќ",
+        certificate_issue_date=datetime(2026, 5, 14).date(),
+        postal_index="43001",
+        address_encrypted=cipher.encrypt("Р’РѕР»РёРЅСЊСЃРєР° РѕР±Р»Р°СЃС‚СЊ"),
+        passport_series_encrypted=cipher.encrypt("РђРЎ"),
+        passport_number_encrypted=cipher.encrypt("937755"),
+        passport_issued_by_encrypted=cipher.encrypt("Р›СѓС†СЊРєРёРј Р Р’ РЈРњР’РЎ"),
+        passport_issued_date=datetime(2004, 10, 18).date(),
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    db_session.add_all([sparse, complete])
+    db_session.commit()
+
+    result = deduplicate_trainees(db_session, "main", commit=True)
+
+    assert result["duplicate_groups"] == 1
+    assert result["removed_count"] == 1
+    remaining = db_session.query(Trainee).filter(Trainee.is_deleted.is_(False)).one()
+    assert remaining.id == complete.id
+    assert remaining.contract_number == "1826"
+    assert cipher.decrypt(remaining.passport_number_encrypted) == "937755"
 
 
 def test_import_skip_existing_mode_does_not_update_duplicate(tmp_path: Path, db_session):

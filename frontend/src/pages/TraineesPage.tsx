@@ -7,7 +7,7 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
-import { usePageRefresh } from "../hooks/usePageRefresh";
+import { PAGE_REFRESH_EVENT, usePageRefresh } from "../hooks/usePageRefresh";
 import type { Trainee, Group } from "../types/api";
 
 type TraineeEditForm = {
@@ -62,6 +62,17 @@ type BulkPurgeResponse = {
 type ClearOrphanGroupsResponse = {
   cleared_count: number;
   cleared_ids: number[];
+};
+
+type DedupeResponse = {
+  duplicate_groups: number;
+  removed_count: number;
+  merged_count: number;
+};
+
+type FetchTraineesOptions = {
+  quiet?: boolean;
+  reconcile?: boolean;
 };
 
 type TraineeProblemFilter = "all" | "unassigned" | "orphan_group" | "archived";
@@ -299,11 +310,17 @@ export function TraineesPage() {
     [selectedIds, trainees]
   );
 
-  const fetchTrainees = async (term = "", options: { quiet?: boolean } = {}) => {
+  const fetchTrainees = async (term = "", options: FetchTraineesOptions = {}) => {
     const showLoading = !options.quiet || trainees.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      triggerJournalAutoTick();
+      let dedupeResult: DedupeResponse | null = null;
+      if (options.reconcile && canEdit) {
+        await triggerJournalAutoTick({ force: true });
+        dedupeResult = await request<DedupeResponse>("/trainees/bulk/dedupe", { method: "POST" });
+      } else {
+        triggerJournalAutoTick();
+      }
       const [groupsData, data] = await Promise.all([
         request<Group[]>("/groups"),
         (async () => {
@@ -337,6 +354,11 @@ export function TraineesPage() {
         return next;
       });
       setLoadError(null);
+      if (dedupeResult && !options.quiet) {
+        const removed = dedupeResult.removed_count;
+        showSuccess(removed > 0 ? `Прибрано дублікатів слухачів: ${removed}` : "Дублікатів слухачів не знайдено");
+        window.dispatchEvent(new Event(PAGE_REFRESH_EVENT));
+      }
     } catch (error) {
       const message = (error as Error).message;
       setLoadError(message);
@@ -847,7 +869,7 @@ export function TraineesPage() {
             <button
               type="button"
               className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
-              onClick={() => fetchTrainees(search)}
+              onClick={() => fetchTrainees(search, { reconcile: true })}
               disabled={isLoading}
             >
               {isLoading ? "Оновлюємо..." : "Оновити"}

@@ -187,6 +187,12 @@ class TraineeClearOrphanGroupsResponse(BaseModel):
     cleared_ids: list[int]
 
 
+class TraineeDedupeResponse(BaseModel):
+    duplicate_groups: int
+    removed_count: int
+    merged_count: int
+
+
 class GroupBase(BaseModel):
     code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)

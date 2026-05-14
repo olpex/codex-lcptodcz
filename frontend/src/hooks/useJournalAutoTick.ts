@@ -21,16 +21,23 @@ type AutoTickResult = {
   drive_intake_message?: string | null;
 };
 
-export function useJournalAutoTick(request: ApiRequest, enabled = true): () => Promise<AutoTickResult | null> | undefined {
+type AutoTickOptions = {
+  force?: boolean;
+};
+
+export function useJournalAutoTick(
+  request: ApiRequest,
+  enabled = true
+): (options?: AutoTickOptions) => Promise<AutoTickResult | null> | undefined {
   const lastRunRef = useRef(0);
   const inFlightRef = useRef<Promise<AutoTickResult | null> | null>(null);
 
-  return useCallback(() => {
+  return useCallback((options: AutoTickOptions = {}) => {
     if (!enabled) return;
     if (inFlightRef.current) return inFlightRef.current;
 
     const now = Date.now();
-    if (now - lastRunRef.current < MIN_INTERVAL_MS) return;
+    if (!options.force && now - lastRunRef.current < MIN_INTERVAL_MS) return;
 
     lastRunRef.current = now;
     const tickPromise = request<AutoTickResult>("/journal-monitors/auto-tick", {
