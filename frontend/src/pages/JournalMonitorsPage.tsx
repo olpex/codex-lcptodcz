@@ -208,6 +208,20 @@ function formatDisplayStatus(row: JournalMonitorEntry): string {
   return formatStatus(status);
 }
 
+function renderDisplayStatus(row: JournalMonitorEntry) {
+  const status = getDisplayStatus(row);
+  if (status === "workload_only") {
+    return (
+      <>
+        Тільки{" "}
+        <br />
+        педнавантаження
+      </>
+    );
+  }
+  return formatDisplayStatus(row);
+}
+
 function getGroupSortParts(code: string | null): { number: number; suffix: string; year: number; raw: string } {
   const raw = code || "";
   const match = raw.match(/^\s*(\d+)\s*([^\d\s-]*)\s*-\s*(\d+)/i);
@@ -1097,8 +1111,8 @@ export function JournalMonitorsPage() {
                     <tr>
                       <th className="px-3 py-2">Вибір</th>
                       <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
-                      <th className="px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
-                      <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
+                      <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
+                      <th className="px-2 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
                       <th className="px-3 py-2">Години</th>
                       <th className="px-3 py-2">{renderSortButton("schedule", "Розклад")}</th>
@@ -1121,7 +1135,7 @@ export function JournalMonitorsPage() {
                           />
                         </td>
                         <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
-                        <td className="px-3 py-2">
+                        <td className="min-w-[14rem] px-3 py-2">
                           <div>{row.journal_name}</div>
                           {row.workload_source_names?.length > 0 && (
                             <div className="mt-1 space-y-0.5 text-xs font-medium text-slate-500">
@@ -1131,9 +1145,15 @@ export function JournalMonitorsPage() {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2">
-                          <span className={clsx("whitespace-nowrap rounded-full px-2 py-1 text-xs font-semibold", STATUS_CLASSES[getDisplayStatus(row)] || STATUS_CLASSES.unknown_code)}>
-                            {formatDisplayStatus(row)}
+                        <td className="px-1 py-2">
+                          <span
+                            className={clsx(
+                              "inline-block rounded-full px-1.5 py-1 text-xs font-semibold",
+                              getDisplayStatus(row) === "workload_only" ? "whitespace-normal text-center leading-tight" : "whitespace-nowrap",
+                              STATUS_CLASSES[getDisplayStatus(row)] || STATUS_CLASSES.unknown_code
+                            )}
+                          >
+                            {renderDisplayStatus(row)}
                           </span>
                         </td>
                         <td className="px-3 py-2">
