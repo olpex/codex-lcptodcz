@@ -243,6 +243,36 @@ def list_drive_intake_jobs(
     ]
 
 
+@router.get("/email-intake", response_model=list[JobListItemResponse])
+def list_email_intake_jobs(
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> list[JobListItemResponse]:
+    mail_sources = {"mail", "mail_gmail_api", "mail_google_script"}
+    jobs = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .join(ImportJob.document)
+        .filter(Document.source.in_(mail_sources))
+        .options(joinedload(ImportJob.document))
+        .order_by(ImportJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        JobListItemResponse(
+            job_type="import",
+            job=JobResponse.model_validate(job),
+            import_source=(
+                job.result_payload.get("source") if isinstance(job.result_payload, dict) and job.result_payload.get("source") else job.document.source
+            ),
+            document_id=job.document_id,
+            document_file_name=job.document.file_name if job.document else None,
+        )
+        for job in jobs
+    ]
+
+
 @router.get("/{job_id}", response_model=JobStatusResponse)
 def get_job_status(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatusResponse:
     job_type, job = _resolve_job(job_id, db, current_user.branch_id)

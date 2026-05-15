@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import event
 
@@ -255,6 +255,112 @@ def test_drive_intake_jobs_returns_recent_branch_scoped_drive_history(client, au
     assert payload[0]["document_id"] == drive_document.id
     assert payload[0]["document_file_name"] == "46-26 Schedule.docx"
     assert payload[0]["job"]["result_payload"]["marking_error"] == "Google Drive denied rename"
+
+
+def test_email_intake_jobs_returns_recent_branch_scoped_mail_history(client, auth_headers, db_session):
+    now = datetime.now(timezone.utc)
+    gmail_document = Document(
+        branch_id="main",
+        file_name="gmail-contracts.xlsx",
+        file_path="/tmp/gmail-contracts.xlsx",
+        file_type=DocumentType.XLSX,
+        source="mail_gmail_api",
+    )
+    script_document = Document(
+        branch_id="main",
+        file_name="apps-script-schedule.docx",
+        file_path="/tmp/apps-script-schedule.docx",
+        file_type=DocumentType.DOCX,
+        source="mail_google_script",
+    )
+    imap_document = Document(
+        branch_id="main",
+        file_name="imap-contracts.xlsx",
+        file_path="/tmp/imap-contracts.xlsx",
+        file_type=DocumentType.XLSX,
+        source="mail",
+    )
+    upload_document = Document(
+        branch_id="main",
+        file_name="manual.xlsx",
+        file_path="/tmp/manual.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    other_branch_document = Document(
+        branch_id="other",
+        file_name="hidden-mail.xlsx",
+        file_path="/tmp/hidden-mail.xlsx",
+        file_type=DocumentType.XLSX,
+        source="mail_gmail_api",
+    )
+    db_session.add_all([gmail_document, script_document, imap_document, upload_document, other_branch_document])
+    db_session.commit()
+    for document in [gmail_document, script_document, imap_document, upload_document, other_branch_document]:
+        db_session.refresh(document)
+
+    gmail_job = ImportJob(
+        branch_id="main",
+        idempotency_key="email-history-gmail",
+        document_id=gmail_document.id,
+        status=JobStatus.FAILED,
+        message="MAIL_WEBHOOK_SECRET is missing or invalid",
+        result_payload={"source": "mail_gmail_api", "message_id": "gmail-1"},
+        created_at=now,
+        updated_at=now,
+    )
+    script_job = ImportJob(
+        branch_id="main",
+        idempotency_key="email-history-script",
+        document_id=script_document.id,
+        status=JobStatus.SUCCEEDED,
+        message="script done",
+        result_payload={"source": "mail_google_script", "message_id": "script-1"},
+        created_at=now - timedelta(minutes=1),
+        updated_at=now - timedelta(minutes=1),
+    )
+    imap_job = ImportJob(
+        branch_id="main",
+        idempotency_key="email-history-imap",
+        document_id=imap_document.id,
+        status=JobStatus.RUNNING,
+        message="imap running",
+        result_payload={"source": "mail_auto_contracts", "message_id": "imap-1"},
+        created_at=now - timedelta(minutes=2),
+        updated_at=now - timedelta(minutes=2),
+    )
+    upload_job = ImportJob(
+        branch_id="main",
+        idempotency_key="email-history-upload",
+        document_id=upload_document.id,
+        status=JobStatus.SUCCEEDED,
+        message="manual",
+        created_at=now,
+        updated_at=now,
+    )
+    hidden_job = ImportJob(
+        branch_id="other",
+        idempotency_key="email-history-other",
+        document_id=other_branch_document.id,
+        status=JobStatus.RUNNING,
+        message="hidden",
+        result_payload={"source": "mail_gmail_api"},
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([gmail_job, script_job, imap_job, upload_job, hidden_job])
+    db_session.commit()
+    for job in [gmail_job, script_job, imap_job, upload_job, hidden_job]:
+        db_session.refresh(job)
+
+    response = client.get("/api/v1/jobs/email-intake?limit=10", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["job"]["id"] for item in payload] == [gmail_job.id, script_job.id, imap_job.id]
+    assert [item["import_source"] for item in payload] == ["mail_gmail_api", "mail_google_script", "mail_auto_contracts"]
+    assert payload[0]["document_file_name"] == "gmail-contracts.xlsx"
+    assert payload[0]["job"]["result_payload"]["message_id"] == "gmail-1"
 
 
 def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):

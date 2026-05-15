@@ -499,3 +499,117 @@ test("job center can re-import a Google Drive intake file from the Drive panel",
   await expect(drivePanel).toContainText("#120");
   await expect(drivePanel).toContainText("Повторний імпорт із задачі #99");
 });
+
+test("job center shows dedicated email intake status", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            job_type: "import",
+            import_source: "mail_gmail_api",
+            document_id: 130,
+            document_file_name: "gmail-contracts.xlsx",
+            job: {
+              id: 130,
+              status: "failed",
+              message: "MAIL_WEBHOOK_SECRET is missing or invalid",
+              result_payload: {
+                source: "mail_gmail_api",
+                message_id: "gmail-1"
+              },
+              started_at: "2026-05-15T08:00:00Z",
+              finished_at: "2026-05-15T08:01:00Z",
+              created_at: "2026-05-15T07:59:50Z",
+              updated_at: "2026-05-15T08:01:00Z"
+            }
+          },
+          {
+            job_type: "import",
+            import_source: "mail_google_script",
+            document_id: 131,
+            document_file_name: "apps-script-schedule.docx",
+            job: {
+              id: 131,
+              status: "succeeded",
+              message: "Імпорт виконано",
+              result_payload: {
+                source: "mail_google_script",
+                message_id: "script-1"
+              },
+              started_at: "2026-05-15T08:02:00Z",
+              finished_at: "2026-05-15T08:03:00Z",
+              created_at: "2026-05-15T08:01:50Z",
+              updated_at: "2026-05-15T08:03:00Z"
+            }
+          }
+        ])
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+
+  const emailPanel = page.getByTestId("email-intake-panel");
+  await expect(emailPanel).toBeVisible();
+  await expect(emailPanel).toContainText("Email intake");
+  await expect(emailPanel).toContainText("Пошта: Gmail API");
+  await expect(emailPanel).toContainText("gmail-contracts.xlsx");
+  await expect(emailPanel).toContainText("MAIL_WEBHOOK_SECRET is missing or invalid");
+  await expect(emailPanel).toContainText("Перевірте MAIL_WEBHOOK_SECRET");
+  await expect(emailPanel).toContainText("Пошта: Google Script");
+  await expect(emailPanel).toContainText("apps-script-schedule.docx");
+});

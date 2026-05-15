@@ -155,6 +155,7 @@ export function JobCenterPage() {
   const [supportedBatchExtensions, setSupportedBatchExtensions] = useState(FALLBACK_BATCH_IMPORT_EXTENSIONS);
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
+  const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
     const snapshot: JobStatsSnapshot = {
@@ -387,6 +388,15 @@ export function JobCenterPage() {
     }
   };
 
+  const loadEmailIntakeJobs = async () => {
+    try {
+      const data = await request<JobListItem[]>("/jobs/email-intake?limit=5");
+      setEmailIntakeRows(data);
+    } catch {
+      setEmailIntakeRows([]);
+    }
+  };
+
   const buildJobStatusesPath = (items: JobListItem[]) => {
     const params = new URLSearchParams();
     params.set("limit", "200");
@@ -429,6 +439,7 @@ export function JobCenterPage() {
       if (hasUnknownActiveJob || hasCompletedRequestedJob) {
         await loadJobs();
         await loadDriveIntakeJobs();
+        await loadEmailIntakeJobs();
       }
     } catch (error) {
       setLoadError((error as Error).message);
@@ -439,6 +450,7 @@ export function JobCenterPage() {
     setStatsHistory([]);
     loadJobs();
     loadDriveIntakeJobs();
+    loadEmailIntakeJobs();
   }, [jobType, jobStatus, dateFrom, dateTo]);
 
   useEffect(() => {
@@ -463,6 +475,7 @@ export function JobCenterPage() {
         void loadJobs();
       }
       void loadDriveIntakeJobs();
+      void loadEmailIntakeJobs();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [autoRefresh, rows, jobType, jobStatus, dateFrom, dateTo]);
@@ -540,6 +553,7 @@ export function JobCenterPage() {
       setRows(data);
       appendSnapshot(data);
       await loadDriveIntakeJobs();
+      await loadEmailIntakeJobs();
       showSuccess(`Створено повторний імпорт #${payload.job.id}`);
     } catch (error) {
       showError((error as Error).message);
@@ -750,6 +764,15 @@ export function JobCenterPage() {
       succeededCount: driveIntakeRows.filter((item) => item.job.status === "succeeded").length
     };
   }, [driveIntakeRows]);
+  const emailIntakeStatus = useMemo(() => {
+    const latest = emailIntakeRows[0] || null;
+    return {
+      latest,
+      activeCount: emailIntakeRows.filter((item) => isActiveJobStatus(item.job.status)).length,
+      failedCount: emailIntakeRows.filter((item) => item.job.status === "failed" || Boolean(getJobIssueMessage(item))).length,
+      succeededCount: emailIntakeRows.filter((item) => item.job.status === "succeeded").length
+    };
+  }, [emailIntakeRows]);
 
   return (
     <div className="space-y-5">
@@ -873,6 +896,49 @@ export function JobCenterPage() {
                 );
               })}
             </div>
+          </div>
+        </section>
+      )}
+      {emailIntakeStatus.latest && (
+        <section
+          className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
+          data-testid="email-intake-panel"
+          aria-labelledby="email-intake-heading"
+        >
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="email-intake-heading" className="text-base font-semibold text-indigo-950">
+                Email intake
+              </h2>
+              <p className="text-sm text-indigo-800">Останні імпорти з Gmail API, Google Apps Script та поштового fallback.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+              <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {emailIntakeStatus.activeCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {emailIntakeStatus.failedCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {emailIntakeStatus.succeededCount}</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {emailIntakeRows.map((item) => {
+              const issueMessage = getJobIssueMessage(item);
+              const issueHint = getJobIssueHint(item);
+              const fileName = item.document_file_name || "Вкладення не вказано";
+              return (
+                <div key={`email-intake-${item.job.id}`} className="rounded-md border border-indigo-200 bg-white px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-ink">
+                      #{item.job.id} {formatImportSource(item.import_source)} · {fileName}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                      {formatJobStatus(item.job.status)}
+                    </span>
+                  </div>
+                  {item.job.message && <p className="mt-1 text-sm text-slate-700">{item.job.message}</p>}
+                  {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
+                  {issueHint && <p className="mt-1 text-sm font-medium text-indigo-900">{issueHint}</p>}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
