@@ -331,3 +331,171 @@ test("job center shows dedicated Google Drive intake status", async ({ page }) =
   await expect(drivePanel).toContainText("Google Drive denied rename");
   await expect(drivePanel).toContainText("Надайте service account доступ Editor");
 });
+
+test("job center can re-import a Google Drive intake file from the Drive panel", async ({ page }) => {
+  let reprocessRequested = false;
+  let driveHistoryRequests = 0;
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      driveHistoryRequests += 1;
+      const rows = reprocessRequested
+        ? [
+            {
+              job_type: "import",
+              import_source: "drive_intake",
+              document_id: 99,
+              document_file_name: "46-26 Schedule.docx",
+              job: {
+                id: 120,
+                status: "queued",
+                message: "Повторний імпорт із задачі #99",
+                result_payload: {
+                  source: "manual_reprocess",
+                  reprocess_of_job_id: 99,
+                  drive_file_name: "46-26 Schedule.docx"
+                },
+                started_at: null,
+                finished_at: null,
+                created_at: "2026-05-15T08:05:00Z",
+                updated_at: "2026-05-15T08:05:00Z"
+              }
+            }
+          ]
+        : [
+            {
+              job_type: "import",
+              import_source: "drive_intake",
+              document_id: 99,
+              document_file_name: "46-26 Schedule.docx",
+              job: {
+                id: 99,
+                status: "succeeded",
+                message: "Імпорт виконано",
+                result_payload: {
+                  source: "drive_intake",
+                  drive_file_name: "46-26 Schedule.docx"
+                },
+                started_at: "2026-05-15T08:00:00Z",
+                finished_at: "2026-05-15T08:01:00Z",
+                created_at: "2026-05-15T07:59:50Z",
+                updated_at: "2026-05-15T08:01:00Z"
+              }
+            }
+          ];
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(rows) });
+    }
+
+    if (path.endsWith("/jobs/99/reprocess-import") && method === "POST") {
+      reprocessRequested = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_type: "import",
+          job: {
+            id: 120,
+            status: "queued",
+            message: "Повторний імпорт із задачі #99",
+            result_payload: {
+              source: "manual_reprocess",
+              reprocess_of_job_id: 99,
+              drive_file_name: "46-26 Schedule.docx"
+            },
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-05-15T08:05:00Z",
+            updated_at: "2026-05-15T08:05:00Z"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          reprocessRequested
+            ? [
+                {
+                  job_type: "import",
+                  import_source: "drive_intake",
+                  document_id: 99,
+                  document_file_name: "46-26 Schedule.docx",
+                  job: {
+                    id: 120,
+                    status: "queued",
+                    message: "Повторний імпорт із задачі #99",
+                    result_payload: {
+                      source: "manual_reprocess",
+                      reprocess_of_job_id: 99,
+                      drive_file_name: "46-26 Schedule.docx"
+                    },
+                    started_at: null,
+                    finished_at: null,
+                    created_at: "2026-05-15T08:05:00Z",
+                    updated_at: "2026-05-15T08:05:00Z"
+                  }
+                }
+              ]
+            : []
+        )
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+
+  const drivePanel = page.getByTestId("drive-intake-panel");
+  await expect(drivePanel).toContainText("46-26 Schedule.docx");
+  await drivePanel.getByRole("button", { name: "Повторно імпортувати #99" }).click();
+
+  await expect.poll(() => reprocessRequested).toBe(true);
+  await expect.poll(() => driveHistoryRequests).toBeGreaterThan(1);
+  await expect(drivePanel).toContainText("#120");
+  await expect(drivePanel).toContainText("Повторний імпорт із задачі #99");
+});

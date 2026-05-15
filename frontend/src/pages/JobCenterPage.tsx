@@ -539,6 +539,7 @@ export function JobCenterPage() {
       const data = await request<JobListItem[]>("/jobs?limit=200&job_type=import");
       setRows(data);
       appendSnapshot(data);
+      await loadDriveIntakeJobs();
       showSuccess(`Створено повторний імпорт #${payload.job.id}`);
     } catch (error) {
       showError((error as Error).message);
@@ -859,6 +860,15 @@ export function JobCenterPage() {
                       </span>
                     </div>
                     {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
+                    {item.document_id && (
+                      <button
+                        type="button"
+                        className="mt-2 rounded bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800"
+                        onClick={() => reprocessImportJob(item)}
+                      >
+                        Повторно імпортувати #{item.job.id}
+                      </button>
+                    )}
                   </div>
                 );
               })}
