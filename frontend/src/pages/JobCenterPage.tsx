@@ -36,6 +36,7 @@ type WorkerHealth = {
   settings: {
     drive_intake_auto_enabled: boolean;
     drive_intake_interval_seconds: number;
+    drive_intake_batch_size?: number;
     journal_auto_interval_seconds: number;
     imap_fallback_enabled: boolean;
     imap_auto_poll_enabled: boolean;
@@ -1159,6 +1160,12 @@ export function JobCenterPage() {
               <span className="font-semibold text-slate-900">Email канал:</span>{" "}
               {formatMailChannel(workerHealth.settings.mail_primary_channel)}
             </p>
+            {typeof workerHealth.settings.drive_intake_batch_size === "number" && (
+              <p className="mt-1">
+                <span className="font-semibold text-slate-900">Drive batch:</span>{" "}
+                {workerHealth.settings.drive_intake_batch_size} файлів/tick
+              </p>
+            )}
             <p className="mt-1">
               <span className="font-semibold text-slate-900">IMAP fallback:</span>{" "}
               {formatEnabled(workerHealth.settings.imap_fallback_enabled)}

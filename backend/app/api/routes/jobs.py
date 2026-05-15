@@ -352,6 +352,7 @@ def get_worker_health(db: DbSession, current_user: CurrentUser) -> dict:
         "settings": {
             "drive_intake_auto_enabled": settings.google_drive_intake_auto_enabled,
             "drive_intake_interval_seconds": settings.google_drive_intake_interval_seconds,
+            "drive_intake_batch_size": settings.google_drive_intake_batch_size,
             "journal_auto_interval_seconds": settings.journal_workload_auto_interval_seconds,
             "imap_fallback_enabled": settings.imap_fallback_enabled,
             "imap_auto_poll_enabled": settings.imap_auto_poll_enabled,

@@ -409,6 +409,7 @@ def test_email_intake_jobs_returns_recent_branch_scoped_mail_history(client, aut
 
 def test_worker_health_reports_celery_and_branch_job_backlog(client, auth_headers, db_session, monkeypatch):
     _fake_celery_for_worker_health(monkeypatch)
+    monkeypatch.setattr(jobs_route.settings, "google_drive_intake_batch_size", 5)
 
     document = Document(
         branch_id="main",
@@ -477,6 +478,7 @@ def test_worker_health_reports_celery_and_branch_job_backlog(client, auth_header
     assert payload["backlog"]["total_active"] == 3
     assert "import_parse" in {queue["queue"] for queue in payload["queues"]}
     assert "google-drive-intake-auto" in {item["name"] for item in payload["beat_schedule"]}
+    assert payload["settings"]["drive_intake_batch_size"] == 5
 
 
 def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):

@@ -935,6 +935,7 @@ test("job center shows read-only worker health", async ({ page }) => {
           settings: {
             drive_intake_auto_enabled: true,
             drive_intake_interval_seconds: 45,
+            drive_intake_batch_size: 5,
             journal_auto_interval_seconds: 60,
             imap_fallback_enabled: false,
             imap_auto_poll_enabled: false,
@@ -975,6 +976,7 @@ test("job center shows read-only worker health", async ({ page }) => {
   await expect(workerPanel).toContainText("import_parse");
   await expect(workerPanel).toContainText("google-drive-intake-auto");
   await expect(workerPanel).toContainText("45 с");
+  await expect(workerPanel).toContainText("Drive batch: 5 файлів/tick");
   await expect(workerPanel).toContainText("Email канал: Google Apps Script");
   await expect(workerPanel).toContainText("IMAP fallback: вимкнено");
   await expect(workerPanel).toContainText("IMAP auto poll: вимкнено");
