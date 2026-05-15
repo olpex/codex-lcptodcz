@@ -138,6 +138,7 @@ def process_journal_monitor_auto_cron(
 @router.post(
     "/auto-tick",
     status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def process_journal_monitor_auto_tick(

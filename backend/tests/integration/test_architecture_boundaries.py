@@ -1,4 +1,20 @@
+from pathlib import Path
+
 from app.api.routes import mail as mail_routes
+
+
+def test_frontend_source_does_not_reference_browser_auto_tick():
+    frontend_src = Path(__file__).resolve().parents[3] / "frontend" / "src"
+    offenders: list[str] = []
+
+    for path in frontend_src.rglob("*"):
+        if path.suffix not in {".js", ".jsx", ".ts", ".tsx"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "journal-monitors/auto-tick" in text or "/auto-tick" in text:
+            offenders.append(str(path.relative_to(frontend_src)))
+
+    assert offenders == []
 
 
 def test_browser_auto_tick_endpoint_no_longer_runs_processing(client, auth_headers, monkeypatch):
