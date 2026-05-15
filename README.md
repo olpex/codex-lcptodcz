@@ -58,6 +58,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 Для черг Celery (`worker`, `beat`) потрібен окремий хостинг процесів поза Vercel.
 
 - Загальна топологія і runbook: `infra/DEPLOY.md`
+- Детальна топологія Celery worker/beat: `docs/architecture/celery-worker-topology.md`
 - Інструкція: `infra/vercel/README.md`
 - Compose-файл: `infra/vercel/docker-compose.workers.yml`
 - API versioning/deprecation policy: `docs/architecture/api-versioning.md`

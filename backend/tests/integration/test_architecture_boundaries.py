@@ -138,3 +138,44 @@ def test_perf_suite_covers_critical_background_routes():
     ]:
         assert route in perf_source
     assert "@pytest.mark.perf" in perf_source
+
+
+def test_celery_worker_topology_runbook_is_documented():
+    repo_root = Path(__file__).resolve().parents[3]
+    runbook_path = repo_root / "docs" / "architecture" / "celery-worker-topology.md"
+    runbook = runbook_path.read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    required_terms = [
+        "FastAPI API",
+        "Celery worker",
+        "Celery beat",
+        "Redis",
+        "Flower",
+        "mail_ingest",
+        "ocr_parse",
+        "import_parse",
+        "report_export",
+        "journal_monitor",
+        "drive_intake",
+        "process_import_job_task",
+        "process_export_job_task",
+        "poll_mailbox_task",
+        "process_ocr_task",
+        "process_journal_monitor_auto_task",
+        "process_drive_intake_auto_task",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "FILE_STORAGE_PATH",
+        "CRON_SECRET",
+        "GOOGLE_DRIVE_INTAKE_BATCH_SIZE",
+        "MAIL_PRIMARY_CHANNEL",
+        "/api/v1/jobs/worker-health",
+        "/api/v1/journal-monitors/auto-cron",
+        "celery -A app.celery_app.celery_app inspect ping",
+        "docker compose -f infra/vercel/docker-compose.workers.yml up -d --build",
+    ]
+    for term in required_terms:
+        assert term in runbook
+
+    assert "docs/architecture/celery-worker-topology.md" in readme
