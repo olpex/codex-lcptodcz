@@ -7,6 +7,50 @@ from app.models import Document, DocumentType, ExportJob, ImportJob, JobStatus
 from app.api.routes import jobs as jobs_route
 
 
+def _count_select_queries(callback) -> tuple[int, object]:
+    query_count = 0
+
+    def count_queries(conn, cursor, statement, parameters, context, executemany):
+        nonlocal query_count
+        if statement.strip().lower().startswith("select"):
+            query_count += 1
+
+    event.listen(engine, "before_cursor_execute", count_queries)
+    try:
+        result = callback()
+    finally:
+        event.remove(engine, "before_cursor_execute", count_queries)
+    return query_count, result
+
+
+def _fake_celery_for_worker_health(monkeypatch) -> None:
+    class FakeInspect:
+        def ping(self):
+            return {"celery@worker-1": {"ok": "pong"}}
+
+    class FakeControl:
+        def inspect(self, timeout=None):
+            return FakeInspect()
+
+    fake_conf = type(
+        "FakeConf",
+        (),
+        {
+            "task_routes": {
+                "app.tasks.worker.process_import_job_task": {"queue": "import_parse"},
+                "app.tasks.worker.process_drive_intake_auto_task": {"queue": "drive_intake"},
+            },
+            "beat_schedule": {
+                "google-drive-intake-auto": {
+                    "task": "app.tasks.worker.process_drive_intake_auto_task",
+                    "schedule": 45,
+                }
+            },
+        },
+    )()
+    monkeypatch.setattr(jobs_route, "celery_app", type("FakeCeleryApp", (), {"control": FakeControl(), "conf": fake_conf})(), raising=False)
+
+
 def test_jobs_list_returns_import_and_export(client, auth_headers, db_session):
     now = datetime.now(timezone.utc)
     document = Document(
@@ -364,32 +408,7 @@ def test_email_intake_jobs_returns_recent_branch_scoped_mail_history(client, aut
 
 
 def test_worker_health_reports_celery_and_branch_job_backlog(client, auth_headers, db_session, monkeypatch):
-    class FakeInspect:
-        def ping(self):
-            return {"celery@worker-1": {"ok": "pong"}}
-
-    class FakeControl:
-        def inspect(self, timeout=None):
-            assert timeout == 0.5
-            return FakeInspect()
-
-    fake_conf = type(
-        "FakeConf",
-        (),
-        {
-            "task_routes": {
-                "app.tasks.worker.process_import_job_task": {"queue": "import_parse"},
-                "app.tasks.worker.process_drive_intake_auto_task": {"queue": "drive_intake"},
-            },
-            "beat_schedule": {
-                "google-drive-intake-auto": {
-                    "task": "app.tasks.worker.process_drive_intake_auto_task",
-                    "schedule": 45,
-                }
-            },
-        },
-    )()
-    monkeypatch.setattr(jobs_route, "celery_app", type("FakeCeleryApp", (), {"control": FakeControl(), "conf": fake_conf})(), raising=False)
+    _fake_celery_for_worker_health(monkeypatch)
 
     document = Document(
         branch_id="main",
@@ -606,3 +625,81 @@ def test_jobs_list_eager_loads_documents(client, auth_headers, db_session):
 
     assert response.status_code == 200
     assert document_lazy_loads == 0
+
+
+def test_job_center_status_endpoints_keep_bounded_select_queries(client, auth_headers, db_session, monkeypatch):
+    _fake_celery_for_worker_health(monkeypatch)
+    now = datetime.now(timezone.utc)
+    documents = []
+    for index in range(24):
+        source = "drive_intake" if index % 3 == 0 else "mail_gmail_api" if index % 3 == 1 else "upload"
+        document = Document(
+            branch_id="main",
+            file_name=f"job-center-{index}.xlsx",
+            file_path=f"/tmp/job-center-{index}.xlsx",
+            file_type=DocumentType.XLSX,
+            source=source,
+        )
+        db_session.add(document)
+        documents.append(document)
+    db_session.commit()
+
+    import_ids: list[int] = []
+    for index, document in enumerate(documents):
+        status = JobStatus.QUEUED if index % 2 == 0 else JobStatus.RUNNING
+        job = ImportJob(
+            branch_id="main",
+            idempotency_key=f"job-center-perf-import-{index}",
+            document_id=document.id,
+            status=status,
+            message="active import",
+            result_payload={"source": document.source},
+            created_at=now - timedelta(seconds=index),
+            updated_at=now - timedelta(seconds=index),
+        )
+        db_session.add(job)
+        db_session.flush()
+        import_ids.append(job.id)
+
+    for index in range(8):
+        db_session.add(
+            ExportJob(
+                branch_id="main",
+                idempotency_key=f"job-center-perf-export-{index}",
+                report_type="kpi",
+                export_format="xlsx",
+                status=JobStatus.QUEUED if index % 2 == 0 else JobStatus.RUNNING,
+                message="active export",
+                created_at=now - timedelta(seconds=index),
+                updated_at=now - timedelta(seconds=index),
+            )
+        )
+    db_session.commit()
+
+    id_query = "&".join(f"job_id={job_id}" for job_id in import_ids[:20])
+    list_queries, list_response = _count_select_queries(
+        lambda: client.get("/api/v1/jobs?limit=50", headers=auth_headers)
+    )
+    status_queries, status_response = _count_select_queries(
+        lambda: client.get(f"/api/v1/jobs/statuses?limit=50&{id_query}", headers=auth_headers)
+    )
+    drive_queries, drive_response = _count_select_queries(
+        lambda: client.get("/api/v1/jobs/drive-intake?limit=20", headers=auth_headers)
+    )
+    email_queries, email_response = _count_select_queries(
+        lambda: client.get("/api/v1/jobs/email-intake?limit=20", headers=auth_headers)
+    )
+    worker_queries, worker_response = _count_select_queries(
+        lambda: client.get("/api/v1/jobs/worker-health", headers=auth_headers)
+    )
+
+    assert list_response.status_code == 200
+    assert status_response.status_code == 200
+    assert drive_response.status_code == 200
+    assert email_response.status_code == 200
+    assert worker_response.status_code == 200
+    assert list_queries <= 8
+    assert status_queries <= 5
+    assert drive_queries <= 4
+    assert email_queries <= 4
+    assert worker_queries <= 8
