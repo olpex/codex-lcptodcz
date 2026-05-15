@@ -177,6 +177,32 @@ const noDataSection = {
   ]
 };
 
+const failedDriveSection = {
+  ...section,
+  last_sync_status: "failed",
+  last_sync_message: "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON не налаштовано для приватної папки",
+  last_synced_at: null,
+  entries: []
+};
+
+const emptyDriveSection = {
+  ...section,
+  last_sync_status: "success",
+  last_sync_message: null,
+  stats: {
+    total: 0,
+    complete: 0,
+    schedule_only: 0,
+    trainees_only: 0,
+    not_processed: 0,
+    unknown_code: 0,
+    workload_only: 0,
+    workload_and_trainees: 0,
+    workload_trainees_schedule: 0
+  },
+  entries: []
+};
+
 async function loginAndMockJournals(
   page: Page,
   options: {
@@ -341,6 +367,30 @@ test("journal monitor shows extracted hours when workload details are incomplete
   const row = page.locator("#journal-monitor-entries tbody tr", { hasText: "85-26" });
   await expect(row.locator("td").nth(4).getByText("Н/даних", { exact: true })).toBeVisible();
   await expect(row.locator("td").nth(5)).toHaveText("30");
+});
+
+test("journal monitor explains Drive sync failures inline", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...failedDriveSection, entries: [] }],
+    detailSection: failedDriveSection
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByText("Немає доступу до Google Drive")).toBeVisible();
+  await expect(page.getByText("GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON не налаштовано для приватної папки")).toBeVisible();
+});
+
+test("journal monitor explains an empty Drive folder after sync", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...emptyDriveSection, entries: [] }],
+    detailSection: emptyDriveSection
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByText("Папка Google Drive порожня")).toBeVisible();
+  await expect(page.getByText("Перевірте, чи у вибраній папці є журнали груп, або оновіть моніторинг після додавання файлів.")).toBeVisible();
 });
 
 test("journal monitor workload status title lists teachers and course hours", async ({ page }) => {

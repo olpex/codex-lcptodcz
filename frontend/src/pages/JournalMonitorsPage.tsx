@@ -184,6 +184,25 @@ function hasDailyActivity(section: JournalMonitorSection): boolean {
   return Boolean(activity && (activity.created_count > 0 || activity.changed_count > 0));
 }
 
+function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "info" | "error"; text: string } | null {
+  if (!section) return null;
+  if (section.last_sync_status === "failed") {
+    return {
+      tone: "error",
+      text: `Немає доступу до Google Drive. ${
+        section.last_sync_message || "Перевірте доступ до папки, service account або Google Drive API."
+      }`
+    };
+  }
+  if (section.last_sync_status !== "never" && section.stats.total === 0) {
+    return {
+      tone: "info",
+      text: "Папка Google Drive порожня. Перевірте, чи у вибраній папці є журнали груп, або оновіть моніторинг після додавання файлів."
+    };
+  }
+  return null;
+}
+
 function normalizeSearchValue(value: string | null | undefined): string {
   return (value || "").toLocaleLowerCase("uk-UA").trim();
 }
@@ -361,6 +380,7 @@ export function JournalMonitorsPage() {
   );
   const selectedEntryCount = selectedEntries.length;
   const allVisibleEntriesSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedEntryIds[row.id]);
+  const driveStateNotice = getDriveStateNotice(detail);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -911,6 +931,8 @@ export function JournalMonitorsPage() {
             )}
           </div>
         )}
+
+        {driveStateNotice && <InlineNotice className="mb-4" tone={driveStateNotice.tone} text={driveStateNotice.text} />}
 
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
