@@ -26,6 +26,20 @@ def test_root_directory_has_no_legacy_patch_scripts():
     assert offenders == []
 
 
+def test_celery_observability_is_optional_in_compose():
+    repo_root = Path(__file__).resolve().parents[3]
+    root_compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    worker_compose = (repo_root / "infra" / "vercel" / "docker-compose.workers.yml").read_text(encoding="utf-8")
+    requirements = (repo_root / "backend" / "requirements.txt").read_text(encoding="utf-8")
+
+    for compose_text in (root_compose, worker_compose):
+      assert "flower:" in compose_text
+      assert "observability" in compose_text
+      assert "celery -A app.celery_app.celery_app flower" in compose_text
+
+    assert "flower==" in requirements
+
+
 def test_browser_auto_tick_endpoint_no_longer_runs_processing(client, auth_headers, monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("browser auto-tick must not trigger background processing")

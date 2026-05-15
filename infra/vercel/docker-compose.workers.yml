@@ -36,5 +36,24 @@ services:
       - redis
     command: celery -A app.celery_app.celery_app beat --loglevel=info
 
+  flower:
+    build:
+      context: ../../backend
+    restart: unless-stopped
+    profiles:
+      - observability
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    volumes:
+      - docs_data:/data/documents
+    depends_on:
+      - redis
+    ports:
+      - "127.0.0.1:5555:5555"
+    command: celery -A app.celery_app.celery_app flower --port=5555
+
 volumes:
   docs_data:

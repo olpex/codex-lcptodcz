@@ -14,6 +14,7 @@
 | `api` | FastAPI на `:8000`, `/docs`, `/health`, `/api/v1/*` | PostgreSQL, Redis, `docs_data` |
 | `worker` | Celery worker для import/OCR/export/mail/journal/drive черг | PostgreSQL, Redis, `docs_data` |
 | `beat` | Celery scheduler для періодичних задач | PostgreSQL, Redis |
+| `flower` | Опційний Celery monitoring UI на `127.0.0.1:5555` | Redis, profile `observability` |
 | `redis` | Celery broker/result backend і короткий cache | немає |
 | `postgres` | Основна база даних | `pg_data` |
 
@@ -121,6 +122,22 @@ docker compose exec worker celery -A app.celery_app.celery_app inspect ping
 ```
 
 Очікування: відповідь від worker node. Якщо відповіді немає, перевірте `REDIS_URL`, мережу Docker і logs worker.
+
+### Celery observability через Flower
+
+Flower не стартує за замовчуванням і не змінює роботу worker/beat. Для тимчасового перегляду черг, retry і failed tasks:
+
+```bash
+docker compose --profile observability up flower
+```
+
+Для split worker compose:
+
+```bash
+docker compose -f infra/vercel/docker-compose.workers.yml --profile observability up flower
+```
+
+Очікування: Flower доступний локально на `http://127.0.0.1:5555`. Не публікуйте цей порт назовні без окремої автентифікації або VPN/tunnel policy.
 
 ### Jobs API
 

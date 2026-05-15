@@ -21,6 +21,14 @@ Vercel не запускає довгоживучі процеси `celery worke
 docker compose -f infra/vercel/docker-compose.workers.yml up -d --build
 ```
 
+## Опційний моніторинг Flower
+
+```bash
+docker compose -f infra/vercel/docker-compose.workers.yml --profile observability up flower
+```
+
+Flower відкривається тільки на `127.0.0.1:5555`. Не публікуйте порт назовні без окремого захисту.
+
 ## Мінімальна перевірка
 
 1. В API викликати `POST /api/v1/mail/poll-now`.
