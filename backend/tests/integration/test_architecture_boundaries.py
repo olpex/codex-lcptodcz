@@ -113,3 +113,14 @@ def test_forced_imap_worker_poll_is_disabled_without_fallback(monkeypatch):
 
     assert result["disabled"] is True
     assert result["primary_channel"] == "google_apps_script"
+
+
+def test_drive_intake_batch_size_is_documented_as_recommended_default():
+    repo_root = Path(__file__).resolve().parents[3]
+    env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    deploy = (repo_root / "infra" / "DEPLOY.md").read_text(encoding="utf-8")
+
+    assert "GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5" in env_example
+    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`" in readme
+    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `5` |" in deploy

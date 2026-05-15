@@ -60,7 +60,7 @@ def _get_db() -> Session:
 
 
 def _drive_intake_batch_size() -> int:
-    raw_value = getattr(settings, "google_drive_intake_batch_size", 1)
+    raw_value = getattr(settings, "google_drive_intake_batch_size", 5)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):

@@ -51,7 +51,7 @@
 
 - Worker виконує довгі задачі: імпорт файлів, OCR, export, mail ingest, journal monitor, Drive intake.
 - Beat запускає періодичні задачі.
-- Drive intake за замовчуванням обробляє `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=1`, щоб зберегти стару поведінку. Для bulk-імпорту значення можна обережно збільшувати після перевірки.
+- Drive intake за замовчуванням обробляє до `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5` файлів за tick. Для більш обережного rollout значення можна тимчасово зменшити до `1`.
 
 ## 3. Email channels
 
@@ -77,17 +77,16 @@ IMAP лишається контрольованим fallback:
 | `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED` | Вмикає server-side автообробку intake-папки | `true` |
 | `GOOGLE_DRIVE_INTAKE_FOLDER_URL` | URL intake-папки | поточна production папка |
 | `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | Інтервал beat-задачі | `45` |
-| `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `1` |
+| `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `5` |
 | `GOOGLE_DRIVE_INTAKE_UPDATE_MODE` | Режим оновлення XLS/XLSX даних | `overwrite` |
 | `GOOGLE_DRIVE_INTAKE_PROCESSED_MARKER` | Маркер обробленого Drive-файлу | `[processed]` |
 
-Безпечне збільшення batch:
+Безпечний rollout batch:
 
-1. Залиште `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=1` після деплою.
-2. Перевірте, що worker/beat стабільні, а jobs завершуються.
-3. Підніміть до `3`.
-4. Перевірте logs worker, `GET /api/v1/jobs`, кількість failed jobs і стан файлів у Drive.
-5. Піднімайте далі тільки якщо немає таймаутів Drive API або помилок імпорту.
+1. Для штатного запуску використовуйте `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`.
+2. Якщо потрібно дуже обережно перевірити нове середовище, тимчасово зменшіть до `1`.
+3. Перевірте logs worker, `GET /api/v1/jobs`, Worker Health у Job Center, кількість failed jobs і стан файлів у Drive.
+4. Піднімайте вище `5` тільки якщо немає таймаутів Drive API або помилок імпорту.
 
 ## 5. Мінімальна перевірка після деплою
 
@@ -177,7 +176,7 @@ docker compose -f infra/vercel/docker-compose.workers.yml --profile observabilit
 | Apps Script відправляє, але job не створюється | `MAIL_WEBHOOK_SECRET`, URL endpoint, logs API |
 | IMAP забирає листи неочікувано | `IMAP_AUTO_POLL_ENABLED=false`, `IMAP_FALLBACK_ENABLED=false` |
 | Drive файл імпортується, але не маркується | service account має бути `Editor` для папки або файла |
-| Багато Drive файлів обробляються повільно | Після стабільної перевірки підніміть `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` |
+| Багато Drive файлів обробляються повільно | Перевірте Worker Health і значення `GOOGLE_DRIVE_INTAKE_BATCH_SIZE`; після стабільної перевірки можна підняти вище `5` |
 
 ## 7. Правило безпечних змін
 
