@@ -499,6 +499,12 @@ test("job center can re-import a Google Drive intake file from the Drive panel",
   const drivePanel = page.getByTestId("drive-intake-panel");
   await expect(drivePanel).toContainText("46-26 Schedule.docx");
   await drivePanel.getByRole("button", { name: "Повторно імпортувати #99" }).click();
+  await expect.poll(() => reprocessRequested).toBe(false);
+
+  const confirmDialog = page.getByRole("alertdialog", { name: "Повторно імпортувати файл" });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog).toContainText("46-26 Schedule.docx");
+  await confirmDialog.getByRole("button", { name: "Повторно імпортувати" }).click();
 
   await expect.poll(() => reprocessRequested).toBe(true);
   await expect.poll(() => driveHistoryRequests).toBeGreaterThan(1);

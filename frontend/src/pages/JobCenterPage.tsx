@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
@@ -199,6 +200,8 @@ export function JobCenterPage() {
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
   const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
+  const [reprocessTarget, setReprocessTarget] = useState<JobListItem | null>(null);
+  const [isReprocessingImport, setIsReprocessingImport] = useState(false);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
     const snapshot: JobStatsSnapshot = {
@@ -600,6 +603,7 @@ export function JobCenterPage() {
       showError("Для цієї задачі немає документа для повторного імпорту");
       return;
     }
+    setIsReprocessingImport(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/reprocess-import`, { method: "POST" });
       setJobType("import");
@@ -609,10 +613,21 @@ export function JobCenterPage() {
       appendSnapshot(data);
       await loadDriveIntakeJobs();
       await loadEmailIntakeJobs();
+      setReprocessTarget(null);
       showSuccess(`Створено повторний імпорт #${payload.job.id}`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsReprocessingImport(false);
     }
+  };
+
+  const requestReprocessImportJob = (item: JobListItem) => {
+    if (item.job_type !== "import" || !item.document_id) {
+      showError("Для цієї задачі немає документа для повторного імпорту");
+      return;
+    }
+    setReprocessTarget(item);
   };
 
   const rollbackImportJob = async (item: JobListItem) => {
@@ -761,7 +776,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700"
-                onClick={() => reprocessImportJob(item)}
+                onClick={() => requestReprocessImportJob(item)}
               >
                 2.2 Повторно імпортувати
               </button>
@@ -828,6 +843,9 @@ export function JobCenterPage() {
       succeededCount: emailIntakeRows.filter((item) => item.job.status === "succeeded").length
     };
   }, [emailIntakeRows]);
+  const reprocessTargetFileName = reprocessTarget
+    ? getPayloadText(reprocessTarget.job.result_payload, "drive_file_name") || reprocessTarget.document_file_name || `задача #${reprocessTarget.job.id}`
+    : "цей файл";
 
   return (
     <div className="space-y-5">
@@ -968,7 +986,7 @@ export function JobCenterPage() {
                       <button
                         type="button"
                         className="mt-2 rounded bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800"
-                        onClick={() => reprocessImportJob(item)}
+                        onClick={() => requestReprocessImportJob(item)}
                       >
                         Повторно імпортувати #{item.job.id}
                       </button>
@@ -1509,6 +1527,20 @@ export function JobCenterPage() {
           pageSizeOptions={[10, 20, 50, 100]}
         />
       </Panel>
+      <ConfirmDialog
+        open={Boolean(reprocessTarget)}
+        title="Повторно імпортувати файл"
+        description={`Створити нову задачу імпорту для «${reprocessTargetFileName}»? Поточна історія залишиться без змін, а новий імпорт піде окремою задачею.`}
+        confirmLabel={isReprocessingImport ? "Створюємо..." : "Повторно імпортувати"}
+        confirmVariant="primary"
+        confirmDisabled={isReprocessingImport}
+        onConfirm={() => {
+          if (reprocessTarget) void reprocessImportJob(reprocessTarget);
+        }}
+        onCancel={() => {
+          if (!isReprocessingImport) setReprocessTarget(null);
+        }}
+      />
     </div>
   );
 }
