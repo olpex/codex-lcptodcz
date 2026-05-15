@@ -62,6 +62,14 @@ function getJobRowClassName(item: JobListItem): string | undefined {
   return undefined;
 }
 
+function isActiveJobStatus(status: Job["status"]): boolean {
+  return status === "queued" || status === "running";
+}
+
+function getJobKey(jobType: string, jobId: number): string {
+  return `${jobType}-${jobId}`;
+}
+
 function getFileExtension(fileName: string): string {
   const parts = fileName.toLowerCase().split(".");
   return parts.length < 2 ? "" : parts[parts.length - 1];
@@ -369,6 +377,53 @@ export function JobCenterPage() {
     }
   };
 
+  const buildJobStatusesPath = (items: JobListItem[]) => {
+    const params = new URLSearchParams();
+    params.set("limit", "200");
+    for (const item of items) {
+      params.append("job_id", String(item.job.id));
+    }
+    return `/jobs/statuses?${params.toString()}`;
+  };
+
+  const refreshActiveJobStatuses = async (items: JobListItem[]) => {
+    try {
+      const payload = await request<JobStatusPayload[]>(buildJobStatusesPath(items));
+      const requestedKeys = new Set(items.map((item) => getJobKey(item.job_type, item.job.id)));
+      const currentKeys = new Set(rows.map((item) => getJobKey(item.job_type, item.job.id)));
+      const statusByKey = new Map(payload.map((item) => [getJobKey(item.job_type, item.job.id), item]));
+      const hasUnknownActiveJob = payload.some(
+        (item) => isActiveJobStatus(item.job.status) && !currentKeys.has(getJobKey(item.job_type, item.job.id))
+      );
+      const hasCompletedRequestedJob = payload.some(
+        (item) => requestedKeys.has(getJobKey(item.job_type, item.job.id)) && !isActiveJobStatus(item.job.status)
+      );
+
+      setRows((prev) => {
+        let changed = false;
+        const nextRows = prev.map((row) => {
+          const status = statusByKey.get(getJobKey(row.job_type, row.job.id));
+          if (!status) return row;
+          changed = true;
+          return {
+            ...row,
+            job_type: status.job_type,
+            job: status.job
+          };
+        });
+        if (changed) appendSnapshot(nextRows);
+        return changed ? nextRows : prev;
+      });
+      setLoadError(null);
+
+      if (hasUnknownActiveJob || hasCompletedRequestedJob) {
+        await loadJobs();
+      }
+    } catch (error) {
+      setLoadError((error as Error).message);
+    }
+  };
+
   useEffect(() => {
     setStatsHistory([]);
     loadJobs();
@@ -389,10 +444,15 @@ export function JobCenterPage() {
   useEffect(() => {
     if (!autoRefresh) return;
     const timer = window.setInterval(() => {
-      loadJobs();
+      const activeRows = rows.filter((item) => isActiveJobStatus(item.job.status));
+      if (activeRows.length > 0) {
+        void refreshActiveJobStatuses(activeRows);
+      } else {
+        void loadJobs();
+      }
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [autoRefresh, jobType, jobStatus, dateFrom, dateTo]);
+  }, [autoRefresh, rows, jobType, jobStatus, dateFrom, dateTo]);
 
   usePageRefresh(() => loadJobs(), { intervalMs: 0, refreshOnFocus: false });
 
@@ -660,7 +720,7 @@ export function JobCenterPage() {
   );
 
   const activeJobRows = useMemo(
-    () => rows.filter((item) => item.job.status === "queued" || item.job.status === "running"),
+    () => rows.filter((item) => isActiveJobStatus(item.job.status)),
     [rows]
   );
   const attentionJobRows = useMemo(

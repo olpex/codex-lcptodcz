@@ -97,6 +97,89 @@ def test_jobs_list_supports_filters(client, auth_headers, db_session):
     assert payload[0]["job"]["status"] == "failed"
 
 
+def test_job_statuses_returns_lightweight_branch_scoped_updates(client, auth_headers, db_session):
+    now = datetime.now(timezone.utc)
+    document = Document(
+        branch_id="main",
+        file_name="status.xlsx",
+        file_path="/tmp/status.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    other_document = Document(
+        branch_id="other",
+        file_name="hidden.xlsx",
+        file_path="/tmp/hidden.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    db_session.add_all([document, other_document])
+    db_session.commit()
+    db_session.refresh(document)
+    db_session.refresh(other_document)
+
+    queued_import = ImportJob(
+        branch_id="main",
+        idempotency_key="status-import-queued",
+        document_id=document.id,
+        status=JobStatus.QUEUED,
+        message="queued",
+        created_at=now,
+        updated_at=now,
+    )
+    succeeded_import = ImportJob(
+        branch_id="main",
+        idempotency_key="status-import-succeeded",
+        document_id=document.id,
+        status=JobStatus.SUCCEEDED,
+        message="done",
+        created_at=now,
+        updated_at=now,
+    )
+    other_branch_import = ImportJob(
+        branch_id="other",
+        idempotency_key="status-import-other-branch",
+        document_id=other_document.id,
+        status=JobStatus.RUNNING,
+        message="hidden",
+        created_at=now,
+        updated_at=now,
+    )
+    running_export = ExportJob(
+        branch_id="main",
+        idempotency_key="status-export-running",
+        report_type="kpi",
+        export_format="xlsx",
+        status=JobStatus.RUNNING,
+        message="running",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([queued_import, succeeded_import, other_branch_import, running_export])
+    db_session.commit()
+    for job in [queued_import, succeeded_import, other_branch_import, running_export]:
+        db_session.refresh(job)
+
+    response = client.get(
+        (
+            "/api/v1/jobs/statuses"
+            f"?job_id={queued_import.id}"
+            f"&job_id={succeeded_import.id}"
+            f"&job_id={other_branch_import.id}"
+            f"&job_id={running_export.id}"
+        ),
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    status_by_key = {(item["job_type"], item["job"]["id"]): item["job"]["status"] for item in payload}
+    assert status_by_key[("import", queued_import.id)] == "queued"
+    assert status_by_key[("import", succeeded_import.id)] == "succeeded"
+    assert status_by_key[("export", running_export.id)] == "running"
+    assert ("import", other_branch_import.id) not in status_by_key
+
+
 def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):
     dispatched: list[int] = []
 

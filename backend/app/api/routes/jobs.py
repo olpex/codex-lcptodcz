@@ -177,6 +177,45 @@ def list_jobs(
     return items[:limit]
 
 
+@router.get("/statuses", response_model=list[JobStatusResponse])
+def list_job_statuses(
+    db: DbSession,
+    current_user: CurrentUser,
+    job_id: list[int] | None = Query(default=None),
+    include_active: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> list[JobStatusResponse]:
+    ids = set(job_id or [])
+    active_statuses = {JobStatus.QUEUED, JobStatus.RUNNING}
+
+    import_query = apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+    export_query = apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+    if ids:
+        import_filters = [ImportJob.id.in_(ids)]
+        export_filters = [ExportJob.id.in_(ids)]
+        if include_active:
+            import_filters.append(ImportJob.status.in_(active_statuses))
+            export_filters.append(ExportJob.status.in_(active_statuses))
+        import_query = import_query.filter(or_(*import_filters))
+        export_query = export_query.filter(or_(*export_filters))
+    else:
+        import_query = import_query.filter(ImportJob.status.in_(active_statuses))
+        export_query = export_query.filter(ExportJob.status.in_(active_statuses))
+
+    items = [
+        *(
+            JobStatusResponse(job_type="import", job=JobResponse.model_validate(job))
+            for job in import_query.order_by(ImportJob.updated_at.desc()).limit(limit).all()
+        ),
+        *(
+            JobStatusResponse(job_type="export", job=JobResponse.model_validate(job))
+            for job in export_query.order_by(ExportJob.updated_at.desc()).limit(limit).all()
+        ),
+    ]
+    items.sort(key=lambda item: item.job.updated_at, reverse=True)
+    return items[:limit]
+
+
 @router.get("/{job_id}", response_model=JobStatusResponse)
 def get_job_status(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatusResponse:
     job_type, job = _resolve_job(job_id, db, current_user.branch_id)
