@@ -7,7 +7,6 @@ import { API_URL } from "../api/client";
 import { formatGroupStatus } from "../i18n/statuses";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import type {
   ActiveGroupBetweenDates,
@@ -260,7 +259,6 @@ export function GroupsPage() {
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
-  const triggerJournalAutoTick = useJournalAutoTick(request, canEdit);
 
   const selectedGroups = useMemo(
     () => groups.filter((group) => selectedGroupIds[group.id]),
@@ -413,7 +411,6 @@ export function GroupsPage() {
     const showLoading = !options.quiet || groups.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      triggerJournalAutoTick();
       const data = await request<Group[]>("/groups");
       setGroups(data);
       setSelectedGroupIds((prev) => {

@@ -81,6 +81,24 @@ def _run_import_inline_or_raise(import_job_id: int, db: DbSession) -> str:
     return "inline"
 
 
+def _mail_primary_channel() -> str:
+    return settings.mail_primary_channel.strip().lower() or "google_apps_script"
+
+
+def _imap_polling_disabled_payload() -> dict:
+    return {
+        "message": "Google Apps Script webhook is the primary mail intake channel; IMAP fallback is disabled",
+        "dispatch_mode": "disabled",
+        "primary_channel": _mail_primary_channel(),
+        "imap_fallback_enabled": settings.imap_fallback_enabled,
+        "result": {"processed": 0, "disabled": True},
+    }
+
+
+def _should_disable_manual_imap_poll() -> bool:
+    return _mail_primary_channel() == "google_apps_script" and not settings.imap_fallback_enabled
+
+
 def _parse_optional_date(value: object) -> date | None:
     if not value:
         return None
@@ -225,6 +243,18 @@ def _create_schedule_from_payload(db: DbSession, current_user: CurrentUser, draf
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
+    if _should_disable_manual_imap_poll():
+        payload = _imap_polling_disabled_payload()
+        write_audit(
+            db,
+            actor_user_id=current_user.id,
+            action="mail.poll_now",
+            entity_type="task",
+            entity_id="disabled",
+            details={"dispatch_mode": payload["dispatch_mode"], "primary_channel": payload["primary_channel"]},
+        )
+        return payload
+
     dispatch_mode = "queued"
     task_id: str | None = None
     inline_result: dict | None = None
@@ -241,18 +271,22 @@ def poll_now(current_user: CurrentUser, db: DbSession) -> dict:
         action="mail.poll_now",
         entity_type="task",
         entity_id=task_id or "inline",
-        details={"dispatch_mode": dispatch_mode},
+        details={"dispatch_mode": dispatch_mode, "primary_channel": _mail_primary_channel()},
     )
     if dispatch_mode == "inline":
         return {
             "message": "Черга недоступна, опитування виконано одразу",
             "dispatch_mode": dispatch_mode,
+            "primary_channel": _mail_primary_channel(),
+            "imap_fallback_enabled": settings.imap_fallback_enabled,
             "result": inline_result or {},
         }
     return {
         "message": "Завдання опитування поштової скриньки поставлено в чергу",
         "task_id": task_id,
         "dispatch_mode": dispatch_mode,
+        "primary_channel": _mail_primary_channel(),
+        "imap_fallback_enabled": settings.imap_fallback_enabled,
     }
 
 
@@ -269,6 +303,8 @@ def poll_mailbox_cron(authorization: str | None = Header(default=None)) -> dict:
     payload: dict[str, object] = {
         "message": "Автоматичне IMAP-опитування вимкнено; пошту обробляє Apps Script",
         "dispatch_mode": "disabled",
+        "primary_channel": _mail_primary_channel(),
+        "imap_fallback_enabled": settings.imap_fallback_enabled,
         "result": {"processed": 0, "disabled": True},
     }
     return payload

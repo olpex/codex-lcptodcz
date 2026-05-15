@@ -245,7 +245,7 @@ test("schedule filter shows empty state when conflicts are absent", async ({ pag
   await expect(page.locator("table")).toHaveCount(0);
 });
 
-test("schedule page pulls Google Drive intake and refreshes imported lessons", async ({ page }) => {
+test("schedule page does not trigger Google Drive intake from the browser", async ({ page }) => {
   const importedSlot: MockScheduleSlot = {
     id: 41,
     group_id: 46,
@@ -340,13 +340,10 @@ test("schedule page pulls Google Drive intake and refreshes imported lessons", a
 
   await page.goto("/schedule");
 
-  await expect.poll(() => driveTickRequests).toBeGreaterThan(0);
-  await page.getByRole("button", { name: "Розгорнути все" }).click();
-  await expect(page.locator("[draggable=true]", { hasText: "46-26" })).toBeVisible();
-  await expect(page.locator("[draggable=true]", { hasText: "Войтехівська Г." }).first()).toBeVisible();
+  await expect.poll(() => driveTickRequests).toBe(0);
 });
 
-test("schedule page keeps polling Google Drive intake while open", async ({ page }) => {
+test("schedule page does not poll Google Drive intake while open", async ({ page }) => {
   await page.clock.install();
 
   const importedSlot: MockScheduleSlot = {
@@ -432,14 +429,13 @@ test("schedule page keeps polling Google Drive intake while open", async ({ page
   });
 
   await page.goto("/schedule");
-  await expect.poll(() => driveTickRequests).toBe(1);
+  await expect.poll(() => driveTickRequests).toBe(0);
   await page.clock.fastForward(45_000);
 
-  await expect.poll(() => driveTickRequests).toBeGreaterThanOrEqual(2);
-  await expect(page.getByRole("button", { name: /2026/ })).toContainText("46-26");
+  await expect.poll(() => driveTickRequests).toBe(0);
 });
 
-test("schedule page shows Google Drive intake failures", async ({ page }) => {
+test("schedule page does not show browser-triggered Google Drive intake failures", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(
       "suptc_auth",
@@ -497,10 +493,10 @@ test("schedule page shows Google Drive intake failures", async ({ page }) => {
 
   await page.goto("/schedule");
 
-  await expect(page.getByText("Не вдалося отримати доступ до папки Google Drive")).toBeVisible();
+  await expect(page.getByText("Не вдалося отримати доступ до папки Google Drive")).toHaveCount(0);
 });
 
-test("schedule page shows Google Drive processed-file marking failures", async ({ page }) => {
+test("schedule page does not show browser-triggered Google Drive processed-file marking failures", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(
       "suptc_auth",
@@ -561,7 +557,7 @@ test("schedule page shows Google Drive processed-file marking failures", async (
 
   await page.goto("/schedule");
 
-  await expect(page.getByText("Google Drive denied rename")).toBeVisible();
+  await expect(page.getByText("Google Drive denied rename")).toHaveCount(0);
 });
 
 test("same time in the same auditorium is not treated as a conflict", async ({ page }) => {

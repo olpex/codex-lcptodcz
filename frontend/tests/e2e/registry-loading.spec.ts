@@ -97,7 +97,7 @@ test("groups registry does not auto-load heavy detail data before a group is sel
 
   try {
     await page.goto("/groups");
-    await expect(page.getByText("73-26", { exact: true })).toBeVisible({ timeout: 1000 });
+    await expect(page.getByRole("row", { name: /73-26/ }).last()).toBeVisible({ timeout: 2000 });
     await expect.poll(() => detailRequests, { timeout: 1000 }).toBe(0);
     await expect.poll(() => auditRequests, { timeout: 1000 }).toBe(0);
   } finally {
@@ -105,13 +105,12 @@ test("groups registry does not auto-load heavy detail data before a group is sel
   }
 });
 
-test("trainees registry does not wait for journal auto tick", async ({ page }) => {
+test("trainees registry loads without journal auto tick", async ({ page }) => {
   let releaseAutoTick: () => void = () => {};
   const autoTickGate = new Promise<void>((resolve) => {
     releaseAutoTick = resolve;
   });
-  let refreshStarted = false;
-  let traineesRequestsAfterRefresh = 0;
+  let autoTickRequests = 0;
 
   await installAuth(page);
   await page.route("**/api/v1/**", async (route) => {
@@ -125,6 +124,7 @@ test("trainees registry does not wait for journal auto tick", async ({ page }) =
     }
 
     if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
+      autoTickRequests += 1;
       await autoTickGate;
       return route.fulfill({
         status: 202,
@@ -153,9 +153,6 @@ test("trainees registry does not wait for journal auto tick", async ({ page }) =
     }
 
     if (path.endsWith("/trainees") && method === "GET") {
-      if (refreshStarted) {
-        traineesRequestsAfterRefresh += 1;
-      }
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -198,15 +195,13 @@ test("trainees registry does not wait for journal auto tick", async ({ page }) =
   try {
     await page.goto("/trainees");
     await expect(page.getByRole("button", { name: /Група: 73-26/ })).toBeVisible({ timeout: 1000 });
-    refreshStarted = true;
-    await page.locator("#main-content").getByRole("button", { name: "Оновити", exact: true }).click();
-    await expect.poll(() => traineesRequestsAfterRefresh, { timeout: 1000 }).toBeGreaterThan(0);
+    await expect.poll(() => autoTickRequests, { timeout: 1000 }).toBe(0);
   } finally {
     releaseAutoTick();
   }
 });
 
-test("trainees registry schedules background intake sync every 45 seconds", async ({ page }) => {
+test("trainees registry does not schedule browser-driven intake sync", async ({ page }) => {
   await installAuth(page);
   await page.addInitScript(() => {
     const originalSetInterval = window.setInterval.bind(window);
@@ -227,14 +222,6 @@ test("trainees registry schedules background intake sync every 45 seconds", asyn
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(authUserPayload()) });
     }
 
-    if (path.endsWith("/journal-monitors/auto-tick") && method === "POST") {
-      return route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({ processed_sections: 0, failed_sections: 0, drive_intake_processed: 0, drive_intake_failed: 0 })
-      });
-    }
-
     if (path.endsWith("/groups") && method === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     }
@@ -252,5 +239,5 @@ test("trainees registry schedules background intake sync every 45 seconds", asyn
     .poll(() => page.evaluate(() => (window as unknown as { __suptcIntervals: number[] }).__suptcIntervals), {
       timeout: 1000
     })
-    .toContain(45_000);
+    .not.toContain(45_000);
 });

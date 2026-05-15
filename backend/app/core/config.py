@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     imap_contract_sender_aliases: str = Field(default="olppara@gmail.com")
     imap_contract_attachment_prefix: str = Field(default="Договори")
     imap_contract_update_mode: str = Field(default="overwrite")
+    mail_primary_channel: str = Field(default="google_apps_script")
+    imap_fallback_enabled: bool = Field(default=False)
     cron_secret: str = Field(default="")
     mail_webhook_secret: str = Field(default="")
 
@@ -97,6 +99,10 @@ class Settings(BaseSettings):
             if email and email not in emails:
                 emails.append(email)
         return emails
+
+    @property
+    def mail_primary_channel_normalized(self) -> str:
+        return self.mail_primary_channel.strip().lower()
 
 
 @lru_cache

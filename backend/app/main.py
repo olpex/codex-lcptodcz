@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,14 @@ from app.core.security import hash_password
 from app.db.session import Base, SessionLocal, engine
 from app.models import Role, RoleName, Subject, User
 from app.services.storage import storage_path
+
+SUPPORTED_API_VERSION = "1"
+SUPPORTED_API_VERSION_ALIASES = {"1", "v1"}
+
+
+def _is_versioned_api_path(path: str) -> bool:
+    api_prefix = settings.api_v1_prefix.rstrip("/")
+    return path == api_prefix or path.startswith(f"{api_prefix}/")
 
 
 def ensure_runtime_schema() -> None:
@@ -116,8 +125,18 @@ def create_app() -> FastAPI:
     )
 
     @app.middleware("http")
-    async def add_noindex_header(_request, call_next):
-        response = await call_next(_request)
+    async def add_api_policy_headers(request, call_next):
+        is_versioned_api = _is_versioned_api_path(request.url.path)
+        requested_version = request.headers.get("X-API-Version")
+        if is_versioned_api and requested_version and requested_version.strip().lower() not in SUPPORTED_API_VERSION_ALIASES:
+            response = JSONResponse(
+                status_code=400,
+                content={"detail": "Unsupported API version"},
+            )
+        else:
+            response = await call_next(request)
+        if is_versioned_api:
+            response.headers["X-API-Version"] = SUPPORTED_API_VERSION
         response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet, noimageindex"
         return response
 

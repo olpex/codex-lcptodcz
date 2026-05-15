@@ -211,6 +211,12 @@ def process_export_job_task(self, export_job_id: int) -> dict:
     retry_kwargs={"max_retries": 5},
 )
 def poll_mailbox_task(self, force: bool = False) -> dict:
+    if not settings.imap_fallback_enabled:
+        return {
+            "processed": 0,
+            "disabled": True,
+            "primary_channel": settings.mail_primary_channel.strip().lower() or "google_apps_script",
+        }
     if not force and not settings.imap_auto_poll_enabled:
         return {"processed": 0, "disabled": True}
     db = _get_db()

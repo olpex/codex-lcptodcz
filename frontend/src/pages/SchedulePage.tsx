@@ -7,7 +7,6 @@ import { StickyActionBar } from "../components/StickyActionBar";
 import { TrendStatCard } from "../components/TrendStatCard";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 import type { ScheduleDeleteResult, ScheduleSlot, Teacher } from "../types/api";
 
@@ -28,7 +27,6 @@ type ScheduleSnapshot = {
 };
 
 const STATS_HISTORY_LIMIT = 12;
-const DRIVE_INTAKE_AUTO_TICK_MS = 45_000;
 type ConflictInterval = {
   slotId: number;
   start: number;
@@ -433,7 +431,6 @@ export function SchedulePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [driveSyncNotice, setDriveSyncNotice] = useState<string | null>(null);
   const [teacherToDelete, setTeacherToDelete] = useState<TeacherWithWorkload | null>(null);
   const [isDeletingTeacher, setIsDeletingTeacher] = useState(false);
   const [selectedScheduleGroupId, setSelectedScheduleGroupId] = useState("");
@@ -441,7 +438,6 @@ export function SchedulePage() {
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
 
   const canGenerate = user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
-  const triggerJournalAutoTick = useJournalAutoTick(request, canGenerate);
 
   const appendSnapshot = (data: ScheduleSlot[]) => {
     const totalHours = Number(data.reduce((acc, slot) => acc + toSlotHours(slot), 0).toFixed(1));
@@ -527,40 +523,6 @@ export function SchedulePage() {
     fetchSchedule();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!canGenerate) return;
-    let isActive = true;
-
-    const runDriveIntakeTick = () => {
-      const tickPromise = triggerJournalAutoTick();
-      if (!tickPromise) return;
-      tickPromise.then((result) => {
-        if (!isActive) return;
-        if (result?.drive_intake_marking_error) {
-          setDriveSyncNotice(result.drive_intake_marking_error);
-        }
-        if (result?.drive_intake_failed || result?.drive_intake_disabled) {
-          setDriveSyncNotice(result.drive_intake_message || "Автоматична синхронізація з Google Drive зараз недоступна");
-          return;
-        }
-        if (result?.drive_intake_processed || result?.drive_intake_job_id) {
-          if (!result.drive_intake_marking_error) {
-            setDriveSyncNotice(null);
-          }
-          fetchSchedule();
-        }
-      });
-    };
-
-    runDriveIntakeTick();
-    const intervalId = window.setInterval(runDriveIntakeTick, DRIVE_INTAKE_AUTO_TICK_MS);
-    return () => {
-      isActive = false;
-      window.clearInterval(intervalId);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canGenerate, triggerJournalAutoTick]);
 
   usePageRefresh(fetchSchedule, { intervalMs: 30_000 });
 
@@ -960,12 +922,6 @@ export function SchedulePage() {
             </button>
           </div>
         )}
-        {driveSyncNotice && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            {driveSyncNotice}
-          </div>
-        )}
-
         {!visibleGroupedSchedule.length && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
             <p className="text-sm text-slate-600">

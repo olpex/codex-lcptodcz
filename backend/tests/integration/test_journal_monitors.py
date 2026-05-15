@@ -2225,7 +2225,8 @@ def test_journal_auto_tick_endpoint_processes_current_branch_sections(client, au
     db_session.add(section)
     db_session.commit()
 
-    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.cron_secret", "cron-secret")
+    response = client.post("/api/v1/journal-monitors/auto-cron", headers={"Authorization": "Bearer cron-secret"})
 
     assert response.status_code == 202
     payload = response.json()
@@ -2260,7 +2261,8 @@ def test_journal_auto_tick_endpoint_processes_one_drive_intake_file(client, auth
         raising=False,
     )
 
-    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.cron_secret", "cron-secret")
+    response = client.post("/api/v1/journal-monitors/auto-cron", headers={"Authorization": "Bearer cron-secret"})
 
     assert response.status_code == 202
     payload = response.json()
@@ -2283,7 +2285,8 @@ def test_journal_auto_tick_reports_drive_intake_error_message(client, auth_heade
         raising=False,
     )
 
-    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.cron_secret", "cron-secret")
+    response = client.post("/api/v1/journal-monitors/auto-cron", headers={"Authorization": "Bearer cron-secret"})
 
     assert response.status_code == 202
     payload = response.json()
@@ -2319,7 +2322,8 @@ def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, a
         raising=False,
     )
 
-    response = client.post("/api/v1/journal-monitors/auto-tick", headers=auth_headers)
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.cron_secret", "cron-secret")
+    response = client.post("/api/v1/journal-monitors/auto-cron", headers={"Authorization": "Bearer cron-secret"})
 
     assert response.status_code == 202
     assert captured["service_account_json"] == "section-service-account-json"

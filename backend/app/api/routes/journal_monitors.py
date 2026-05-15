@@ -141,12 +141,10 @@ def process_journal_monitor_auto_cron(
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def process_journal_monitor_auto_tick(
-    db: DbSession,
-    current_user: CurrentUser,
+    _db: DbSession,
+    _current_user: CurrentUser,
 ) -> AutoTickPayload:
-    result = _process_journal_monitor_auto_sections(db, branch_id=current_user.branch_id)
-    result.update(_process_drive_intake_auto_file(db, branch_id=current_user.branch_id))
-    return result
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail="Journal intake is triggered by Celery beat")
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:

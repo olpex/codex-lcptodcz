@@ -6,7 +6,6 @@ import { Panel } from "../components/Panel";
 import { StickyActionBar } from "../components/StickyActionBar";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { useJournalAutoTick } from "../hooks/useJournalAutoTick";
 import { PAGE_REFRESH_EVENT, usePageRefresh } from "../hooks/usePageRefresh";
 import type { Trainee, Group } from "../types/api";
 
@@ -183,7 +182,6 @@ export function TraineesPage() {
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
-  const triggerJournalAutoTick = useJournalAutoTick(request, canEdit);
 
   const sortedTrainees = useMemo(
     () =>
@@ -316,10 +314,7 @@ export function TraineesPage() {
     try {
       let dedupeResult: DedupeResponse | null = null;
       if (options.reconcile && canEdit) {
-        await triggerJournalAutoTick({ force: true });
         dedupeResult = await request<DedupeResponse>("/trainees/bulk/dedupe", { method: "POST" });
-      } else {
-        triggerJournalAutoTick();
       }
       const [groupsData, data] = await Promise.all([
         request<Group[]>("/groups"),
