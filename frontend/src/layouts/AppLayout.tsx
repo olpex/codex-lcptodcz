@@ -41,9 +41,15 @@ export function AppLayout() {
     showInfo("Оновлюю поточну сторінку");
   };
 
+  const focusMainContent = () => {
+    window.setTimeout(() => {
+      document.getElementById("main-content")?.focus();
+    }, 0);
+  };
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
-      <a href="#main-content" className="skip-link">
+      <a href="#main-content" className="skip-link" onClick={focusMainContent}>
         Перейти до основного контенту
       </a>
       <header className="sticky top-0 z-40 border-b border-pine/10 bg-white/85 backdrop-blur">
@@ -98,7 +104,7 @@ export function AppLayout() {
             ))}
           </nav>
         </aside>
-        <main id="main-content" className="space-y-5">
+        <main id="main-content" className="space-y-5" tabIndex={-1}>
           <Outlet />
         </main>
       </div>
