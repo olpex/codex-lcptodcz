@@ -11,6 +11,7 @@ from app.models import (
     Subject,
     Teacher,
 )
+from app.api.routes import schedule as schedule_route
 from app.services.import_export import collect_teacher_workload_summary
 
 
@@ -104,3 +105,52 @@ def test_delete_group_schedule_keeps_teacher_hours_when_group_journal_is_process
     after = {row["teacher_id"]: row for row in collect_teacher_workload_summary(db_session, "main")}
     assert after[teacher.id]["total_hours"] == 8
     assert after[teacher.id]["groups"] == [{"group_code": "46-26", "group_name": "46-26 Журнал", "hours": 8.0}]
+
+
+def test_schedule_list_uses_unfiltered_branch_cache(client, auth_headers, monkeypatch):
+    cached_payload = [
+        {
+            "id": 123,
+            "group_id": 10,
+            "teacher_id": 20,
+            "subject_id": 30,
+            "room_id": 40,
+            "starts_at": "2026-05-20T09:00:00Z",
+            "ends_at": "2026-05-20T11:00:00Z",
+            "pair_number": 1,
+            "academic_hours": 2,
+            "group_code": "CACHE-26",
+            "group_name": "Кешований розклад",
+            "group_start_date": None,
+            "group_end_date": None,
+            "teacher_name": "Кеш Викладач",
+            "subject_name": "Кешований предмет",
+            "room_name": "101",
+            "generated_by": None,
+        }
+    ]
+    requested_keys: list[str] = []
+
+    def fake_cache_get_json(key: str):
+        requested_keys.append(key)
+        return cached_payload
+
+    monkeypatch.setattr(schedule_route, "cache_get_json", fake_cache_get_json)
+
+    response = client.get("/api/v1/schedule", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == 123
+    assert requested_keys == ["schedule:list:main:v1"]
+
+
+def test_schedule_mutations_invalidate_unfiltered_branch_cache(client, auth_headers, db_session, monkeypatch):
+    group, _teacher = _seed_schedule_group(db_session, code="INV-26", hours=4)
+    deleted_keys: list[str] = []
+
+    monkeypatch.setattr(schedule_route, "cache_delete", lambda key: deleted_keys.append(key))
+
+    response = client.delete(f"/api/v1/schedule/groups/{group.id}", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert "schedule:list:main:v1" in deleted_keys
