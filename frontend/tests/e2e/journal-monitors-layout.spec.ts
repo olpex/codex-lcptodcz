@@ -133,6 +133,7 @@ const archiveSection = {
   ...section,
   id: 2,
   name: "Журнали 2025",
+  is_active: false,
   folder_url: "https://drive.google.com/drive/folders/archive",
   last_synced_at: "2026-05-03T09:00:00Z",
   stats: {
@@ -213,6 +214,7 @@ async function loginAndMockJournals(
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
     onSync?: (url: URL) => unknown | void;
+    onUpdateSection?: (url: URL, payload: unknown) => unknown | void;
   } = {}
 ) {
   await page.addInitScript(() => {
@@ -304,6 +306,16 @@ async function loginAndMockJournals(
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(syncPayload ?? { ...section, workload_auto_enabled: true, workload_auto_year: 2026 })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/2") && method === "PATCH") {
+      const payload = request.postDataJSON();
+      const updatedSection = options.onUpdateSection?.(url, payload);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(updatedSection ?? { ...archiveSection, is_active: true, entries: [] })
       });
     }
 
@@ -565,6 +577,30 @@ test("journal monitor opens the current-year section by default", async ({ page 
 
   await expect(page.getByRole("heading", { name: "Журнали 2026" })).toBeVisible();
   await expect(page.getByLabel("Розділ для перегляду")).toHaveValue("1");
+});
+
+test("journal monitor archived sections are read-only until reactivated", async ({ page }) => {
+  let patchPayload: unknown = null;
+  await loginAndMockJournals(page, {
+    sections: [{ ...section, entries: [] }, archiveSection],
+    onUpdateSection: (_url, payload) => {
+      patchPayload = payload;
+      return { ...archiveSection, is_active: true, entries: [] };
+    }
+  });
+
+  await page.goto("/journals");
+  await page.getByLabel("Розділ для перегляду").selectOption("2");
+  const journalPanel = page.locator("#main-content");
+
+  await expect(page.getByText("Архівовано", { exact: true })).toBeVisible();
+  await expect(page.getByText("Розділ вимкнено для автоматичного опрацювання.")).toBeVisible();
+  await expect(journalPanel.getByRole("button", { name: "Оновити" })).toBeDisabled();
+  await expect(journalPanel.getByRole("button", { name: "Почати опрацювання" })).toBeDisabled();
+
+  await journalPanel.getByRole("button", { name: "Активувати розділ" }).click();
+
+  await expect.poll(() => patchPayload).toEqual({ is_active: true });
 });
 
 test("journal monitor section can be deleted from the project", async ({ page }) => {

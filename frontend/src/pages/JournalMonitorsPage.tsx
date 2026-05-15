@@ -327,6 +327,7 @@ export function JournalMonitorsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isProcessingJournals, setIsProcessingJournals] = useState(false);
+  const [isTogglingSectionActive, setIsTogglingSectionActive] = useState(false);
   const [workloadYear, setWorkloadYear] = useState(String(new Date().getFullYear()));
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -352,6 +353,7 @@ export function JournalMonitorsPage() {
   );
   const rows = detail?.entries || [];
   const totalFolders = detail?.stats.total ?? 0;
+  const sectionActive = detail?.is_active !== false;
   const visibleRows = useMemo(() => {
     const query = normalizeSearchValue(journalSearch);
     const filtered = query
@@ -428,7 +430,7 @@ export function JournalMonitorsPage() {
 
   const syncSelected = async (showToast = true) => {
     const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId) return;
+    if (!sectionId || !sectionActive) return;
     setIsSyncing(true);
     try {
       const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/sync`, { method: "POST" });
@@ -468,13 +470,13 @@ export function JournalMonitorsPage() {
 
   const processSelectedBackgroundStep = async () => {
     const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId) return;
+    if (!sectionId || !sectionActive) return;
     await runBackgroundStep(sectionId, Number(workloadYear));
     await syncSelected(false);
   };
 
   const refreshSelectedActivity = async () => {
-    if (detail?.workload_auto_enabled || isSyncing) return;
+    if (!sectionActive || detail?.workload_auto_enabled || isSyncing) return;
     await syncSelected(false);
   };
 
@@ -492,13 +494,13 @@ export function JournalMonitorsPage() {
   }, [selectedId]);
 
   usePageRefresh(processSelectedBackgroundStep, {
-    enabled: Boolean(selectedId && detail?.workload_auto_enabled),
+    enabled: Boolean(selectedId && sectionActive && detail?.workload_auto_enabled),
     intervalMs: JOURNAL_PROCESSING_REFRESH_INTERVAL_MS,
     refreshOnFocus: false
   });
 
   usePageRefresh(refreshSelectedActivity, {
-    enabled: Boolean(selectedId && detail && !detail.workload_auto_enabled),
+    enabled: Boolean(selectedId && detail && sectionActive && !detail.workload_auto_enabled),
     intervalMs: JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS,
     refreshOnFocus: true
   });
@@ -564,7 +566,7 @@ export function JournalMonitorsPage() {
   };
 
   const toggleJournalProcessing = async () => {
-    if (!selectedId) return;
+    if (!selectedId || !sectionActive) return;
     if (detail?.workload_auto_enabled) {
       setIsProcessingJournals(true);
       try {
@@ -604,7 +606,7 @@ export function JournalMonitorsPage() {
   };
 
   const reprocessAllJournals = async () => {
-    if (!selectedId) return;
+    if (!selectedId || !sectionActive) return;
     const year = Number(workloadYear);
     if (!Number.isInteger(year) || year < 2025 || year > 2100) {
       showError("Вкажіть рік від 2025 до 2100");
@@ -624,6 +626,25 @@ export function JournalMonitorsPage() {
       showError((error as Error).message);
     } finally {
       setIsProcessingJournals(false);
+    }
+  };
+
+  const toggleSelectedSectionActive = async () => {
+    if (!selectedId || isTogglingSectionActive) return;
+    const nextActive = !sectionActive;
+    setIsTogglingSectionActive(true);
+    try {
+      const data = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: nextActive })
+      });
+      setDetail(data);
+      await loadSections();
+      showSuccess(nextActive ? "Розділ активовано" : "Розділ архівовано");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsTogglingSectionActive(false);
     }
   };
 
@@ -859,7 +880,19 @@ export function JournalMonitorsPage() {
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-heading text-xl font-semibold text-ink">{detail?.name || "Поточний стан"}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-heading text-xl font-semibold text-ink">{detail?.name || "Поточний стан"}</h2>
+              {detail && (
+                <span
+                  className={clsx(
+                    "rounded-full px-2 py-1 text-xs font-semibold",
+                    sectionActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
+                  )}
+                >
+                  {sectionActive ? "Активний" : "Архівовано"}
+                </span>
+              )}
+            </div>
             <p className="mt-2 text-xs text-slate-500">
               {detail
                 ? `${detail.stats.total} папок, оновлено: ${formatDateTime(detail.last_synced_at)}`
@@ -877,6 +910,7 @@ export function JournalMonitorsPage() {
                 {sections.map((section) => (
                   <option key={section.id} value={section.id}>
                     {section.name}
+                    {section.is_active === false ? " (архів)" : ""}
                   </option>
                 ))}
               </select>
@@ -932,6 +966,14 @@ export function JournalMonitorsPage() {
           </div>
         )}
 
+        {detail && !sectionActive && (
+          <InlineNotice
+            className="mb-4"
+            tone="info"
+            text="Розділ вимкнено для автоматичного опрацювання. Активуйте його, щоб знову запускати синхронізацію та фонову обробку."
+          />
+        )}
+
         {driveStateNotice && <InlineNotice className="mb-4" tone={driveStateNotice.tone} text={driveStateNotice.text} />}
 
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
@@ -977,7 +1019,7 @@ export function JournalMonitorsPage() {
                 value={workloadYear}
               onChange={(event) => setWorkloadYear(event.target.value)}
               inputMode="numeric"
-              disabled={Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
+              disabled={!sectionActive || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             />
           </label>
           <button
@@ -989,7 +1031,7 @@ export function JournalMonitorsPage() {
                 : "border-emerald-500 text-emerald-700"
             )}
             onClick={toggleJournalProcessing}
-            disabled={!selectedId || isProcessingJournals}
+            disabled={!selectedId || !sectionActive || isProcessingJournals}
           >
             {isProcessingJournals
               ? "Змінюємо..."
@@ -1001,7 +1043,7 @@ export function JournalMonitorsPage() {
               type="button"
               className="rounded-lg border border-violet-500 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
               onClick={reprocessAllJournals}
-              disabled={!selectedId || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
+              disabled={!selectedId || !sectionActive || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             >
               Переобробити все
             </button>
@@ -1009,10 +1051,25 @@ export function JournalMonitorsPage() {
               type="button"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
               onClick={() => syncSelected()}
-              disabled={!selectedId || isSyncing}
+              disabled={!selectedId || !sectionActive || isSyncing}
             >
               {isSyncing ? "Оновлюємо..." : "Оновити"}
             </button>
+            {detail && (
+              <button
+                type="button"
+                className={clsx(
+                  "rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50",
+                  sectionActive
+                    ? "border-slate-300 text-slate-700 hover:bg-slate-50"
+                    : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+                )}
+                onClick={toggleSelectedSectionActive}
+                disabled={!selectedId || isTogglingSectionActive}
+              >
+                {isTogglingSectionActive ? "Змінюємо..." : sectionActive ? "Архівувати розділ" : "Активувати розділ"}
+              </button>
+            )}
             {EXPORT_FORMATS.map((format) => (
               <button
                 key={format}
