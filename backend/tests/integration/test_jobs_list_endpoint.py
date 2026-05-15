@@ -363,6 +363,103 @@ def test_email_intake_jobs_returns_recent_branch_scoped_mail_history(client, aut
     assert payload[0]["job"]["result_payload"]["message_id"] == "gmail-1"
 
 
+def test_worker_health_reports_celery_and_branch_job_backlog(client, auth_headers, db_session, monkeypatch):
+    class FakeInspect:
+        def ping(self):
+            return {"celery@worker-1": {"ok": "pong"}}
+
+    class FakeControl:
+        def inspect(self, timeout=None):
+            assert timeout == 0.5
+            return FakeInspect()
+
+    fake_conf = type(
+        "FakeConf",
+        (),
+        {
+            "task_routes": {
+                "app.tasks.worker.process_import_job_task": {"queue": "import_parse"},
+                "app.tasks.worker.process_drive_intake_auto_task": {"queue": "drive_intake"},
+            },
+            "beat_schedule": {
+                "google-drive-intake-auto": {
+                    "task": "app.tasks.worker.process_drive_intake_auto_task",
+                    "schedule": 45,
+                }
+            },
+        },
+    )()
+    monkeypatch.setattr(jobs_route, "celery_app", type("FakeCeleryApp", (), {"control": FakeControl(), "conf": fake_conf})(), raising=False)
+
+    document = Document(
+        branch_id="main",
+        file_name="queued.xlsx",
+        file_path="/tmp/queued.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    other_document = Document(
+        branch_id="other",
+        file_name="hidden.xlsx",
+        file_path="/tmp/hidden.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    db_session.add_all([document, other_document])
+    db_session.commit()
+    db_session.refresh(document)
+    db_session.refresh(other_document)
+
+    db_session.add_all(
+        [
+            ImportJob(
+                branch_id="main",
+                idempotency_key="worker-health-import-queued",
+                document_id=document.id,
+                status=JobStatus.QUEUED,
+                message="queued",
+            ),
+            ImportJob(
+                branch_id="main",
+                idempotency_key="worker-health-import-running",
+                document_id=document.id,
+                status=JobStatus.RUNNING,
+                message="running",
+            ),
+            ExportJob(
+                branch_id="main",
+                idempotency_key="worker-health-export-queued",
+                report_type="kpi",
+                export_format="xlsx",
+                status=JobStatus.QUEUED,
+                message="queued",
+            ),
+            ImportJob(
+                branch_id="other",
+                idempotency_key="worker-health-other-queued",
+                document_id=other_document.id,
+                status=JobStatus.QUEUED,
+                message="hidden",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/jobs/worker-health", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["celery"]["ping_ok"] is True
+    assert payload["celery"]["workers"] == ["celery@worker-1"]
+    assert payload["backlog"]["import"]["queued"] == 1
+    assert payload["backlog"]["import"]["running"] == 1
+    assert payload["backlog"]["export"]["queued"] == 1
+    assert payload["backlog"]["total_active"] == 3
+    assert "import_parse" in {queue["queue"] for queue in payload["queues"]}
+    assert "google-drive-intake-auto" in {item["name"] for item in payload["beat_schedule"]}
+
+
 def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):
     dispatched: list[int] = []
 

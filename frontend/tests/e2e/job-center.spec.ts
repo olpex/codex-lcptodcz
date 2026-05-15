@@ -613,3 +613,113 @@ test("job center shows dedicated email intake status", async ({ page }) => {
   await expect(emailPanel).toContainText("Пошта: Google Script");
   await expect(emailPanel).toContainText("apps-script-schedule.docx");
 });
+
+test("job center shows read-only worker health", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/worker-health") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          celery: {
+            broker_configured: true,
+            ping_ok: true,
+            workers: ["celery@worker-1"],
+            error: null
+          },
+          backlog: {
+            import: { queued: 2, running: 1 },
+            export: { queued: 1, running: 0 },
+            total_active: 4
+          },
+          queues: [
+            { task: "app.tasks.worker.process_import_job_task", queue: "import_parse" },
+            { task: "app.tasks.worker.process_drive_intake_auto_task", queue: "drive_intake" }
+          ],
+          beat_schedule: [
+            {
+              name: "google-drive-intake-auto",
+              task: "app.tasks.worker.process_drive_intake_auto_task",
+              schedule_seconds: 45
+            }
+          ],
+          settings: {
+            drive_intake_auto_enabled: true,
+            drive_intake_interval_seconds: 45,
+            journal_auto_interval_seconds: 60,
+            imap_fallback_enabled: false,
+            imap_auto_poll_enabled: false,
+            mail_primary_channel: "google_apps_script"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+
+  const workerPanel = page.getByTestId("worker-health-panel");
+  await expect(workerPanel).toBeVisible();
+  await expect(workerPanel).toContainText("Worker health");
+  await expect(workerPanel).toContainText("celery@worker-1");
+  await expect(workerPanel).toContainText("Активних задач: 4");
+  await expect(workerPanel).toContainText("import_parse");
+  await expect(workerPanel).toContainText("google-drive-intake-auto");
+  await expect(workerPanel).toContainText("45 с");
+});

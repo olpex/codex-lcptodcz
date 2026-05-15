@@ -6,6 +6,8 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, require_roles
+from app.celery_app import celery_app
+from app.core.config import settings
 from app.models import Document, ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
 from app.schemas.api import JobListItemResponse, JobResponse, JobStatusResponse
 from app.services.audit import write_audit
@@ -33,6 +35,15 @@ def _dispatch_with_fallback(task, job_id: int) -> str:
             return "inline"
         except Exception:
             return "inline_failed"
+
+
+def _schedule_seconds(value) -> float | None:
+    if hasattr(value, "total_seconds"):
+        return float(value.total_seconds())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mark_stale_jobs_as_failed(db: DbSession, branch_id: str) -> int:
@@ -271,6 +282,82 @@ def list_email_intake_jobs(
         )
         for job in jobs
     ]
+
+
+@router.get("/worker-health")
+def get_worker_health(db: DbSession, current_user: CurrentUser) -> dict:
+    ping_error: str | None = None
+    workers: list[str] = []
+    try:
+        inspector = celery_app.control.inspect(timeout=0.5)
+        ping_payload = inspector.ping() if inspector else None
+        if isinstance(ping_payload, dict):
+            workers = sorted(str(name) for name in ping_payload.keys())
+    except Exception as exc:
+        ping_error = str(exc)
+
+    import_queued = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .filter(ImportJob.status == JobStatus.QUEUED)
+        .count()
+    )
+    import_running = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .filter(ImportJob.status == JobStatus.RUNNING)
+        .count()
+    )
+    export_queued = (
+        apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+        .filter(ExportJob.status == JobStatus.QUEUED)
+        .count()
+    )
+    export_running = (
+        apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+        .filter(ExportJob.status == JobStatus.RUNNING)
+        .count()
+    )
+
+    task_routes = getattr(celery_app.conf, "task_routes", {}) or {}
+    beat_schedule = getattr(celery_app.conf, "beat_schedule", {}) or {}
+    queues = [
+        {"task": task_name, "queue": route.get("queue")}
+        for task_name, route in sorted(task_routes.items())
+        if isinstance(route, dict)
+    ]
+    schedule = [
+        {
+            "name": name,
+            "task": entry.get("task") if isinstance(entry, dict) else None,
+            "schedule_seconds": _schedule_seconds(entry.get("schedule")) if isinstance(entry, dict) else None,
+        }
+        for name, entry in sorted(beat_schedule.items())
+    ]
+
+    ping_ok = bool(workers)
+    return {
+        "status": "ok" if ping_ok else "degraded",
+        "celery": {
+            "broker_configured": bool(settings.redis_url),
+            "ping_ok": ping_ok,
+            "workers": workers,
+            "error": ping_error,
+        },
+        "backlog": {
+            "import": {"queued": import_queued, "running": import_running},
+            "export": {"queued": export_queued, "running": export_running},
+            "total_active": import_queued + import_running + export_queued + export_running,
+        },
+        "queues": queues,
+        "beat_schedule": schedule,
+        "settings": {
+            "drive_intake_auto_enabled": settings.google_drive_intake_auto_enabled,
+            "drive_intake_interval_seconds": settings.google_drive_intake_interval_seconds,
+            "journal_auto_interval_seconds": settings.journal_workload_auto_interval_seconds,
+            "imap_fallback_enabled": settings.imap_fallback_enabled,
+            "imap_auto_poll_enabled": settings.imap_auto_poll_enabled,
+            "mail_primary_channel": settings.mail_primary_channel,
+        },
+    }
 
 
 @router.get("/{job_id}", response_model=JobStatusResponse)

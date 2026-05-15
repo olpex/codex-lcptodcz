@@ -17,6 +17,31 @@ type JobStatusPayload = {
   job: Job;
 };
 
+type WorkerHealth = {
+  status: "ok" | "degraded" | string;
+  celery: {
+    broker_configured: boolean;
+    ping_ok: boolean;
+    workers: string[];
+    error: string | null;
+  };
+  backlog: {
+    import: { queued: number; running: number };
+    export: { queued: number; running: number };
+    total_active: number;
+  };
+  queues: Array<{ task: string; queue: string | null }>;
+  beat_schedule: Array<{ name: string; task: string | null; schedule_seconds: number | null }>;
+  settings: {
+    drive_intake_auto_enabled: boolean;
+    drive_intake_interval_seconds: number;
+    journal_auto_interval_seconds: number;
+    imap_fallback_enabled: boolean;
+    imap_auto_poll_enabled: boolean;
+    mail_primary_channel: string;
+  };
+};
+
 type JobTypeFilter = "all" | "import" | "export";
 type JobStatusFilter = "all" | "queued" | "running" | "succeeded" | "failed";
 type ImportMode = "skip_existing" | "missing_only" | "overwrite";
@@ -156,6 +181,7 @@ export function JobCenterPage() {
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
   const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
+  const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
     const snapshot: JobStatsSnapshot = {
@@ -397,6 +423,15 @@ export function JobCenterPage() {
     }
   };
 
+  const loadWorkerHealth = async () => {
+    try {
+      const data = await request<WorkerHealth>("/jobs/worker-health");
+      setWorkerHealth(data);
+    } catch {
+      setWorkerHealth(null);
+    }
+  };
+
   const buildJobStatusesPath = (items: JobListItem[]) => {
     const params = new URLSearchParams();
     params.set("limit", "200");
@@ -440,6 +475,7 @@ export function JobCenterPage() {
         await loadJobs();
         await loadDriveIntakeJobs();
         await loadEmailIntakeJobs();
+        await loadWorkerHealth();
       }
     } catch (error) {
       setLoadError((error as Error).message);
@@ -451,6 +487,7 @@ export function JobCenterPage() {
     loadJobs();
     loadDriveIntakeJobs();
     loadEmailIntakeJobs();
+    loadWorkerHealth();
   }, [jobType, jobStatus, dateFrom, dateTo]);
 
   useEffect(() => {
@@ -476,6 +513,7 @@ export function JobCenterPage() {
       }
       void loadDriveIntakeJobs();
       void loadEmailIntakeJobs();
+      void loadWorkerHealth();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [autoRefresh, rows, jobType, jobStatus, dateFrom, dateTo]);
@@ -939,6 +977,72 @@ export function JobCenterPage() {
                 </div>
               );
             })}
+          </div>
+        </section>
+      )}
+      {workerHealth && (
+        <section
+          className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+          data-testid="worker-health-panel"
+          aria-labelledby="worker-health-heading"
+        >
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="worker-health-heading" className="text-base font-semibold text-slate-950">
+                Worker health
+              </h2>
+              <p className="text-sm text-slate-700">
+                Celery, queues і beat schedule у режимі тільки перегляду.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+              <span className={workerHealth.celery.ping_ok ? "rounded-full bg-emerald-100 px-2 py-1 text-emerald-800" : "rounded-full bg-rose-100 px-2 py-1 text-rose-800"}>
+                {workerHealth.celery.ping_ok ? "Celery online" : "Celery degraded"}
+              </span>
+              <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                Активних задач: {workerHealth.backlog.total_active}
+              </span>
+            </div>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Workers</p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {workerHealth.celery.workers.length ? workerHealth.celery.workers.join(", ") : "Не відповідають"}
+              </p>
+              {workerHealth.celery.error && <p className="mt-1 text-sm text-rose-800">{workerHealth.celery.error}</p>}
+            </article>
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Backlog</p>
+              <p className="mt-1 text-sm text-slate-700">
+                Import: {workerHealth.backlog.import.queued} у черзі, {workerHealth.backlog.import.running} виконується
+              </p>
+              <p className="text-sm text-slate-700">
+                Export: {workerHealth.backlog.export.queued} у черзі, {workerHealth.backlog.export.running} виконується
+              </p>
+            </article>
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Beat</p>
+              <div className="mt-1 space-y-1 text-sm text-slate-700">
+                {workerHealth.beat_schedule.length ? (
+                  workerHealth.beat_schedule.map((item) => (
+                    <p key={item.name}>
+                      {item.name}
+                      {typeof item.schedule_seconds === "number" ? ` · ${item.schedule_seconds} с` : ""}
+                    </p>
+                  ))
+                ) : (
+                  <p>Немає налаштованих beat задач</p>
+                )}
+              </div>
+            </article>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
+            {workerHealth.queues.map((item) => (
+              <span key={`${item.task}-${item.queue}`} className="rounded-full bg-white px-2 py-1 text-slate-700">
+                {item.queue || item.task}
+              </span>
+            ))}
           </div>
         </section>
       )}
