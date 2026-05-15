@@ -145,6 +145,43 @@ def test_reprocess_import_job_creates_new_job_from_existing_document(client, aut
     assert new_job.document_id == document.id
 
 
+def test_retry_job_invalidates_dashboard_attention_cache(client, auth_headers, db_session, monkeypatch):
+    deleted_keys: list[str] = []
+
+    def fake_dispatch(task, job_id: int) -> str:
+        return "queued"
+
+    monkeypatch.setattr(jobs_route, "_dispatch_with_fallback", fake_dispatch)
+    monkeypatch.setattr(jobs_route, "invalidate_attention_cache", lambda branch_id: deleted_keys.append(f"dashboard:attention:{branch_id}"))
+
+    document = Document(
+        branch_id="main",
+        file_name="retry.xlsx",
+        file_path="/tmp/retry.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    db_session.add(document)
+    db_session.commit()
+    db_session.refresh(document)
+
+    failed_job = ImportJob(
+        branch_id="main",
+        idempotency_key="import-retry-cache",
+        document_id=document.id,
+        status=JobStatus.FAILED,
+        message="failed",
+    )
+    db_session.add(failed_job)
+    db_session.commit()
+    db_session.refresh(failed_job)
+
+    response = client.post(f"/api/v1/jobs/{failed_job.id}/retry", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert deleted_keys == ["dashboard:attention:main"]
+
+
 def test_jobs_list_eager_loads_documents(client, auth_headers, db_session):
     now = datetime.now(timezone.utc)
     documents = []

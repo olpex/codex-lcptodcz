@@ -30,6 +30,7 @@ from app.schemas.api import (
     StudentPlanUpdateRequest,
 )
 from app.services.cache import cache_delete, cache_get_json, cache_set_json
+from app.services.dashboard_cache import ATTENTION_CACHE_TTL_SECONDS, attention_cache_key
 
 router = APIRouter()
 KPI_CACHE_TTL_SECONDS = 60
@@ -209,6 +210,11 @@ def _attention_item(
 @router.get("/attention", response_model=DashboardAttentionResponse)
 def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentionResponse:
     branch_id = current_user.branch_id
+    cache_key = attention_cache_key(branch_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict):
+        return DashboardAttentionResponse.model_validate(cached)
+
     failed_jobs = (
         db.query(ImportJob).filter(ImportJob.branch_id == branch_id, ImportJob.status == JobStatus.FAILED).count()
         + db.query(ExportJob).filter(ExportJob.branch_id == branch_id, ExportJob.status == JobStatus.FAILED).count()
@@ -319,11 +325,13 @@ def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentio
     items = [item for item in raw_items if item is not None]
     severity_order = {"error": 0, "warning": 1, "info": 2}
     items.sort(key=lambda item: (severity_order.get(item.severity, 3), item.title))
-    return DashboardAttentionResponse(
+    response = DashboardAttentionResponse(
         generated_at=datetime.now(timezone.utc),
         total_count=sum(item.count for item in items),
         items=items,
     )
+    cache_set_json(cache_key, response.model_dump(mode="json"), ATTENTION_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.get("/kpi/stream")

@@ -9,6 +9,7 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, require_rol
 from app.models import ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
 from app.schemas.api import JobListItemResponse, JobResponse, JobStatusResponse
 from app.services.audit import write_audit
+from app.services.dashboard_cache import invalidate_attention_cache
 from app.services.import_export import mark_job_failed
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
@@ -16,6 +17,10 @@ router = APIRouter()
 
 STALE_RUNNING_MINUTES = 60
 STALE_QUEUED_HOURS = 6
+
+
+def _invalidate_dashboard_attention_cache(branch_id: str) -> None:
+    invalidate_attention_cache(branch_id)
 
 
 def _dispatch_with_fallback(task, job_id: int) -> str:
@@ -195,6 +200,7 @@ def cancel_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStat
     mark_job_failed(job, "Скасовано користувачем")
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
     write_audit(
         db,
@@ -226,6 +232,7 @@ def retry_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatu
     job.finished_at = None
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
 
     dispatch_mode = _dispatch_with_fallback(
@@ -283,6 +290,7 @@ def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) 
     )
     db.add(new_job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(new_job)
 
     dispatch_mode = _dispatch_with_fallback(process_import_job_task, new_job.id)
@@ -350,6 +358,7 @@ def rollback_import_job(job_id: int, db: DbSession, current_user: CurrentUser) -
     mark_job_failed(job, f"Імпорт відкликано. Видалено слухачів: {deleted_trainees}")
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
 
     write_audit(

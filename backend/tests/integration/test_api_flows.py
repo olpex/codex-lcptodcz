@@ -670,6 +670,47 @@ def test_dashboard_attention_collects_actionable_items(client, auth_headers, db_
     assert payload["total_count"] == 5
 
 
+def test_dashboard_attention_uses_very_short_lived_cache(client, auth_headers, db_session, monkeypatch):
+    cache: dict[str, dict] = {}
+    cache_sets: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(dashboard_route, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: dict, ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(dashboard_route, "cache_set_json", fake_cache_set)
+
+    first = client.get("/api/v1/dashboard/attention", headers=auth_headers)
+    assert first.status_code == 200
+    assert cache_sets == [("dashboard:attention:main", 15)]
+
+    document = Document(
+        branch_id="main",
+        file_name="late-attention.docx",
+        file_path="tmp/late-attention.docx",
+        file_type=DocumentType.DOCX,
+        source="upload",
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        ImportJob(
+            branch_id="main",
+            idempotency_key="main:attention-cache-late-failed",
+            document_id=document.id,
+            status=JobStatus.FAILED,
+            message="Пізня помилка",
+        )
+    )
+    db_session.commit()
+
+    second = client.get("/api/v1/dashboard/attention", headers=auth_headers)
+    assert second.status_code == 200
+    assert second.json() == first.json()
+
+
 def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_session):
     group = Group(
         branch_id="main",
