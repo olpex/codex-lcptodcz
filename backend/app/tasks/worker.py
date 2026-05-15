@@ -25,6 +25,23 @@ from app.services.schedule_import import import_schedule_docx
 
 logger = get_task_logger(__name__)
 _runtime_schema_checked = False
+_DRIVE_INTAKE_BATCH_SUM_KEYS = (
+    "processed",
+    "failed",
+    "skipped_already_processed",
+    "skipped_unsupported",
+    "skipped_marked_processed",
+)
+_DRIVE_INTAKE_BATCH_DETAIL_KEYS = (
+    "job_id",
+    "status",
+    "filename",
+    "drive_file_id",
+    "runner_result",
+    "processed_drive_file_name",
+    "marking_error",
+    "message",
+)
 
 
 def _ensure_runtime_schema_once() -> None:
@@ -40,6 +57,58 @@ def _ensure_runtime_schema_once() -> None:
 def _get_db() -> Session:
     _ensure_runtime_schema_once()
     return SessionLocal()
+
+
+def _drive_intake_batch_size() -> int:
+    raw_value = getattr(settings, "google_drive_intake_batch_size", 1)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(value, 50))
+
+
+def _process_drive_intake_batch(db: Session, branch_id: str, service_account_json: str | None) -> dict:
+    batch_size = _drive_intake_batch_size()
+    aggregate: dict = {
+        "processed": 0,
+        "failed": 0,
+        "skipped_already_processed": 0,
+        "skipped_unsupported": 0,
+        "skipped_marked_processed": 0,
+        "batch_size": batch_size,
+        "items": [],
+    }
+
+    for _index in range(batch_size):
+        result = process_next_drive_intake_file(
+            db,
+            branch_id=branch_id,
+            service_account_json=service_account_json,
+            import_job_runner=process_import_job_task.run,
+        )
+        db.commit()
+        aggregate["items"].append(result)
+
+        for key in _DRIVE_INTAKE_BATCH_SUM_KEYS:
+            aggregate[key] += int(result.get(key) or 0)
+        for key in _DRIVE_INTAKE_BATCH_DETAIL_KEYS:
+            if key in result:
+                aggregate[key] = result.get(key)
+        for key in (
+            "disabled",
+            "marked_processed",
+            "retried_failed_job",
+            "resynced_schedule",
+            "reprocessed_legacy_success_job",
+        ):
+            if result.get(key):
+                aggregate[key] = result.get(key)
+
+        if result.get("disabled") or int(result.get("processed") or 0) <= 0:
+            break
+
+    return aggregate
 
 
 def _parsed_snapshot(parsed: dict) -> dict:
@@ -272,14 +341,11 @@ def process_drive_intake_auto_task(self) -> dict:
     db = _get_db()
     try:
         branch_id = settings.imap_branch_id or "main"
-        result = process_next_drive_intake_file(
+        return _process_drive_intake_batch(
             db,
             branch_id=branch_id,
             service_account_json=resolve_drive_intake_service_account_json(db, branch_id),
-            import_job_runner=process_import_job_task.run,
         )
-        db.commit()
-        return result
     except Exception as exc:
         logger.exception("Google Drive intake auto processing failed: %s", exc)
         db.rollback()

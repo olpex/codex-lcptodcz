@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 from docx import Document as DocxDocument
@@ -864,3 +865,41 @@ def test_drive_intake_worker_reuses_active_journal_section_credentials(db_sessio
 
     assert result["processed"] == 0
     assert captured["service_account_json"] == "section-service-account-json"
+
+
+def test_drive_intake_worker_processes_configured_batch_size(db_session, monkeypatch):
+    calls: list[int] = []
+
+    monkeypatch.setattr(
+        "app.tasks.worker.settings",
+        SimpleNamespace(
+            google_drive_intake_auto_enabled=True,
+            google_drive_intake_batch_size=2,
+            imap_branch_id="main",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.tasks.worker.resolve_drive_intake_service_account_json",
+        lambda db, branch_id: None,
+    )
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        calls.append(len(calls) + 1)
+        return {
+            "processed": 1,
+            "skipped_already_processed": 0,
+            "skipped_unsupported": 0,
+            "job_id": calls[-1],
+            "filename": f"file-{calls[-1]}.xlsx",
+        }
+
+    monkeypatch.setattr("app.tasks.worker.process_next_drive_intake_file", fake_process_next_drive_intake_file)
+
+    result = process_drive_intake_auto_task.run()
+
+    assert calls == [1, 2]
+    assert result["processed"] == 2
+    assert result["batch_size"] == 2
+    assert [item["job_id"] for item in result["items"]] == [1, 2]
+    assert result["job_id"] == 2
+    assert result["filename"] == "file-2.xlsx"

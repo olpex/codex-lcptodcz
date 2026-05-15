@@ -93,11 +93,12 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 - `GOOGLE_DRIVE_INTAKE_FOLDER_URL=https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY`
 - `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=45`
+- `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=1`
 - `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED=true`
 - `GOOGLE_DRIVE_INTAKE_UPDATE_MODE=overwrite`
 - `GOOGLE_DRIVE_INTAKE_PROCESSED_MARKER=[processed]`
 
-Один tick обробляє один ще не оброблений файл. Запуск відбувається серверно через Celery beat/worker або через cron endpoint `/api/v1/journal-monitors/auto-cron`; сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново, є лише додатковим прискоренням під час відкритої вкладки.
+За замовчуванням один Celery tick обробляє один ще не оброблений файл. Для контрольованого прискорення bulk-імпорту можна збільшити `GOOGLE_DRIVE_INTAKE_BATCH_SIZE`; дефолт `1` зберігає стару поведінку. Запуск відбувається серверно через Celery beat/worker або через cron endpoint `/api/v1/journal-monitors/auto-cron`; сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново, є лише додатковим прискоренням під час відкритої вкладки.
 Після успішного імпорту backend додає маркер до назви Drive-файлу, наприклад `184-25 Contracts [processed].xlsx`, і наступні tick-и пропускають такі файли. Щоб повторно імпортувати та доповнити або скоригувати дані, приберіть маркер з назви файлу в Google Drive.
 Для доступу до приватної intake-папки використовується `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`; якщо він не заданий глобально, backend бере JSON-ключ з активного розділу `Журнали` тієї ж філії. Для маркування файлів service account має мати доступ `Editor`, бо система перейменовує успішно оброблені файли.
 
