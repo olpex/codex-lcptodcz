@@ -1,7 +1,10 @@
-import sys
 import re
+from pathlib import Path
 
-with open("frontend/src/pages/TraineesPage.tsx", "r", encoding="utf-8") as f:
+REPO_ROOT = Path(__file__).resolve().parents[3]
+TRAINEES_PAGE = REPO_ROOT / "frontend" / "src" / "pages" / "TraineesPage.tsx"
+
+with TRAINEES_PAGE.open("r", encoding="utf-8") as f:
     content = f.read()
 
 # 1. Add Group type import if missing
@@ -120,7 +123,7 @@ confirm_dialog_code = """
 """
 content = content.replace("      </Panel>\n    </div>", confirm_dialog_code)
 
-with open("frontend/src/pages/TraineesPage.tsx", "w", encoding="utf-8") as f:
+with TRAINEES_PAGE.open("w", encoding="utf-8") as f:
     f.write(content)
 
 print("TraineesPage updated successfully.")

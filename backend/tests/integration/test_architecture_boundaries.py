@@ -17,6 +17,15 @@ def test_frontend_source_does_not_reference_browser_auto_tick():
     assert offenders == []
 
 
+def test_root_directory_has_no_legacy_patch_scripts():
+    repo_root = Path(__file__).resolve().parents[3]
+    legacy_patch_scripts = {"modify_schedule.py", "patch_trainees.py"}
+
+    offenders = sorted(path.name for path in repo_root.glob("*.py") if path.name in legacy_patch_scripts)
+
+    assert offenders == []
+
+
 def test_browser_auto_tick_endpoint_no_longer_runs_processing(client, auth_headers, monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("browser auto-tick must not trigger background processing")
