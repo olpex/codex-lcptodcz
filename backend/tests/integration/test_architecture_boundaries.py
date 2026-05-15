@@ -124,3 +124,17 @@ def test_drive_intake_batch_size_is_documented_as_recommended_default():
     assert "GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5" in env_example
     assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`" in readme
     assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `5` |" in deploy
+
+
+def test_perf_suite_covers_critical_background_routes():
+    repo_root = Path(__file__).resolve().parents[3]
+    perf_source = (repo_root / "backend" / "tests" / "perf" / "test_critical_routes.py").read_text(encoding="utf-8")
+
+    for route in [
+        "/api/v1/documents/import/preview",
+        "/api/v1/drafts/upload-image",
+        "/api/v1/journal-monitors/{section_id}/sync",
+        "/api/v1/jobs/statuses",
+    ]:
+        assert route in perf_source
+    assert "@pytest.mark.perf" in perf_source
