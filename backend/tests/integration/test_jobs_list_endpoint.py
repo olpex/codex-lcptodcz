@@ -180,6 +180,83 @@ def test_job_statuses_returns_lightweight_branch_scoped_updates(client, auth_hea
     assert ("import", other_branch_import.id) not in status_by_key
 
 
+def test_drive_intake_jobs_returns_recent_branch_scoped_drive_history(client, auth_headers, db_session):
+    now = datetime.now(timezone.utc)
+    drive_document = Document(
+        branch_id="main",
+        file_name="46-26 Schedule.docx",
+        file_path="/tmp/46-26 Schedule.docx",
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+    )
+    upload_document = Document(
+        branch_id="main",
+        file_name="manual.xlsx",
+        file_path="/tmp/manual.xlsx",
+        file_type=DocumentType.XLSX,
+        source="upload",
+    )
+    other_branch_document = Document(
+        branch_id="other",
+        file_name="hidden-drive.xlsx",
+        file_path="/tmp/hidden-drive.xlsx",
+        file_type=DocumentType.XLSX,
+        source="drive_intake",
+    )
+    db_session.add_all([drive_document, upload_document, other_branch_document])
+    db_session.commit()
+    for document in [drive_document, upload_document, other_branch_document]:
+        db_session.refresh(document)
+
+    drive_job = ImportJob(
+        branch_id="main",
+        idempotency_key="drive-history-main",
+        document_id=drive_document.id,
+        status=JobStatus.FAILED,
+        message="Google Drive denied rename",
+        result_payload={
+            "source": "drive_intake",
+            "drive_file_name": "46-26 Schedule.docx",
+            "marking_error": "Google Drive denied rename",
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    upload_job = ImportJob(
+        branch_id="main",
+        idempotency_key="drive-history-upload",
+        document_id=upload_document.id,
+        status=JobStatus.SUCCEEDED,
+        message="manual",
+        created_at=now,
+        updated_at=now,
+    )
+    hidden_job = ImportJob(
+        branch_id="other",
+        idempotency_key="drive-history-other",
+        document_id=other_branch_document.id,
+        status=JobStatus.RUNNING,
+        message="hidden",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([drive_job, upload_job, hidden_job])
+    db_session.commit()
+    for job in [drive_job, upload_job, hidden_job]:
+        db_session.refresh(job)
+
+    response = client.get("/api/v1/jobs/drive-intake?limit=10", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["job"]["id"] for item in payload] == [drive_job.id]
+    assert payload[0]["job_type"] == "import"
+    assert payload[0]["import_source"] == "drive_intake"
+    assert payload[0]["document_id"] == drive_document.id
+    assert payload[0]["document_file_name"] == "46-26 Schedule.docx"
+    assert payload[0]["job"]["result_payload"]["marking_error"] == "Google Drive denied rename"
+
+
 def test_reprocess_import_job_creates_new_job_from_existing_document(client, auth_headers, db_session, monkeypatch):
     dispatched: list[int] = []
 

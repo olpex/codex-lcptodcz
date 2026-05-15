@@ -6,7 +6,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, require_roles
-from app.models import ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
+from app.models import Document, ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
 from app.schemas.api import JobListItemResponse, JobResponse, JobStatusResponse
 from app.services.audit import write_audit
 from app.services.dashboard_cache import invalidate_attention_cache
@@ -214,6 +214,33 @@ def list_job_statuses(
     ]
     items.sort(key=lambda item: item.job.updated_at, reverse=True)
     return items[:limit]
+
+
+@router.get("/drive-intake", response_model=list[JobListItemResponse])
+def list_drive_intake_jobs(
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> list[JobListItemResponse]:
+    jobs = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .join(ImportJob.document)
+        .filter(Document.source == "drive_intake")
+        .options(joinedload(ImportJob.document))
+        .order_by(ImportJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        JobListItemResponse(
+            job_type="import",
+            job=JobResponse.model_validate(job),
+            import_source=job.document.source if job.document else None,
+            document_id=job.document_id,
+            document_file_name=job.document.file_name if job.document else None,
+        )
+        for job in jobs
+    ]
 
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
