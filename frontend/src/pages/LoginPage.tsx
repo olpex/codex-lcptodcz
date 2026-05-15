@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { FormField, FormSubmitButton, formControlClass } from "../components/FormField";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -45,7 +45,7 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_right,#d8ecf2_0%,#f2f7f5_50%,#ffffff_100%)] px-4">
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_right,#d8ecf2_0%,#f2f7f5_50%,#ffffff_100%)] px-4">
       <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-card">
         <h1 className="font-heading text-3xl font-bold text-pine">{uiText.appTitle}</h1>
         <p className="mb-6 mt-2 text-sm text-slate-600">{uiText.appSubtitle}</p>
@@ -95,14 +95,7 @@ export function LoginPage() {
             className="w-full rounded-lg bg-pine px-4 py-2.5 font-semibold text-white"
           />
         </form>
-
-        <div className="mt-6 border-t border-slate-200 pt-4">
-          <p className="text-sm text-slate-600">Не знаєте поточний пароль?</p>
-          <Link className="mt-2 inline-block text-sm font-semibold text-pine hover:underline" to="/login/admin-reset">
-            Аварійне відновлення доступу
-          </Link>
-        </div>
       </div>
-    </div>
+    </main>
   );
 }

@@ -776,6 +776,7 @@ export function TraineesPage() {
     }
     setEditErrors({});
     setIsSavingEdit(true);
+    const previousTrainees = trainees;
     try {
       const sourceRowNumber = editForm.source_row_number.trim() ? Number(editForm.source_row_number) : null;
       const payload = {
@@ -798,11 +799,24 @@ export function TraineesPage() {
         group_code: editForm.group_code || null,
         status: editForm.status || "active"
       };
-      await request(`/trainees/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
-      await fetchTrainees(search);
+      setTrainees((prev) =>
+        prev.map((item) =>
+          item.id === editingId
+            ? {
+                ...item,
+                ...payload
+              }
+            : item
+        )
+      );
+      setLoadedTraineeDetails((prev) => ({ ...prev, [editingId]: true }));
+
+      const updated = await request<Trainee>(`/trainees/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+      setTrainees((prev) => prev.map((item) => (item.id === editingId ? updated : item)));
       showSuccess("Дані слухача оновлено");
       cancelEdit();
     } catch (error) {
+      setTrainees(previousTrainees);
       showError((error as Error).message);
     } finally {
       setIsSavingEdit(false);

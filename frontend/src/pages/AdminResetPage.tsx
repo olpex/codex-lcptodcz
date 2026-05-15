@@ -90,7 +90,7 @@ export function AdminResetPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_right,#d8ecf2_0%,#f2f7f5_50%,#ffffff_100%)] px-4">
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_right,#d8ecf2_0%,#f2f7f5_50%,#ffffff_100%)] px-4">
       <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-card">
         <h1 className="font-heading text-3xl font-bold text-pine">{uiText.appTitle}</h1>
         <p className="mb-2 mt-2 text-sm text-slate-600">{uiText.appSubtitle}</p>
@@ -202,6 +202,6 @@ export function AdminResetPage() {
           submitReset();
         }}
       />
-    </div>
+    </main>
   );
 }

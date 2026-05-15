@@ -467,10 +467,13 @@ export function SchedulePage() {
   const fetchSchedule = async () => {
     setIsLoading(true);
     try {
-      const [data, teachersData] = await Promise.all([
-        request<ScheduleSlot[]>("/schedule"),
-        request<Teacher[]>("/teachers")
-      ]);
+      const data = await request<ScheduleSlot[]>("/schedule");
+      let teachersData: Teacher[] = [];
+      try {
+        teachersData = await request<Teacher[]>("/teachers");
+      } catch {
+        teachersData = [];
+      }
 
       setSlots(data);
       setTeachers(teachersData);
@@ -488,6 +491,20 @@ export function SchedulePage() {
 
   
   const handleUpdateSlot = async (slotId: number, payload: Partial<ScheduleSlot>) => {
+    const previousSlots = slots;
+    const optimisticSlots = previousSlots.map((slot) => {
+      if (slot.id !== slotId) return slot;
+      const nextSlot = { ...slot, ...payload };
+      if (typeof payload.teacher_id === "number") {
+        const teacher = teachers.find((item) => item.id === payload.teacher_id);
+        nextSlot.teacher_name = teacher ? `${teacher.last_name} ${teacher.first_name}`.trim() : slot.teacher_name;
+      }
+      return nextSlot;
+    });
+
+    setSlots(optimisticSlots);
+    appendSnapshot(optimisticSlots);
+
     try {
       const updated = await request<ScheduleSlot>(`/schedule/${slotId}`, {
         method: "PATCH",
@@ -500,6 +517,8 @@ export function SchedulePage() {
       });
       // showSuccess("Розклад оновлено"); // Removed to prevent annoying toast on drag-and-drop
     } catch (err) {
+      setSlots(previousSlots);
+      appendSnapshot(previousSlots);
       showError((err as Error).message);
     }
   };
@@ -677,6 +696,9 @@ export function SchedulePage() {
     const allowedDates = new Set(visibleGroupedSchedule.map((group) => group.dateKey));
     setExpandedDates((prev) => {
       const filteredEntries = Object.entries(prev).filter(([key]) => allowedDates.has(key));
+      if (filteredEntries.length === 0) {
+        return { [visibleGroupedSchedule[0].dateKey]: true };
+      }
       return Object.fromEntries(filteredEntries) as Record<string, boolean>;
     });
   }, [visibleGroupedSchedule]);

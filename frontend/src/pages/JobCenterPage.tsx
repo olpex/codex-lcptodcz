@@ -590,8 +590,44 @@ export function JobCenterPage() {
     [statsHistory]
   );
 
+  const activeJobRows = useMemo(
+    () => rows.filter((item) => item.job.status === "queued" || item.job.status === "running"),
+    [rows]
+  );
+
   return (
     <div className="space-y-5">
+      {activeJobRows.length > 0 && (
+        <aside
+          className="fixed bottom-4 right-4 z-40 w-[calc(100vw-2rem)] max-w-sm rounded-lg border border-amber-200 bg-white p-4 shadow-card"
+          data-testid="job-progress-drawer"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-ink">Фонові задачі</p>
+              <p className="text-xs text-slate-600">Активно: {activeJobRows.length}</p>
+            </div>
+            <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">live</span>
+          </div>
+          <div className="max-h-64 space-y-2 overflow-auto">
+            {activeJobRows.map((item) => (
+              <div key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="font-semibold text-ink">#{item.job.id} {formatJobType(item.job_type)}</span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-800">
+                    {formatJobStatus(item.job.status)}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-slate-600">
+                  {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
+                </p>
+              </div>
+            ))}
+          </div>
+        </aside>
+      )}
       <Panel title="1.1 Центр імпорту">
         <InlineNotice
           className="mb-4"

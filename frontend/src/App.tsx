@@ -85,7 +85,7 @@ export default function App() {
     <Suspense fallback={<div className="p-6">Завантаження...</div>}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/login/admin-reset" element={<AdminResetPage />} />
+        <Route path="/emergency-reset" element={<AdminResetPage />} />
         <Route path="/" element={<GuardedLayout />}>
           <Route index element={<DashboardPage />} />
           <Route path="forbidden" element={<ForbiddenPage />} />

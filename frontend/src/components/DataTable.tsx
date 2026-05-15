@@ -35,6 +35,7 @@ type DataTableProps<T> = {
   initialPageSize?: number;
   search?: DataTableSearchConfig<T>;
   className?: string;
+  stickyFirstColumn?: boolean;
 };
 
 type SortDirection = "asc" | "desc";
@@ -70,7 +71,8 @@ export function DataTable<T>({
   pageSizeOptions = [10, 20, 50],
   initialPageSize = 10,
   search,
-  className
+  className,
+  stickyFirstColumn = true
 }: DataTableProps<T>) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -202,14 +204,23 @@ export function DataTable<T>({
           {caption && <caption className="sr-only">{caption}</caption>}
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-600">
-              {columns.map((column) => {
+              {columns.map((column, index) => {
                 const isSortable = sortableColumns.includes(column.key);
                 const isActive = sortState?.columnKey === column.key;
                 const direction = isActive ? sortState?.direction : null;
                 const ariaSort: React.AriaAttributes["aria-sort"] =
                   direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none";
                 return (
-                  <th key={column.key} scope="col" aria-sort={ariaSort} className={clsx("px-2 py-2", column.headerClassName)}>
+                  <th
+                    key={column.key}
+                    scope="col"
+                    aria-sort={ariaSort}
+                    className={clsx(
+                      "px-2 py-2",
+                      stickyFirstColumn && index === 0 && "sticky left-0 z-20 bg-white shadow-[1px_0_0_#e2e8f0]",
+                      column.headerClassName
+                    )}
+                  >
                     {isSortable ? (
                       <button
                         type="button"
@@ -266,8 +277,15 @@ export function DataTable<T>({
             ) : (
               paginatedData.map((row) => (
                 <tr key={rowKey(row)} className={clsx("border-b border-slate-100", rowClassName?.(row))}>
-                  {columns.map((column) => (
-                    <td key={column.key} className={clsx("px-2 py-2", column.className)}>
+                  {columns.map((column, index) => (
+                    <td
+                      key={column.key}
+                      className={clsx(
+                        "px-2 py-2",
+                        stickyFirstColumn && index === 0 && "sticky left-0 z-10 bg-white shadow-[1px_0_0_#e2e8f0]",
+                        column.className
+                      )}
+                    >
                       {column.render(row)}
                     </td>
                   ))}

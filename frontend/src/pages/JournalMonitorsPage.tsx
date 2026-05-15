@@ -179,6 +179,11 @@ function formatPercent(count = 0, total = 0): string {
   return `${Math.round((count / total) * 100)}%`;
 }
 
+function hasDailyActivity(section: JournalMonitorSection): boolean {
+  const activity = section.daily_activity;
+  return Boolean(activity && (activity.created_count > 0 || activity.changed_count > 0));
+}
+
 function normalizeSearchValue(value: string | null | undefined): string {
   return (value || "").toLocaleLowerCase("uk-UA").trim();
 }
@@ -408,6 +413,9 @@ export function JournalMonitorsPage() {
     try {
       const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/sync`, { method: "POST" });
       setDetail(data);
+      if (hasDailyActivity(data)) {
+        setActivityExpanded(true);
+      }
       await loadSections();
       setErrorText(null);
       if (showToast) showSuccess("Моніторинг журналів оновлено");
@@ -1105,12 +1113,12 @@ export function JournalMonitorsPage() {
                   </label>
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto" data-testid="journal-entries-scroll">
                 <table className="min-w-[58rem] w-full text-left text-sm xl:min-w-full">
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <tr>
                       <th className="px-3 py-2">Вибір</th>
-                      <th className="px-3 py-2">{renderSortButton("group", "Група")}</th>
+                      <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2 shadow-[1px_0_0_#e2e8f0]">{renderSortButton("group", "Група")}</th>
                       <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
                       <th className="px-2 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
@@ -1134,7 +1142,12 @@ export function JournalMonitorsPage() {
                             aria-label={`Вибрати журнал ${row.group_code || row.journal_name}`}
                           />
                         </td>
-                        <td className="px-3 py-2 font-semibold text-ink">{row.group_code || "—"}</td>
+                        <td
+                          className="sticky left-0 z-10 bg-white px-3 py-2 font-semibold text-ink shadow-[1px_0_0_#e2e8f0]"
+                          data-testid="journal-group-cell"
+                        >
+                          {row.group_code || "—"}
+                        </td>
                         <td className="min-w-[14rem] px-3 py-2">
                           <div>{row.journal_name}</div>
                           {row.workload_source_names?.length > 0 && (
