@@ -25,6 +25,7 @@ from app.models import (
     Teacher,
     Trainee,
 )
+from app.api.routes import dashboard as dashboard_route
 
 
 def test_auth_login_and_me(client):
@@ -551,6 +552,45 @@ def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_heade
     assert payload["student_plan_target"] == 100
     assert payload["student_plan_processed"] == 24
     assert payload["training_plan_progress_pct"] == 24
+
+
+def test_dashboard_kpi_uses_short_lived_cache(client, auth_headers, db_session, monkeypatch):
+    cache: dict[str, dict] = {}
+    cache_sets: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(dashboard_route, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: dict, ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(dashboard_route, "cache_set_json", fake_cache_set)
+
+    first = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+    assert first.status_code == 200
+    assert cache_sets
+    assert cache_sets[0][1] == 60
+
+    db_session.add(Trainee(branch_id="main", first_name="Late", last_name="Trainee", status="active"))
+    db_session.commit()
+
+    second = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+    assert second.status_code == 200
+    assert second.json() == first.json()
+
+
+def test_dashboard_student_plan_update_invalidates_kpi_cache(client, auth_headers, monkeypatch):
+    deleted_keys: list[str] = []
+    monkeypatch.setattr(dashboard_route, "cache_delete", lambda key: deleted_keys.append(key))
+
+    response = client.put(
+        "/api/v1/dashboard/student-plan",
+        json={"year": 2026, "target_trainees": 12},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert deleted_keys == ["dashboard:kpi:main:2026"]
 
 
 def test_schedule_generation_does_not_require_auditoriums(client, auth_headers, db_session):

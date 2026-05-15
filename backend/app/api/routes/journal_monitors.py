@@ -4,11 +4,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
 from app.core.crypto import cipher
-from app.models import JournalMonitorEntry, JournalMonitorSection, RoleName
+from app.models import JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, RoleName
 from app.schemas.api import (
     JournalMonitorEntryBulkDeleteRequest,
     JournalMonitorEntryBulkDeleteResponse,
@@ -149,7 +150,16 @@ def process_journal_monitor_auto_tick(
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:
-    section = db.get(JournalMonitorSection, section_id)
+    section = (
+        db.query(JournalMonitorSection)
+        .options(
+            selectinload(JournalMonitorSection.entries)
+            .selectinload(JournalMonitorEntry.workload_entries)
+            .joinedload(JournalWorkloadEntry.teacher)
+        )
+        .filter(JournalMonitorSection.id == section_id)
+        .first()
+    )
     if not section:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Розділ журналів не знайдено")
     ensure_same_branch(current_user, section, "Розділ журналів")
@@ -160,6 +170,7 @@ def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: in
 def list_sections(db: DbSession, current_user: CurrentUser) -> list[JournalMonitorSectionResponse]:
     sections = (
         apply_branch_scope(db.query(JournalMonitorSection), JournalMonitorSection, current_user.branch_id)
+        .options(selectinload(JournalMonitorSection.entries))
         .order_by(JournalMonitorSection.created_at.desc())
         .all()
     )

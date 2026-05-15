@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.crypto import cipher
 from app.models import Document, DocumentType, Group, ImportJob, JobStatus, JournalMonitorSection, ScheduleSlot
+from app.services.cache import cache_get_json, cache_set_json, hashed_cache_part
 from app.services.import_export import IMPORT_UPDATE_MODES
 from app.services.journal_monitor import (
     GOOGLE_DRIVE_DOCS_MIME,
@@ -53,6 +54,7 @@ ImportJobRunner = Callable[[int], Any]
 ProcessedFileMarker = Callable[[str, str, str | None], Any]
 
 DEFAULT_PROCESSED_MARKER = "[processed]"
+GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS = 45
 
 
 def resolve_drive_intake_service_account_json(db: Session, branch_id: str | None = None) -> str | None:
@@ -76,6 +78,12 @@ def resolve_drive_intake_service_account_json(db: Session, branch_id: str | None
 
 
 def list_drive_intake_files(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
+    credentials = service_account_json or settings.google_drive_service_account_json or settings.google_drive_api_key
+    cache_key = f"drive:list:intake:{folder_id}:{hashed_cache_part(credentials)}"
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
     mime_filter = " or ".join(f"mimeType = '{mime_type}'" for mime_type in sorted(SUPPORTED_INTAKE_MIME_TYPES))
     query = f"'{folder_id}' in parents and ({mime_filter}) and trashed = false"
     fields = "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)"
@@ -100,6 +108,7 @@ def list_drive_intake_files(folder_id: str, service_account_json: str | None = N
         files.extend(data.get("files", []))
         page_token = data.get("nextPageToken") or ""
         if not page_token:
+            cache_set_json(cache_key, files, GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS)
             return files
 
 

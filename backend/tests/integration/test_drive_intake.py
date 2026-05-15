@@ -401,6 +401,44 @@ def test_drive_intake_marker_explains_google_drive_permission_denial(monkeypatch
         raise AssertionError("Expected permission error")
 
 
+def test_drive_intake_listing_uses_short_lived_cache(monkeypatch):
+    cache: dict[str, list[dict]] = {}
+    cache_sets: list[tuple[str, int]] = []
+    calls = {"count": 0}
+
+    monkeypatch.setattr(drive_intake, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: list[dict], ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(drive_intake, "cache_set_json", fake_cache_set)
+    monkeypatch.setattr(drive_intake, "_drive_request_url", lambda url, service_account_json=None: url)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"files":[{"id":"file-1","name":"Contracts.xlsx","mimeType":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}]}'
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr(drive_intake, "urlopen", fake_urlopen)
+
+    first = drive_intake.list_drive_intake_files("root-folder")
+    second = drive_intake.list_drive_intake_files("root-folder")
+
+    assert first == second
+    assert calls["count"] == 1
+    assert cache_sets[0][1] == 45
+
+
 def test_drive_intake_reports_marking_error_for_existing_successful_unmarked_file(db_session, tmp_path):
     schedule_path = tmp_path / "successful-schedule.docx"
     schedule_path.write_bytes(_schedule_docx_bytes())

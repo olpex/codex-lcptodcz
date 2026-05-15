@@ -30,6 +30,21 @@ def _contracts_xlsx_bytes() -> bytes:
     return stream.read()
 
 
+def _large_contracts_xlsx_bytes(rows: int = 501) -> bytes:
+    stream = io.BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Додаток"
+    sheet.append(["Група 46-26 UX тест"])
+    sheet.append([])
+    sheet.append(["№", "ПІБ безробітнього", "Дата народження", "№ Договору"])
+    for index in range(1, rows + 1):
+        sheet.append([index, f"Слухач {index}", "01.02.2000", f"46-26/{index:03d}"])
+    workbook.save(stream)
+    stream.seek(0)
+    return stream.read()
+
+
 def _schedule_docx_bytes(group_code: str = "46-26") -> bytes:
     stream = io.BytesIO()
     doc = DocxDocument()
@@ -143,6 +158,37 @@ def test_import_works_when_queue_is_unavailable(client, auth_headers, monkeypatc
     payload = response.json()
     assert payload["status"] in {"running", "succeeded", "failed"}
     assert payload["status"] != "queued"
+
+
+def test_large_xlsx_import_does_not_run_inline_when_queue_is_unavailable(client, auth_headers, monkeypatch):
+    def _raise_queue_error(job_id: int):
+        raise RuntimeError("redis unavailable")
+
+    inline_called = {"value": False}
+
+    def _fail_inline(job_id: int):
+        inline_called["value"] = True
+        raise AssertionError("large import must not run inline")
+
+    monkeypatch.setattr(documents_route.process_import_job_task, "delay", _raise_queue_error)
+    monkeypatch.setattr(documents_route.process_import_job_task, "run", _fail_inline)
+
+    response = client.post(
+        "/api/v1/documents/import",
+        headers=auth_headers,
+        files={
+            "file": (
+                "large-contracts.xlsx",
+                _large_contracts_xlsx_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert inline_called["value"] is False
 
 
 def test_import_accepts_overwrite_mode_form_field(client, auth_headers, monkeypatch):

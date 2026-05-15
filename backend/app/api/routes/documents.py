@@ -6,6 +6,7 @@ import tempfile
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from celery.utils.log import get_task_logger
+from openpyxl import load_workbook
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Document, ExportJob, Group, ImportJob, JobStatus, RoleName, ScheduleSlot
@@ -28,6 +29,7 @@ from app.tasks.worker import process_export_job_task, process_import_job_task
 router = APIRouter()
 logger = get_task_logger(__name__)
 MAX_BATCH_IMPORT_FILES = 100
+INLINE_IMPORT_ROW_LIMIT = 500
 IMPORTABLE_DOCUMENT_TYPES = {"xlsx", "docx", "csv"}
 IMPORTABLE_DOCUMENT_TYPES_LABEL = ".xls/.xlsx, .csv, .docx"
 PDF_IMPORT_UNSUPPORTED_MESSAGE = (
@@ -36,7 +38,7 @@ PDF_IMPORT_UNSUPPORTED_MESSAGE = (
 )
 
 
-def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
+def _dispatch_with_fallback(task, job_id: int, job_kind: str, *, allow_inline: bool = True) -> str:
     """
     Try queue-first dispatch. If broker is unavailable (common in serverless),
     run synchronously in-process to avoid API 500 on import/export actions.
@@ -46,6 +48,8 @@ def _dispatch_with_fallback(task, job_id: int, job_kind: str) -> str:
         return "queued"
     except Exception as queue_exc:
         logger.warning("Queue dispatch failed for %s job %s: %s", job_kind, job_id, queue_exc)
+        if not allow_inline:
+            return "queue_unavailable"
         try:
             task.run(job_id)
             return "inline"
@@ -61,6 +65,9 @@ def _with_dispatch_notice(job: JobResponse, dispatch_mode: str) -> JobResponse:
     elif dispatch_mode == "inline_failed":
         suffix = f" {job.message}" if job.message else ""
         job.message = f"Черга недоступна, а inline-виконання завершилось помилкою.{suffix}"
+    elif dispatch_mode == "queue_unavailable":
+        suffix = f" {job.message}" if job.message else ""
+        job.message = f"Черга тимчасово недоступна. Великий імпорт залишено у статусі queued для фонової обробки.{suffix}"
     return job
 
 
@@ -90,6 +97,24 @@ def _ensure_importable_document_type(doc_type) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=PDF_IMPORT_UNSUPPORTED_MESSAGE)
     if doc_type.value not in IMPORTABLE_DOCUMENT_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Підтримуються {IMPORTABLE_DOCUMENT_TYPES_LABEL}")
+
+
+def _is_large_tabular_import(path: str, doc_type) -> bool:
+    if doc_type.value == "xlsx":
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            return any((sheet.max_row or 0) > INLINE_IMPORT_ROW_LIMIT for sheet in workbook.worksheets)
+        finally:
+            workbook.close()
+    if doc_type.value == "csv":
+        try:
+            with Path(path).open("r", encoding="utf-8-sig", errors="ignore", newline="") as handle:
+                for index, _line in enumerate(handle, start=1):
+                    if index > INLINE_IMPORT_ROW_LIMIT:
+                        return True
+        except OSError:
+            return False
+    return False
 
 
 def _create_import_job(
@@ -278,7 +303,8 @@ def import_document(
     db.commit()
     db.refresh(job)
 
-    dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "import")
+    allow_inline = not _is_large_tabular_import(job.document.file_path, job.document.file_type) if job.document else True
+    dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "import", allow_inline=allow_inline)
     db.refresh(job)
     write_audit(
         db,
@@ -378,7 +404,8 @@ def import_document_batch(
     job_responses: list[JobResponse] = []
     dispatch_modes: dict[str, int] = {}
     for job in queued_jobs:
-        dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "batch_import")
+        allow_inline = not _is_large_tabular_import(job.document.file_path, job.document.file_type) if job.document else True
+        dispatch_mode = _dispatch_with_fallback(process_import_job_task, job.id, "batch_import", allow_inline=allow_inline)
         dispatch_modes[dispatch_mode] = dispatch_modes.get(dispatch_mode, 0) + 1
         db.refresh(job)
         job_responses.append(_with_dispatch_notice(JobResponse.model_validate(job), dispatch_mode))

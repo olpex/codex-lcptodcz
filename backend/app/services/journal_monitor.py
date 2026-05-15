@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
+from app.services.cache import cache_get_json, cache_set_json, hashed_cache_part
 from app.services.import_export import save_report_file, try_import_trainees
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -45,6 +46,7 @@ JOURNAL_MONITOR_MESSAGE_LIMIT = 500
 GOOGLE_DRIVE_REQUEST_TIMEOUT_SECONDS = 30
 GOOGLE_DRIVE_REQUEST_RETRY_ATTEMPTS = 3
 GOOGLE_DRIVE_REQUEST_RETRY_DELAY_SECONDS = 0.75
+GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS = 45
 SUBJECTLESS_WORKLOAD_SUBJECT_NAME = "Без назви предмета"
 JOURNAL_DAILY_ACTIVITY_ZONE = ZoneInfo("Europe/Kyiv")
 JOURNAL_DAILY_ACTIVITY_START_HOUR = 8
@@ -879,11 +881,20 @@ def _read_drive_response(request_or_url: str | Request) -> bytes:
     raise RuntimeError("Google Drive не повернув відповідь")
 
 
+def _drive_list_cache_key(kind: str, folder_id: str, service_account_json: str | None = None) -> str:
+    credentials = service_account_json or settings.google_drive_service_account_json or settings.google_drive_api_key
+    return f"drive:list:{kind}:{folder_id}:{hashed_cache_part(credentials)}"
+
+
 def list_drive_child_folders(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
     effective_service_account_json = service_account_json or settings.google_drive_service_account_json
     use_service_account = bool(effective_service_account_json.strip())
     if not use_service_account and not settings.google_drive_api_key:
         raise RuntimeError(SERVICE_ACCOUNT_SETUP_MESSAGE)
+    cache_key = _drive_list_cache_key("child-folders", folder_id, effective_service_account_json)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     query = f"'{folder_id}' in parents and mimeType = '{GOOGLE_DRIVE_FOLDER_MIME}' and trashed = false"
     fields = "nextPageToken,files(id,name,mimeType,webViewLink,createdTime,modifiedTime)"
@@ -917,6 +928,7 @@ def list_drive_child_folders(folder_id: str, service_account_json: str | None = 
             )
         page_token = payload.get("nextPageToken") or ""
         if not page_token:
+            cache_set_json(cache_key, folders, GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS)
             return folders
 
 
@@ -932,6 +944,11 @@ def _drive_request_url(url: str, service_account_json: str | None = None) -> str
 
 
 def list_drive_journal_workbook_files(folder_id: str, service_account_json: str | None = None) -> list[dict[str, Any]]:
+    cache_key = _drive_list_cache_key("journal-workbooks", folder_id, service_account_json)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, list):
+        return cached
+
     mime_filter = " or ".join(
         [
             f"mimeType = '{GOOGLE_DRIVE_SHEETS_MIME}'",
@@ -956,6 +973,7 @@ def list_drive_journal_workbook_files(folder_id: str, service_account_json: str 
         files.extend(payload.get("files", []))
         page_token = payload.get("nextPageToken") or ""
         if not page_token:
+            cache_set_json(cache_key, files, GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS)
             return files
 
 

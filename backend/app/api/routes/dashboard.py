@@ -29,8 +29,10 @@ from app.schemas.api import (
     StudentPlanResponse,
     StudentPlanUpdateRequest,
 )
+from app.services.cache import cache_delete, cache_get_json, cache_set_json
 
 router = APIRouter()
+KPI_CACHE_TTL_SECONDS = 60
 
 
 def _current_plan_year() -> int:
@@ -103,21 +105,23 @@ def _active_groups_count(db: DbSession, branch_id: str, year: int) -> int:
     )
 
 
-@router.get("/kpi", response_model=DashboardKPIResponse)
-def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -> DashboardKPIResponse:
-    plan_year = year or _current_plan_year()
-    student_plan = _student_plan_response(db, current_user.branch_id, plan_year)
-    active_groups = _active_groups_count(db, current_user.branch_id, plan_year)
+def _kpi_cache_key(branch_id: str, year: int) -> str:
+    return f"dashboard:kpi:{branch_id}:{year}"
+
+
+def _compute_kpi(db: DbSession, branch_id: str, plan_year: int) -> DashboardKPIResponse:
+    student_plan = _student_plan_response(db, branch_id, plan_year)
+    active_groups = _active_groups_count(db, branch_id, plan_year)
     active_trainees = (
         db.query(Trainee)
-        .filter(Trainee.branch_id == current_user.branch_id, Trainee.is_deleted.is_(False))
+        .filter(Trainee.branch_id == branch_id, Trainee.is_deleted.is_(False))
         .count()
     )
 
     performance_rows = (
         db.query(Performance)
         .join(Group, Group.id == Performance.group_id)
-        .filter(Group.branch_id == current_user.branch_id)
+        .filter(Group.branch_id == branch_id)
         .all()
     )
     if performance_rows:
@@ -138,6 +142,19 @@ def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -
         forecast_graduation=forecast_graduation,
         forecast_employment=forecast_employment,
     )
+
+
+@router.get("/kpi", response_model=DashboardKPIResponse)
+def get_kpi(db: DbSession, current_user: CurrentUser, year: int | None = None) -> DashboardKPIResponse:
+    plan_year = year or _current_plan_year()
+    cache_key = _kpi_cache_key(current_user.branch_id, plan_year)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict):
+        return DashboardKPIResponse.model_validate(cached)
+
+    response = _compute_kpi(db, current_user.branch_id, plan_year)
+    cache_set_json(cache_key, response.model_dump(mode="json"), KPI_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.put(
@@ -165,6 +182,7 @@ def update_student_plan(
         plan.target_trainees = payload.target_trainees
     db.add(plan)
     db.commit()
+    cache_delete(_kpi_cache_key(current_user.branch_id, payload.year))
     return _student_plan_response(db, current_user.branch_id, payload.year)
 
 

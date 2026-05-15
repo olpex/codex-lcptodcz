@@ -3,9 +3,11 @@ from io import BytesIO
 
 import pytest
 from openpyxl import Workbook
+from sqlalchemy import event
 
+from app.db.session import engine
 from app.core.crypto import cipher
-from app.models import Group, GroupStatus, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.services.import_export import collect_teacher_workload_summary
 from app.services import journal_monitor
 
@@ -47,6 +49,67 @@ def _journal_workbook_bytes(
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def test_journal_detail_eager_loads_entries_workload_and_teachers(client, auth_headers, db_session):
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    teachers = [
+        Teacher(branch_id="main", first_name=f"Teacher{index}", last_name="Load", hourly_rate=0, is_active=True)
+        for index in range(3)
+    ]
+    db_session.add_all(teachers)
+    db_session.flush()
+
+    for index, teacher in enumerate(teachers):
+        entry = JournalMonitorEntry(
+            section_id=section.id,
+            branch_id="main",
+            drive_file_id=f"journal-{index}",
+            journal_name=f"{index}-26 Journal",
+            group_code=f"{index}-26",
+            workload_status="processed",
+        )
+        db_session.add(entry)
+        db_session.flush()
+        db_session.add(
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=entry.id,
+                branch_id="main",
+                teacher_id=teacher.id,
+                subject_name="Subject",
+                hours=2,
+            )
+        )
+    db_session.commit()
+    db_session.refresh(section)
+
+    lazy_loads = 0
+
+    def count_lazy_loads(conn, cursor, statement, parameters, context, executemany):
+        nonlocal lazy_loads
+        normalized = " ".join(statement.lower().split())
+        if (
+            "from journal_workload_entries" in normalized
+            and "where ? = journal_workload_entries.journal_monitor_entry_id" in normalized
+        ) or ("from teachers" in normalized and "where teachers.id = ?" in normalized):
+            lazy_loads += 1
+
+    event.listen(engine, "before_cursor_execute", count_lazy_loads)
+    try:
+        response = client.get(f"/api/v1/journal-monitors/{section.id}", headers=auth_headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_lazy_loads)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["entries"]) == 3
+    assert lazy_loads == 0
 
 
 def _journal_workbook_with_total_row_bytes(rows: list[tuple[str, float, str, str]], total_hours: float) -> bytes:
@@ -3014,6 +3077,45 @@ def test_drive_folder_listing_uses_service_account_bearer_token(monkeypatch):
     assert folders[0]["id"] == "folder-1"
     assert "key=" not in str(captured["url"])
     assert captured["authorization"] == "Bearer service-token"
+
+
+def test_drive_folder_listing_uses_short_lived_cache(monkeypatch):
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_api_key", "test-key")
+    monkeypatch.setattr(journal_monitor.settings, "google_drive_service_account_json", "")
+    cache: dict[str, list[dict]] = {}
+    cache_sets: list[tuple[str, int]] = []
+    calls = {"count": 0}
+
+    monkeypatch.setattr(journal_monitor, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: list[dict], ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(journal_monitor, "cache_set_json", fake_cache_set)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"files":[{"id":"folder-1","name":"180-25 Journal","webViewLink":"https://drive/folder-1"}]}'
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        return FakeResponse()
+
+    monkeypatch.setattr(journal_monitor, "urlopen", fake_urlopen)
+
+    first = journal_monitor.list_drive_child_folders("root-folder")
+    second = journal_monitor.list_drive_child_folders("root-folder")
+
+    assert first == second
+    assert calls["count"] == 1
+    assert cache_sets[0][1] == 45
 
 
 def test_drive_download_retries_when_response_read_times_out(monkeypatch):

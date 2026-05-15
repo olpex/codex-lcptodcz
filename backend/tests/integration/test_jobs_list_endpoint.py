@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import event
+
+from app.db.session import engine
 from app.models import Document, DocumentType, ExportJob, ImportJob, JobStatus
 from app.api.routes import jobs as jobs_route
 
@@ -140,3 +143,66 @@ def test_reprocess_import_job_creates_new_job_from_existing_document(client, aut
     new_job = db_session.get(ImportJob, payload["job"]["id"])
     assert new_job is not None
     assert new_job.document_id == document.id
+
+
+def test_jobs_list_eager_loads_documents(client, auth_headers, db_session):
+    now = datetime.now(timezone.utc)
+    documents = []
+    for index in range(6):
+        document = Document(
+            branch_id="main",
+            file_name=f"sample-{index}.xlsx",
+            file_path=f"/tmp/sample-{index}.xlsx",
+            file_type=DocumentType.XLSX,
+            source="upload",
+        )
+        db_session.add(document)
+        documents.append(document)
+    db_session.commit()
+    for document in documents:
+        db_session.refresh(document)
+
+    for index, document in enumerate(documents[:3]):
+        db_session.add(
+            ImportJob(
+                branch_id="main",
+                idempotency_key=f"import-eager-{index}",
+                document_id=document.id,
+                status=JobStatus.QUEUED,
+                message="queued import",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    for index, document in enumerate(documents[3:]):
+        db_session.add(
+            ExportJob(
+                branch_id="main",
+                idempotency_key=f"export-eager-{index}",
+                report_type="kpi",
+                export_format="xlsx",
+                status=JobStatus.SUCCEEDED,
+                message="done export",
+                output_document_id=document.id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    db_session.commit()
+
+    document_lazy_loads = 0
+
+    def count_document_lazy_loads(conn, cursor, statement, parameters, context, executemany):
+        nonlocal document_lazy_loads
+        normalized = " ".join(statement.lower().split())
+        if "from documents" in normalized and "where documents.id = ?" in normalized:
+            document_lazy_loads += 1
+
+    event.listen(engine, "before_cursor_execute", count_document_lazy_loads)
+    try:
+        response = client.get("/api/v1/jobs?limit=20", headers=auth_headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_document_lazy_loads)
+
+    assert response.status_code == 200
+    assert document_lazy_loads == 0

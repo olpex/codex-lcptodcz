@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_
+from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, require_roles
 from app.models import ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
@@ -133,7 +134,7 @@ def list_jobs(
         if date_to:
             import_query = import_query.filter(ImportJob.created_at <= date_to)
 
-        import_jobs = import_query.order_by(ImportJob.created_at.desc()).limit(limit).all()
+        import_jobs = import_query.options(joinedload(ImportJob.document)).order_by(ImportJob.created_at.desc()).limit(limit).all()
         items.extend(
             JobListItemResponse(
                 job_type="import",
@@ -154,7 +155,7 @@ def list_jobs(
         if date_to:
             export_query = export_query.filter(ExportJob.created_at <= date_to)
 
-        export_jobs = export_query.order_by(ExportJob.created_at.desc()).limit(limit).all()
+        export_jobs = export_query.options(joinedload(ExportJob.output_document)).order_by(ExportJob.created_at.desc()).limit(limit).all()
         items.extend(
             JobListItemResponse(
                 job_type="export",
