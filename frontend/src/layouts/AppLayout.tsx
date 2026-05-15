@@ -102,7 +102,7 @@ export function AppLayout() {
       <header className="sticky top-0 z-40 border-b border-pine/10 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
-            <p className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</p>
+            <h1 className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</h1>
             <p className="text-sm text-slate-600">{uiText.appSubtitle}</p>
           </div>
           <div className="flex items-center gap-3">
