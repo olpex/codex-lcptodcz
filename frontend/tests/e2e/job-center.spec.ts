@@ -155,6 +155,7 @@ test("job center highlights failed Drive jobs that need attention", async ({ pag
               result_payload: {
                 source: "drive_intake",
                 drive_file_name: "46-26 Schedule.docx",
+                processed_drive_file_name: "46-26 Schedule [processed].docx",
                 marking_error: "Google Drive denied rename"
               },
               started_at: "2026-05-15T08:00:00Z",
@@ -288,6 +289,7 @@ test("job center shows dedicated Google Drive intake status", async ({ page }) =
               result_payload: {
                 source: "drive_intake",
                 drive_file_name: "46-26 Schedule.docx",
+                processed_drive_file_name: "46-26 Schedule [processed].docx",
                 marking_error: "Google Drive denied rename"
               },
               started_at: "2026-05-15T08:00:00Z",
@@ -328,6 +330,10 @@ test("job center shows dedicated Google Drive intake status", async ({ page }) =
   await expect(drivePanel).toContainText("Google Drive intake");
   await expect(drivePanel).toContainText("Останній файл");
   await expect(drivePanel).toContainText("46-26 Schedule.docx");
+  await expect(drivePanel).toContainText("Drive після маркування");
+  await expect(drivePanel).toContainText("46-26 Schedule [processed].docx");
+  await expect(drivePanel).toContainText("Оновлено:");
+  await expect(drivePanel).toContainText("Завершено:");
   await expect(drivePanel).toContainText("Google Drive denied rename");
   await expect(drivePanel).toContainText("Надайте service account доступ Editor");
 });

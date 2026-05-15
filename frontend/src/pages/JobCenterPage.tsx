@@ -109,6 +109,13 @@ function getPayloadText(payload: Record<string, unknown> | null, key: string): s
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function formatJobDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("uk-UA");
+}
+
 function getJobStage(job: Job): JobStage {
   if (job.status === "queued") {
     return { step: 1, total: 3, percent: 20, label: "Очікує worker" };
@@ -899,6 +906,22 @@ export function JobCenterPage() {
               <p className="mt-1 text-sm text-slate-700">
                 #{driveIntakeStatus.latest.job.id} · {formatJobStatus(driveIntakeStatus.latest.job.status)}
               </p>
+              <dl className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                <div>
+                  <dt className="font-semibold text-slate-500">Оновлено:</dt>
+                  <dd>{formatJobDateTime(driveIntakeStatus.latest.job.updated_at)}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-slate-500">Завершено:</dt>
+                  <dd>{formatJobDateTime(driveIntakeStatus.latest.job.finished_at)}</dd>
+                </div>
+              </dl>
+              {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name") && (
+                <p className="mt-2 text-sm text-slate-700">
+                  <span className="font-semibold">Drive після маркування:</span>{" "}
+                  {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name")}
+                </p>
+              )}
               {driveIntakeStatus.latest.job.message && (
                 <p className="mt-1 text-sm text-slate-700">{driveIntakeStatus.latest.job.message}</p>
               )}
@@ -910,6 +933,7 @@ export function JobCenterPage() {
               {driveIntakeRows.map((item) => {
                 const issueMessage = getJobIssueMessage(item);
                 const fileName = getPayloadText(item.job.result_payload, "drive_file_name") || item.document_file_name || "Файл не вказано";
+                const processedFileName = getPayloadText(item.job.result_payload, "processed_drive_file_name");
                 return (
                   <div key={`drive-intake-${item.job.id}`} className="rounded-md border border-sky-200 bg-white px-3 py-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -920,6 +944,15 @@ export function JobCenterPage() {
                         {formatJobStatus(item.job.status)}
                       </span>
                     </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Оновлено: {formatJobDateTime(item.job.updated_at)}
+                      {item.job.finished_at ? ` · Завершено: ${formatJobDateTime(item.job.finished_at)}` : ""}
+                    </p>
+                    {processedFileName && (
+                      <p className="mt-1 text-xs text-slate-600">
+                        <span className="font-semibold">Drive після маркування:</span> {processedFileName}
+                      </p>
+                    )}
                     {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
                     {item.document_id && (
                       <button
