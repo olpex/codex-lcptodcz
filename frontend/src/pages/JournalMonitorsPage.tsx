@@ -73,11 +73,11 @@ const NO_DATA_BADGE_CLASSES = "whitespace-nowrap rounded-full px-2 py-1 text-xs 
 
 const PROGRESS_CARDS = [
   {
-    key: "complete",
-    title: "Розклад і слухачі",
-    caption: "Є обидві частини",
-    barClass: "bg-emerald-600",
-    valueClass: "text-emerald-700"
+    key: "workload_only",
+    title: "Тільки педнавантаження",
+    caption: "Немає розкладу і слухачів",
+    barClass: "bg-violet-600",
+    valueClass: "text-violet-700"
   },
   {
     key: "schedule_only",

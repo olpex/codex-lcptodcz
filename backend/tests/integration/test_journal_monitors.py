@@ -2859,23 +2859,26 @@ def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, a
     assert sync_response.json()["stats"]["schedule_only"] == 2
     assert sync_response.json()["stats"]["trainees_only"] == 0
     assert sync_response.json()["stats"]["not_processed"] == 2
+    assert sync_response.json()["stats"]["workload_only"] == 0
     assert sync_response.json()["stats"]["workload_and_trainees"] == 0
     assert sync_response.json()["stats"]["workload_trainees_schedule"] == 0
 
     for entry in db_session.query(journal_monitor.JournalMonitorEntry).filter(
         journal_monitor.JournalMonitorEntry.section_id == section_id,
-        journal_monitor.JournalMonitorEntry.group_code.in_(["180-25", "162-25"]),
+        journal_monitor.JournalMonitorEntry.group_code.in_(["180-25", "162-25", "999-25"]),
     ):
         entry.workload_status = "processed"
         entry.workload_hours = 30
-        entry.trainees_status = "processed"
-        entry.trainees_message = "Додано/оновлено слухачів із журналу: 1"
+        if entry.group_code != "999-25":
+            entry.trainees_status = "processed"
+            entry.trainees_message = "Додано/оновлено слухачів із журналу: 1"
         db_session.add(entry)
     db_session.commit()
 
     detail_response = client.get(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
     assert detail_response.status_code == 200
     assert detail_response.json()["stats"]["trainees_only"] == 0
+    assert detail_response.json()["stats"]["workload_only"] == 1
     assert detail_response.json()["stats"]["workload_and_trainees"] == 1
     assert detail_response.json()["stats"]["workload_trainees_schedule"] == 1
     entries = {item["group_code"]: item for item in detail_response.json()["entries"]}

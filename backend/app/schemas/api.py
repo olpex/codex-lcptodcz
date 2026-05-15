@@ -497,6 +497,7 @@ class JournalMonitorStats(BaseModel):
     trainees_only: int = 0
     not_processed: int = 0
     unknown_code: int = 0
+    workload_only: int = 0
     workload_and_trainees: int = 0
     workload_trainees_schedule: int = 0
 

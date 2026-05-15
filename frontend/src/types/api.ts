@@ -217,6 +217,7 @@ export interface JournalMonitorStats {
   trainees_only: number;
   not_processed: number;
   unknown_code: number;
+  workload_only: number;
   workload_and_trainees: number;
   workload_trainees_schedule: number;
 }

@@ -13,6 +13,7 @@ const section = {
     trainees_only: 0,
     not_processed: 0,
     unknown_code: 0,
+    workload_only: 1,
     workload_and_trainees: 1,
     workload_trainees_schedule: 1
   },
@@ -140,7 +141,10 @@ const archiveSection = {
     schedule_only: 20,
     trainees_only: 10,
     not_processed: 30,
-    unknown_code: 0
+    unknown_code: 0,
+    workload_only: 0,
+    workload_and_trainees: 0,
+    workload_trainees_schedule: 0
   },
   entries: []
 };
@@ -361,7 +365,8 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByText(/4 папок, оновлено:/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Опрацювання журналів" })).toBeVisible();
   await expect(page.getByText("25%").first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Розклад і слухачі" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Тільки педнавантаження" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Розклад і слухачі" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Тільки розклад" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Тільки слухачі" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Не опрацьовано" })).toBeVisible();
