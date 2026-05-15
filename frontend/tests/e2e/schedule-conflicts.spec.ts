@@ -141,6 +141,7 @@ test("schedule filter shows only conflicting lessons", async ({ page }) => {
 });
 
 test("teacher sees schedule as read-only without drag-and-drop editing", async ({ page }) => {
+  let teacherDirectoryRequests = 0;
   const slots: MockScheduleSlot[] = [
     {
       id: 71,
@@ -199,6 +200,7 @@ test("teacher sees schedule as read-only without drag-and-drop editing", async (
     }
 
     if (path.endsWith("/teachers") && method === "GET") {
+      teacherDirectoryRequests += 1;
       return route.fulfill({
         status: 403,
         contentType: "application/json",
@@ -218,6 +220,7 @@ test("teacher sees schedule as read-only without drag-and-drop editing", async (
   await expect(page.getByText("Режим перегляду")).toBeVisible();
   await page.getByRole("button", { name: "Розгорнути все" }).click();
   await expect(page.locator("#schedule-day-2026-09").getByText("READ-71")).toBeVisible();
+  expect(teacherDirectoryRequests).toBe(0);
   await expect(page.locator("[draggable=true]")).toHaveCount(0);
   await expect(page.getByText("Генерація розкладу")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Видалити розклад групи" })).toHaveCount(0);

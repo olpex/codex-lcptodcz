@@ -477,10 +477,12 @@ export function SchedulePage() {
     try {
       const data = await request<ScheduleSlot[]>("/schedule");
       let teachersData: Teacher[] = [];
-      try {
-        teachersData = await request<Teacher[]>("/teachers");
-      } catch {
-        teachersData = [];
+      if (canGenerate) {
+        try {
+          teachersData = await request<Teacher[]>("/teachers");
+        } catch {
+          teachersData = [];
+        }
       }
 
       setSlots(data);
