@@ -199,6 +199,7 @@ export function JobCenterPage() {
   const [supportedBatchExtensions, setSupportedBatchExtensions] = useState(FALLBACK_BATCH_IMPORT_EXTENSIONS);
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
+  const [driveIntakeLoadError, setDriveIntakeLoadError] = useState<string | null>(null);
   const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
   const [cancelTarget, setCancelTarget] = useState<JobListItem | null>(null);
@@ -436,8 +437,10 @@ export function JobCenterPage() {
     try {
       const data = await request<JobListItem[]>("/jobs/drive-intake?limit=5");
       setDriveIntakeRows(data);
-    } catch {
+      setDriveIntakeLoadError(null);
+    } catch (error) {
       setDriveIntakeRows([]);
+      setDriveIntakeLoadError((error as Error).message);
     }
   };
 
@@ -896,6 +899,7 @@ export function JobCenterPage() {
     : "цей файл";
   const rollbackTargetFileName = rollbackTarget?.document_file_name || `імпорт #${rollbackTarget?.job.id ?? ""}`;
   const rollbackInsertedCount = getRollbackInsertedCount(rollbackTarget);
+  const shouldShowDriveIntakePanel = Boolean(driveIntakeStatus.latest || driveIntakeLoadError || workerHealth);
 
   return (
     <div className="space-y-5">
@@ -954,7 +958,7 @@ export function JobCenterPage() {
           </div>
         </aside>
       )}
-      {driveIntakeStatus.latest && (
+      {shouldShowDriveIntakePanel && (
         <section
           className="rounded-lg border border-sky-200 bg-sky-50 p-4"
           data-testid="drive-intake-panel"
@@ -971,81 +975,116 @@ export function JobCenterPage() {
               <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {driveIntakeStatus.activeCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {driveIntakeStatus.failedCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {driveIntakeStatus.succeededCount}</span>
+              {workerHealth && (
+                <>
+                  <span className="rounded-full bg-white px-2 py-1 text-sky-800">
+                    {workerHealth.settings.drive_intake_auto_enabled
+                      ? "Автообробка: увімкнено"
+                      : "Автообробку Drive intake вимкнено"}
+                  </span>
+                  <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                    Інтервал: {workerHealth.settings.drive_intake_interval_seconds} с
+                  </span>
+                  {typeof workerHealth.settings.drive_intake_batch_size === "number" && (
+                    <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                      Batch: {workerHealth.settings.drive_intake_batch_size} файлів/tick
+                    </span>
+                  )}
+                </>
+              )}
             </div>
           </div>
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-            <article className="rounded-md border border-sky-200 bg-white p-3">
-              <p className="text-xs font-semibold uppercase text-slate-500">Останній файл</p>
-              <p className="mt-1 text-sm font-semibold text-ink">
-                {getPayloadText(driveIntakeStatus.latest.job.result_payload, "drive_file_name") ||
-                  driveIntakeStatus.latest.document_file_name ||
-                  "Файл не вказано"}
+          {driveIntakeLoadError ? (
+            <div className="space-y-3">
+              <InlineNotice tone="error" text={`Не вдалося отримати історію Drive intake: ${driveIntakeLoadError}`} />
+              <p className="rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-sky-900">
+                Перевірте доступ API або service account до intake-папки. Поточні імпортовані дані не змінюються.
               </p>
-              <p className="mt-1 text-sm text-slate-700">
-                #{driveIntakeStatus.latest.job.id} · {formatJobStatus(driveIntakeStatus.latest.job.status)}
-              </p>
-              <dl className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
-                <div>
-                  <dt className="font-semibold text-slate-500">Оновлено:</dt>
-                  <dd>{formatJobDateTime(driveIntakeStatus.latest.job.updated_at)}</dd>
-                </div>
-                <div>
-                  <dt className="font-semibold text-slate-500">Завершено:</dt>
-                  <dd>{formatJobDateTime(driveIntakeStatus.latest.job.finished_at)}</dd>
-                </div>
-              </dl>
-              {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name") && (
-                <p className="mt-2 text-sm text-slate-700">
-                  <span className="font-semibold">Drive після маркування:</span>{" "}
-                  {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name")}
+            </div>
+          ) : driveIntakeStatus.latest ? (
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+              <article className="rounded-md border border-sky-200 bg-white p-3">
+                <p className="text-xs font-semibold uppercase text-slate-500">Останній файл</p>
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {getPayloadText(driveIntakeStatus.latest.job.result_payload, "drive_file_name") ||
+                    driveIntakeStatus.latest.document_file_name ||
+                    "Файл не вказано"}
                 </p>
-              )}
-              {driveIntakeStatus.latest.job.message && (
-                <p className="mt-1 text-sm text-slate-700">{driveIntakeStatus.latest.job.message}</p>
-              )}
-              {getJobIssueHint(driveIntakeStatus.latest) && (
-                <p className="mt-2 text-sm font-medium text-sky-900">{getJobIssueHint(driveIntakeStatus.latest)}</p>
-              )}
-            </article>
-            <div className="space-y-2">
-              {driveIntakeRows.map((item) => {
-                const issueMessage = getJobIssueMessage(item);
-                const fileName = getPayloadText(item.job.result_payload, "drive_file_name") || item.document_file_name || "Файл не вказано";
-                const processedFileName = getPayloadText(item.job.result_payload, "processed_drive_file_name");
-                return (
-                  <div key={`drive-intake-${item.job.id}`} className="rounded-md border border-sky-200 bg-white px-3 py-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold text-ink">
-                        #{item.job.id} {fileName}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                        {formatJobStatus(item.job.status)}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Оновлено: {formatJobDateTime(item.job.updated_at)}
-                      {item.job.finished_at ? ` · Завершено: ${formatJobDateTime(item.job.finished_at)}` : ""}
-                    </p>
-                    {processedFileName && (
-                      <p className="mt-1 text-xs text-slate-600">
-                        <span className="font-semibold">Drive після маркування:</span> {processedFileName}
-                      </p>
-                    )}
-                    {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
-                    {item.document_id && (
-                      <button
-                        type="button"
-                        className="mt-2 rounded bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800"
-                        onClick={() => requestReprocessImportJob(item)}
-                      >
-                        Повторно імпортувати #{item.job.id}
-                      </button>
-                    )}
+                <p className="mt-1 text-sm text-slate-700">
+                  #{driveIntakeStatus.latest.job.id} · {formatJobStatus(driveIntakeStatus.latest.job.status)}
+                </p>
+                <dl className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                  <div>
+                    <dt className="font-semibold text-slate-500">Оновлено:</dt>
+                    <dd>{formatJobDateTime(driveIntakeStatus.latest.job.updated_at)}</dd>
                   </div>
-                );
-              })}
+                  <div>
+                    <dt className="font-semibold text-slate-500">Завершено:</dt>
+                    <dd>{formatJobDateTime(driveIntakeStatus.latest.job.finished_at)}</dd>
+                  </div>
+                </dl>
+                {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name") && (
+                  <p className="mt-2 text-sm text-slate-700">
+                    <span className="font-semibold">Drive після маркування:</span>{" "}
+                    {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name")}
+                  </p>
+                )}
+                {driveIntakeStatus.latest.job.message && (
+                  <p className="mt-1 text-sm text-slate-700">{driveIntakeStatus.latest.job.message}</p>
+                )}
+                {getJobIssueHint(driveIntakeStatus.latest) && (
+                  <p className="mt-2 text-sm font-medium text-sky-900">{getJobIssueHint(driveIntakeStatus.latest)}</p>
+                )}
+              </article>
+              <div className="space-y-2">
+                {driveIntakeRows.map((item) => {
+                  const issueMessage = getJobIssueMessage(item);
+                  const fileName = getPayloadText(item.job.result_payload, "drive_file_name") || item.document_file_name || "Файл не вказано";
+                  const processedFileName = getPayloadText(item.job.result_payload, "processed_drive_file_name");
+                  return (
+                    <div key={`drive-intake-${item.job.id}`} className="rounded-md border border-sky-200 bg-white px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-ink">
+                          #{item.job.id} {fileName}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          {formatJobStatus(item.job.status)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Оновлено: {formatJobDateTime(item.job.updated_at)}
+                        {item.job.finished_at ? ` · Завершено: ${formatJobDateTime(item.job.finished_at)}` : ""}
+                      </p>
+                      {processedFileName && (
+                        <p className="mt-1 text-xs text-slate-600">
+                          <span className="font-semibold">Drive після маркування:</span> {processedFileName}
+                        </p>
+                      )}
+                      {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
+                      {item.document_id && (
+                        <button
+                          type="button"
+                          className="mt-2 rounded bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800"
+                          onClick={() => requestReprocessImportJob(item)}
+                        >
+                          Повторно імпортувати #{item.job.id}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            <article className="rounded-md border border-sky-200 bg-white p-3">
+              <p className="text-sm font-semibold text-ink">Файлів Drive intake ще не оброблялось</p>
+              <p className="mt-1 text-sm text-slate-700">
+                {workerHealth?.settings.drive_intake_auto_enabled === false
+                  ? "Автообробку Drive intake вимкнено. Увімкніть її у конфігурації backend, коли потрібно забирати файли автоматично."
+                  : "Панель готова показати перші файли після наступної обробки intake-папки."}
+              </p>
+            </article>
+          )}
         </section>
       )}
       {emailIntakeStatus.latest && (

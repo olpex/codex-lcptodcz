@@ -460,6 +460,216 @@ test("job center shows dedicated Google Drive intake status", async ({ page }) =
   await expect(drivePanel).toContainText("Надайте service account доступ Editor");
 });
 
+test("job center keeps the Drive intake panel visible when there is no history yet", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/worker-health") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          celery: {
+            broker_configured: true,
+            ping_ok: true,
+            workers: ["celery@worker-1"],
+            error: null
+          },
+          backlog: {
+            import: { queued: 0, running: 0 },
+            export: { queued: 0, running: 0 },
+            total_active: 0
+          },
+          queues: [{ task: "app.tasks.worker.process_drive_intake_auto_task", queue: "drive_intake" }],
+          beat_schedule: [],
+          settings: {
+            drive_intake_auto_enabled: false,
+            drive_intake_interval_seconds: 45,
+            drive_intake_batch_size: 5,
+            journal_auto_interval_seconds: 60,
+            imap_fallback_enabled: false,
+            imap_auto_poll_enabled: false,
+            mail_primary_channel: "google_apps_script"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+
+  const drivePanel = page.getByTestId("drive-intake-panel");
+  await expect(drivePanel).toBeVisible();
+  await expect(drivePanel).toContainText("Файлів Drive intake ще не оброблялось");
+  await expect(drivePanel).toContainText("Автообробку Drive intake вимкнено");
+  await expect(drivePanel).toContainText("Batch: 5 файлів/tick");
+  await expect(drivePanel).toContainText("Активно: 0");
+});
+
+test("job center shows a Drive intake load error without hiding the panel", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Google Drive API unavailable" })
+      });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/worker-health") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "degraded",
+          celery: {
+            broker_configured: true,
+            ping_ok: true,
+            workers: ["celery@worker-1"],
+            error: null
+          },
+          backlog: {
+            import: { queued: 0, running: 0 },
+            export: { queued: 0, running: 0 },
+            total_active: 0
+          },
+          queues: [{ task: "app.tasks.worker.process_drive_intake_auto_task", queue: "drive_intake" }],
+          beat_schedule: [
+            {
+              name: "google-drive-intake-auto",
+              task: "app.tasks.worker.process_drive_intake_auto_task",
+              schedule_seconds: 45
+            }
+          ],
+          settings: {
+            drive_intake_auto_enabled: true,
+            drive_intake_interval_seconds: 45,
+            drive_intake_batch_size: 5,
+            journal_auto_interval_seconds: 60,
+            imap_fallback_enabled: false,
+            imap_auto_poll_enabled: false,
+            mail_primary_channel: "google_apps_script"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+
+  const drivePanel = page.getByTestId("drive-intake-panel");
+  await expect(drivePanel).toBeVisible();
+  await expect(drivePanel).toContainText("Не вдалося отримати історію Drive intake");
+  await expect(drivePanel).toContainText("Google Drive API unavailable");
+  await expect(drivePanel).toContainText("Перевірте доступ API або service account");
+  await expect(drivePanel).toContainText("Автообробка: увімкнено");
+});
+
 test("job center can re-import a Google Drive intake file from the Drive panel", async ({ page }) => {
   let reprocessRequested = false;
   let driveHistoryRequests = 0;
