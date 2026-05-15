@@ -130,7 +130,7 @@ export function DashboardPage() {
     try {
       const [data, attentionData, workloadData] = await Promise.all([
         request<KPI>("/dashboard/kpi"),
-        request<AttentionSummary>("/dashboard/attention"),
+        canEditPlan ? request<AttentionSummary>("/dashboard/attention") : Promise.resolve(EMPTY_ATTENTION),
         request<Workload[]>("/teacher-workload")
       ]);
       const nextKpi = {
@@ -183,6 +183,10 @@ export function DashboardPage() {
 
   const saveStudentPlan = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canEditPlan) {
+      showError("Редагування річного плану доступне лише адміністратору або методисту");
+      return;
+    }
     const year = Number(planYear);
     const target = Number(planTarget);
     if (!Number.isInteger(year) || year < 2000 || year > 2100) {
@@ -406,6 +410,14 @@ export function DashboardPage() {
         {isLoading && !hasLoadedOnce ? (
           <div className="flex h-24 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-600">
             Завантаження перевірок...
+          </div>
+        ) : !canEditPlan ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="font-semibold text-ink">Управлінські перевірки</p>
+            <p className="mt-1">
+              Цей блок доступний адміністратору або методисту. Для викладача головний екран показує KPI та
+              педнавантаження без службових перевірок імпорту, чернеток і реєстрів.
+            </p>
           </div>
         ) : attention.items.length === 0 ? (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
