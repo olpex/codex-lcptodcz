@@ -120,3 +120,21 @@ test("app layout skip link moves keyboard focus to main content", async ({ page 
   await expect(page).toHaveURL(/#main-content$/);
   await expect(mainContent).toBeFocused();
 });
+
+test("mobile navigation dialog manages keyboard focus", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthorizedSchedule(page);
+  await page.goto("/schedule");
+
+  const openMenuButton = page.getByRole("button", { name: "Відкрити меню" });
+  await openMenuButton.focus();
+  await page.keyboard.press("Enter");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Закрити" })).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(openMenuButton).toBeFocused();
+});
