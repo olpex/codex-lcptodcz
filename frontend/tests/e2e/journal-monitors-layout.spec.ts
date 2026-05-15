@@ -603,6 +603,18 @@ test("journal monitor archived sections are read-only until reactivated", async 
   await expect.poll(() => patchPayload).toEqual({ is_active: true });
 });
 
+test("journal monitor can prefill a copied section for the next year", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [archiveSection, { ...section, entries: [] }]
+  });
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: "Копіювати на новий рік" }).click();
+
+  await expect(page.getByLabel("Назва розділу")).toHaveValue("Журнали 2027");
+  await expect(page.getByLabel("URL папки Google Drive")).toHaveValue(section.folder_url);
+});
+
 test("journal monitor section can be deleted from the project", async ({ page }) => {
   const remainingSections = [{ ...section, entries: [] }];
   let deletedSectionId: number | null = null;

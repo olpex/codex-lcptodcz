@@ -315,6 +315,24 @@ function pickDefaultSectionId(sections: JournalMonitorSection[], currentYear = n
   return yearMatch?.id ?? sections[0].id;
 }
 
+function getJournalSectionYear(name: string): number | null {
+  const match = name.match(/\b(20\d{2}|21\d{2})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function getCopiedJournalSectionDraft(
+  source: JournalMonitorSection,
+  sections: JournalMonitorSection[],
+  currentYear = new Date().getFullYear()
+): { name: string; folderUrl: string } {
+  const sourceYear = getJournalSectionYear(source.name);
+  const knownYears = sections.map((section) => getJournalSectionYear(section.name)).filter((year): year is number => year !== null);
+  const baseYear = sourceYear ?? currentYear;
+  const nextYear = Math.max(baseYear + 1, knownYears.length ? Math.max(...knownYears) + 1 : baseYear + 1);
+  const nextName = sourceYear ? source.name.replace(String(sourceYear), String(nextYear)) : `Журнали ${nextYear}`;
+  return { name: nextName, folderUrl: source.folder_url };
+}
+
 export function JournalMonitorsPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess, showInfo } = useToast();
@@ -346,6 +364,7 @@ export function JournalMonitorsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
   const backgroundStepInFlightRef = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const selectedSection = useMemo(
     () => sections.find((section) => section.id === selectedId) || null,
@@ -648,6 +667,16 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const copySelectedSectionToNextYear = () => {
+    const source = detail || selectedSection;
+    if (!source) return;
+    const draft = getCopiedJournalSectionDraft(source, sections);
+    setName(draft.name);
+    setFolderUrl(draft.folderUrl);
+    nameInputRef.current?.focus();
+    showInfo("Форму заповнено для нового розділу. Перевірте URL і натисніть «Додати».");
+  };
+
   const deleteSelectedSection = async () => {
     if (!selectedId) return;
     setIsDeleting(true);
@@ -850,6 +879,7 @@ export function JournalMonitorsPage() {
           <label className="text-sm font-semibold text-slate-700">
             Назва розділу
             <input
+              ref={nameInputRef}
               className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -1068,6 +1098,15 @@ export function JournalMonitorsPage() {
                 disabled={!selectedId || isTogglingSectionActive}
               >
                 {isTogglingSectionActive ? "Змінюємо..." : sectionActive ? "Архівувати розділ" : "Активувати розділ"}
+              </button>
+            )}
+            {detail && (
+              <button
+                type="button"
+                className="rounded-lg border border-sky-300 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                onClick={copySelectedSectionToNextYear}
+              >
+                Копіювати на новий рік
               </button>
             )}
             {EXPORT_FORMATS.map((format) => (
