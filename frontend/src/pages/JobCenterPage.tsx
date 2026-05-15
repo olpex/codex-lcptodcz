@@ -34,6 +34,13 @@ type JobStatsSnapshot = {
   failed: number;
 };
 
+type JobStage = {
+  step: number;
+  total: number;
+  percent: number;
+  label: string;
+};
+
 function toIsoDateRangeStart(value: string): string {
   return `${value}T00:00:00Z`;
 }
@@ -62,6 +69,24 @@ function getFileExtension(fileName: string): string {
 
 function getRelativeFilePath(file: File): string {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+}
+
+function getPayloadText(payload: Record<string, unknown> | null, key: string): string | null {
+  const value = payload?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getJobStage(job: Job): JobStage {
+  if (job.status === "queued") {
+    return { step: 1, total: 3, percent: 20, label: "Очікує worker" };
+  }
+  if (job.status === "running") {
+    return { step: 2, total: 3, percent: 60, label: "Обробляється" };
+  }
+  if (job.status === "succeeded") {
+    return { step: 3, total: 3, percent: 100, label: "Завершено" };
+  }
+  return { step: 3, total: 3, percent: 100, label: "Потрібна увага" };
 }
 
 export function JobCenterPage() {
@@ -154,6 +179,9 @@ export function JobCenterPage() {
 
   const describeImportResult = (item: JobListItem): string => {
     if (item.job_type !== "import") return "—";
+    const driveFileName = getPayloadText(item.job.result_payload, "drive_file_name");
+    if (driveFileName) return `Файл Drive: ${driveFileName}`;
+
     const result = item.job.result_payload?.import_result;
     if (!result || typeof result !== "object") return item.job.message || "—";
 
@@ -173,6 +201,12 @@ export function JobCenterPage() {
     const memberships = Number(data.memberships_created || 0);
     if (data.note && inserted === 0 && updated === 0) return String(data.note);
     return `Слухачі: додано ${inserted}, оновлено ${updated}, прив'язок ${memberships}, пропущено ${skippedExisting + skippedInvalid}`;
+  };
+
+  const describeJobSource = (item: JobListItem): string => {
+    if (item.job_type === "export") return "—";
+    const payloadSource = getPayloadText(item.job.result_payload, "source");
+    return formatImportSource(item.import_source || payloadSource);
   };
 
   const previewImport = async () => {
@@ -471,8 +505,8 @@ export function JobCenterPage() {
       {
         key: "source",
         header: "Джерело",
-        render: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "—"),
-        sortAccessor: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "")
+        render: (item) => describeJobSource(item),
+        sortAccessor: (item) => describeJobSource(item)
       },
       {
         key: "status",
@@ -613,17 +647,41 @@ export function JobCenterPage() {
           </div>
           <div className="max-h-64 space-y-2 overflow-auto">
             {activeJobRows.map((item) => (
-              <div key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="flex items-center justify-between gap-2 text-sm">
-                  <span className="font-semibold text-ink">#{item.job.id} {formatJobType(item.job_type)}</span>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-800">
-                    {formatJobStatus(item.job.status)}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs text-slate-600">
-                  {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
-                </p>
-              </div>
+              (() => {
+                const stage = getJobStage(item.job);
+                return (
+                  <div key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="font-semibold text-ink">
+                        #{item.job.id} {formatJobType(item.job_type)}
+                        {item.job_type === "import" && <span className="font-normal text-slate-500"> · {describeJobSource(item)}</span>}
+                      </span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-800">
+                        {formatJobStatus(item.job.status)}
+                      </span>
+                    </div>
+                    <div className="mt-2">
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs text-slate-600">
+                        <span>Крок {stage.step} з {stage.total}</span>
+                        <span>{stage.label}</span>
+                      </div>
+                      <div
+                        role="progressbar"
+                        aria-label={`Прогрес задачі #${item.job.id}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={stage.percent}
+                        className="h-2 overflow-hidden rounded-full bg-white"
+                      >
+                        <div className="h-full rounded-full bg-amber" style={{ width: `${stage.percent}%` }} />
+                      </div>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-xs text-slate-600">
+                      {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
+                    </p>
+                  </div>
+                );
+              })()
             ))}
           </div>
         </aside>

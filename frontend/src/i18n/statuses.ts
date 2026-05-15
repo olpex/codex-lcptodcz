@@ -8,9 +8,12 @@ export const JOB_TYPE_LABELS: Record<"import" | "export", string> = {
 export const IMPORT_SOURCE_LABELS: Record<string, string> = {
   upload: "Ручний",
   batch_upload: "Пакетний",
+  drive_intake: "Google Drive",
   mail: "Пошта",
   mail_auto_contracts: "Пошта: Договори",
-  mail_google_script: "Пошта: Google Script"
+  mail_gmail_api: "Пошта: Gmail API",
+  mail_google_script: "Пошта: Google Script",
+  ocr_upload: "OCR"
 };
 
 export const JOB_STATUS_LABELS: Record<Job["status"], string> = {
