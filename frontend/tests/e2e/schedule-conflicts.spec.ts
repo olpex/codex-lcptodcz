@@ -140,6 +140,90 @@ test("schedule filter shows only conflicting lessons", async ({ page }) => {
   await expect(page.getByText("Конфліктних: 2")).toBeVisible();
 });
 
+test("teacher sees schedule as read-only without drag-and-drop editing", async ({ page }) => {
+  const slots: MockScheduleSlot[] = [
+    {
+      id: 71,
+      group_id: 71,
+      teacher_id: 17,
+      subject_id: 31,
+      room_id: 207,
+      starts_at: "2026-09-02T09:00:00Z",
+      ends_at: "2026-09-02T11:00:00Z",
+      pair_number: 1,
+      academic_hours: 2,
+      group_code: "READ-71",
+      group_name: "Група для перегляду",
+      teacher_name: "Тестовий Викладач",
+      subject_name: "Оглядовий курс",
+      room_name: "207"
+    }
+  ];
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "teacher-access-token",
+        refreshToken: "teacher-refresh-token"
+      })
+    );
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 17,
+          username: "teacher",
+          full_name: "Тестовий Викладач",
+          branch_id: "main",
+          roles: [{ id: 3, name: "teacher" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/schedule") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(slots)
+      });
+    }
+
+    if (path.endsWith("/teachers") && method === "GET") {
+      return route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Forbidden" })
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.goto("/schedule");
+
+  await expect(page.getByText("Режим перегляду")).toBeVisible();
+  await page.getByRole("button", { name: "Розгорнути все" }).click();
+  await expect(page.locator("#schedule-day-2026-09").getByText("READ-71")).toBeVisible();
+  await expect(page.locator("[draggable=true]")).toHaveCount(0);
+  await expect(page.getByText("Генерація розкладу")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Видалити розклад групи" })).toHaveCount(0);
+  await expect(page.getByText("Перетягніть викладача")).toHaveCount(0);
+});
+
 test("schedule months stay collapsed after page refresh", async ({ page }) => {
   const slots: MockScheduleSlot[] = [
     {
