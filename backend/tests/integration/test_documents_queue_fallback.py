@@ -222,6 +222,34 @@ def test_batch_import_formats_endpoint(client, auth_headers):
     assert set(response.json()["supported_extensions"]) == {"xls", "xlsx", "csv", "docx"}
 
 
+def test_batch_import_formats_endpoint_uses_short_lived_cache(client, auth_headers, monkeypatch):
+    cache: dict[str, dict] = {}
+    cache_sets: list[tuple[str, int]] = []
+    registry_calls = {"count": 0}
+
+    monkeypatch.setattr(documents_route, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: dict, ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    def fake_supported_extensions() -> list[str]:
+        registry_calls["count"] += 1
+        return ["csv", "docx", "xls", "xlsx"]
+
+    monkeypatch.setattr(documents_route, "cache_set_json", fake_cache_set)
+    monkeypatch.setattr(documents_route, "supported_batch_import_extensions", fake_supported_extensions)
+
+    first = client.get("/api/v1/documents/import/batch/formats", headers=auth_headers)
+    second = client.get("/api/v1/documents/import/batch/formats", headers=auth_headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert registry_calls["count"] == 1
+    assert cache_sets == [("documents:batch_import_formats:v1", 300)]
+
+
 def test_batch_import_creates_jobs_for_supported_folder_files(client, auth_headers, db_session, monkeypatch):
     def _queued(job_id: int):
         return None

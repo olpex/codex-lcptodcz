@@ -20,6 +20,7 @@ from app.schemas.api import (
     JobResponse,
 )
 from app.services.audit import write_audit
+from app.services.cache import cache_get_json, cache_set_json
 from app.services.import_registry import get_batch_import_format, supported_batch_import_extensions
 from app.services.import_export import IMPORT_UPDATE_MODES, analyze_trainee_import_duplicates, parse_document_content
 from app.services.schedule_import import parse_schedule_docx
@@ -30,6 +31,8 @@ router = APIRouter()
 logger = get_task_logger(__name__)
 MAX_BATCH_IMPORT_FILES = 100
 INLINE_IMPORT_ROW_LIMIT = 500
+BATCH_IMPORT_FORMATS_CACHE_KEY = "documents:batch_import_formats:v1"
+BATCH_IMPORT_FORMATS_CACHE_TTL_SECONDS = 300
 IMPORTABLE_DOCUMENT_TYPES = {"xlsx", "docx", "csv"}
 IMPORTABLE_DOCUMENT_TYPES_LABEL = ".xls/.xlsx, .csv, .docx"
 PDF_IMPORT_UNSUPPORTED_MESSAGE = (
@@ -328,7 +331,17 @@ def import_document(
     dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
 )
 def get_batch_import_formats() -> BatchImportFormatsResponse:
-    return BatchImportFormatsResponse(supported_extensions=supported_batch_import_extensions())
+    cached = cache_get_json(BATCH_IMPORT_FORMATS_CACHE_KEY)
+    if isinstance(cached, dict):
+        return BatchImportFormatsResponse.model_validate(cached)
+
+    response = BatchImportFormatsResponse(supported_extensions=supported_batch_import_extensions())
+    cache_set_json(
+        BATCH_IMPORT_FORMATS_CACHE_KEY,
+        response.model_dump(mode="json"),
+        BATCH_IMPORT_FORMATS_CACHE_TTL_SECONDS,
+    )
+    return response
 
 
 @router.post(
