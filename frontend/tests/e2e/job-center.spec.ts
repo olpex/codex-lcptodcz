@@ -162,6 +162,24 @@ test("job center highlights failed Drive jobs that need attention", async ({ pag
               created_at: "2026-05-15T07:59:50Z",
               updated_at: "2026-05-15T08:01:00Z"
             }
+          },
+          {
+            job_type: "import",
+            import_source: "mail_gmail_api",
+            document_id: null,
+            document_file_name: null,
+            job: {
+              id: 100,
+              status: "failed",
+              message: "MAIL_WEBHOOK_SECRET is missing or invalid",
+              result_payload: {
+                source: "mail_gmail_api"
+              },
+              started_at: "2026-05-15T08:02:00Z",
+              finished_at: "2026-05-15T08:02:10Z",
+              created_at: "2026-05-15T08:01:50Z",
+              updated_at: "2026-05-15T08:02:10Z"
+            }
           }
         ])
       });
@@ -216,6 +234,9 @@ test("job center highlights failed Drive jobs that need attention", async ({ pag
   await expect(attentionPanel).toContainText("Google Drive");
   await expect(attentionPanel).toContainText("46-26 Schedule.docx");
   await expect(attentionPanel).toContainText("Google Drive denied rename");
+  await expect(attentionPanel).toContainText("Надайте service account доступ Editor");
+  await expect(attentionPanel).toContainText("Пошта: Gmail API");
+  await expect(attentionPanel).toContainText("Перевірте MAIL_WEBHOOK_SECRET");
 
   await attentionPanel.getByRole("button", { name: "Повторити #99" }).click();
   await expect.poll(() => retryRequested).toBe(true);

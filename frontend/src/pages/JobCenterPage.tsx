@@ -96,6 +96,34 @@ function getJobIssueMessage(item: JobListItem): string | null {
   return null;
 }
 
+function getJobIssueHint(item: JobListItem): string | null {
+  const issueMessage = (getJobIssueMessage(item) || "").toLocaleLowerCase("uk-UA");
+  const source = `${item.import_source || ""} ${getPayloadText(item.job.result_payload, "source") || ""}`.toLocaleLowerCase("uk-UA");
+
+  if (source.includes("drive_intake") || issueMessage.includes("google drive") || issueMessage.includes("drive")) {
+    if (issueMessage.includes("rename") || issueMessage.includes("переймен")) {
+      return "Надайте service account доступ Editor до intake-папки або файлу, потім оновіть/повторіть задачу.";
+    }
+    if (issueMessage.includes("access") || issueMessage.includes("доступ")) {
+      return "Перевірте service account JSON і доступ до Google Drive папки.";
+    }
+    if (issueMessage.includes("folder") || issueMessage.includes("папк")) {
+      return "Перевірте URL intake-папки та чи є в ній підтримувані файли XLS/XLSX/CSV/DOCX.";
+    }
+  }
+
+  if (source.includes("mail") || source.includes("gmail") || issueMessage.includes("mail") || issueMessage.includes("webhook")) {
+    if (issueMessage.includes("secret") || issueMessage.includes("token")) {
+      return "Перевірте MAIL_WEBHOOK_SECRET у backend і Apps Script/Postman Flow.";
+    }
+    if (issueMessage.includes("attachment") || issueMessage.includes("вклад")) {
+      return "Перевірте формат вкладення та правила відправника для email-імпорту.";
+    }
+  }
+
+  return null;
+}
+
 export function JobCenterPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -724,6 +752,7 @@ export function JobCenterPage() {
           <div className="grid gap-2 lg:grid-cols-2">
             {attentionJobRows.map((item) => {
               const issueMessage = getJobIssueMessage(item) || "Потрібна перевірка";
+              const issueHint = getJobIssueHint(item);
               const driveFileName = getPayloadText(item.job.result_payload, "drive_file_name");
               const documentName = driveFileName || item.document_file_name || item.output_file_name || item.report_type || "Документ не вказано";
               return (
@@ -739,6 +768,7 @@ export function JobCenterPage() {
                   </div>
                   <p className="text-sm text-slate-700">{documentName}</p>
                   <p className="mt-1 text-sm font-medium text-rose-800">{issueMessage}</p>
+                  {issueHint && <p className="mt-1 text-sm text-slate-700">{issueHint}</p>}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {item.job.status === "failed" && (
                       <button
