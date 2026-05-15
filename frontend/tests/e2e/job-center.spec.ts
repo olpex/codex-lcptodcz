@@ -355,6 +355,13 @@ test("job center highlights failed Drive jobs that need attention", async ({ pag
   await expect(attentionPanel).toContainText("Перевірте MAIL_WEBHOOK_SECRET");
 
   await attentionPanel.getByRole("button", { name: "Повторити #99" }).click();
+  await expect.poll(() => retryRequested).toBe(false);
+
+  const confirmDialog = page.getByRole("alertdialog", { name: "Повторити задачу" });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog).toContainText("46-26 Schedule.docx");
+  await confirmDialog.getByRole("button", { name: "Повторити задачу" }).click();
+
   await expect.poll(() => retryRequested).toBe(true);
 });
 

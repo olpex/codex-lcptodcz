@@ -202,6 +202,8 @@ export function JobCenterPage() {
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
   const [cancelTarget, setCancelTarget] = useState<JobListItem | null>(null);
   const [isCancellingJob, setIsCancellingJob] = useState(false);
+  const [retryTarget, setRetryTarget] = useState<JobListItem | null>(null);
+  const [isRetryingJob, setIsRetryingJob] = useState(false);
   const [reprocessTarget, setReprocessTarget] = useState<JobListItem | null>(null);
   const [isReprocessingImport, setIsReprocessingImport] = useState(false);
   const [rollbackTarget, setRollbackTarget] = useState<JobListItem | null>(null);
@@ -601,13 +603,21 @@ export function JobCenterPage() {
   };
 
   const retryJob = async (item: JobListItem) => {
+    setIsRetryingJob(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/retry`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setRetryTarget(null);
       showSuccess(`Задачу #${item.job.id} перезапущено`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsRetryingJob(false);
     }
+  };
+
+  const requestRetryJob = (item: JobListItem) => {
+    setRetryTarget(item);
   };
 
   const reprocessImportJob = async (item: JobListItem) => {
@@ -796,7 +806,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-indigo-100 px-2 py-1 text-xs font-semibold text-indigo-700"
-                onClick={() => retryJob(item)}
+                onClick={() => requestRetryJob(item)}
               >
                 Повторити
               </button>
@@ -873,6 +883,13 @@ export function JobCenterPage() {
     };
   }, [emailIntakeRows]);
   const cancelTargetLabel = cancelTarget?.document_file_name || cancelTarget?.output_file_name || cancelTarget?.report_type || `задачу #${cancelTarget?.job.id ?? ""}`;
+  const retryTargetLabel = retryTarget
+    ? getPayloadText(retryTarget.job.result_payload, "drive_file_name") ||
+      retryTarget.document_file_name ||
+      retryTarget.output_file_name ||
+      retryTarget.report_type ||
+      `задачу #${retryTarget.job.id}`
+    : "цю задачу";
   const reprocessTargetFileName = reprocessTarget
     ? getPayloadText(reprocessTarget.job.result_payload, "drive_file_name") || reprocessTarget.document_file_name || `задача #${reprocessTarget.job.id}`
     : "цей файл";
@@ -1202,7 +1219,7 @@ export function JobCenterPage() {
                       <button
                         type="button"
                         className="rounded bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700"
-                        onClick={() => retryJob(item)}
+                        onClick={() => requestRetryJob(item)}
                       >
                         Повторити #{item.job.id}
                       </button>
@@ -1570,6 +1587,20 @@ export function JobCenterPage() {
         }}
         onCancel={() => {
           if (!isCancellingJob) setCancelTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(retryTarget)}
+        title="Повторити задачу"
+        description={`Повторити задачу «${retryTargetLabel}»? Вона знову буде поставлена в чергу та може повторно звернутися до зовнішнього джерела або файлу.`}
+        confirmLabel={isRetryingJob ? "Перезапускаємо..." : "Повторити задачу"}
+        confirmVariant="primary"
+        confirmDisabled={isRetryingJob}
+        onConfirm={() => {
+          if (retryTarget) void retryJob(retryTarget);
+        }}
+        onCancel={() => {
+          if (!isRetryingJob) setRetryTarget(null);
         }}
       />
       <ConfirmDialog
