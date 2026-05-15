@@ -202,6 +202,8 @@ export function JobCenterPage() {
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
   const [reprocessTarget, setReprocessTarget] = useState<JobListItem | null>(null);
   const [isReprocessingImport, setIsReprocessingImport] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<JobListItem | null>(null);
+  const [isRollingBackImport, setIsRollingBackImport] = useState(false);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
     const snapshot: JobStatsSnapshot = {
@@ -631,18 +633,35 @@ export function JobCenterPage() {
   };
 
   const rollbackImportJob = async (item: JobListItem) => {
+    setIsRollingBackImport(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/rollback-import`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setRollbackTarget(null);
       showSuccess(`Імпорт #${item.job.id} відкликано`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsRollingBackImport(false);
     }
   };
 
   const hasRollbackData = (item: JobListItem) => {
     const inserted = item.job.result_payload?.import_result as Record<string, unknown> | undefined;
     return Array.isArray(inserted?.inserted_ids) && inserted.inserted_ids.length > 0;
+  };
+
+  const getRollbackInsertedCount = (item: JobListItem | null): number => {
+    const inserted = item?.job.result_payload?.import_result as Record<string, unknown> | undefined;
+    return Array.isArray(inserted?.inserted_ids) ? inserted.inserted_ids.length : 0;
+  };
+
+  const requestRollbackImportJob = (item: JobListItem) => {
+    if (!hasRollbackData(item)) {
+      showError("Цей імпорт не містить даних для відклику");
+      return;
+    }
+    setRollbackTarget(item);
   };
 
   const downloadExport = async (item: JobListItem) => {
@@ -785,7 +804,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700"
-                onClick={() => rollbackImportJob(item)}
+                onClick={() => requestRollbackImportJob(item)}
               >
                 Відкликати імпорт
               </button>
@@ -846,6 +865,8 @@ export function JobCenterPage() {
   const reprocessTargetFileName = reprocessTarget
     ? getPayloadText(reprocessTarget.job.result_payload, "drive_file_name") || reprocessTarget.document_file_name || `задача #${reprocessTarget.job.id}`
     : "цей файл";
+  const rollbackTargetFileName = rollbackTarget?.document_file_name || `імпорт #${rollbackTarget?.job.id ?? ""}`;
+  const rollbackInsertedCount = getRollbackInsertedCount(rollbackTarget);
 
   return (
     <div className="space-y-5">
@@ -1539,6 +1560,19 @@ export function JobCenterPage() {
         }}
         onCancel={() => {
           if (!isReprocessingImport) setReprocessTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(rollbackTarget)}
+        title="Відкликати імпорт"
+        description={`Відкликати імпорт «${rollbackTargetFileName}»? Буде видалено записи, створені цим імпортом: ${rollbackInsertedCount}.`}
+        confirmLabel={isRollingBackImport ? "Відкликаємо..." : "Відкликати імпорт"}
+        confirmDisabled={isRollingBackImport}
+        onConfirm={() => {
+          if (rollbackTarget) void rollbackImportJob(rollbackTarget);
+        }}
+        onCancel={() => {
+          if (!isRollingBackImport) setRollbackTarget(null);
         }}
       />
     </div>

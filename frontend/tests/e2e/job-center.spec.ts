@@ -512,6 +512,125 @@ test("job center can re-import a Google Drive intake file from the Drive panel",
   await expect(drivePanel).toContainText("Повторний імпорт із задачі #99");
 });
 
+test("job center confirms rollback before revoking an import", async ({ page }) => {
+  let rollbackRequested = false;
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/77/rollback-import") && method === "POST") {
+      rollbackRequested = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_type: "import",
+          job: {
+            id: 77,
+            status: "failed",
+            message: "Імпорт відкликано. Видалено слухачів: 2",
+            result_payload: {
+              import_result: { inserted_ids: [101, 102] },
+              rollback: { requested_count: 2, deleted_trainees: 2 }
+            },
+            started_at: "2026-05-15T08:00:00Z",
+            finished_at: "2026-05-15T08:01:00Z",
+            created_at: "2026-05-15T07:59:50Z",
+            updated_at: "2026-05-15T08:05:00Z"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            job_type: "import",
+            import_source: "manual_upload",
+            document_id: 77,
+            document_file_name: "contracts.xlsx",
+            job: {
+              id: 77,
+              status: "succeeded",
+              message: "Імпорт виконано",
+              result_payload: { import_result: { inserted_ids: [101, 102] } },
+              started_at: "2026-05-15T08:00:00Z",
+              finished_at: "2026-05-15T08:01:00Z",
+              created_at: "2026-05-15T07:59:50Z",
+              updated_at: "2026-05-15T08:01:00Z"
+            }
+          }
+        ])
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "Відкликати імпорт" }).click();
+  await expect.poll(() => rollbackRequested).toBe(false);
+
+  const confirmDialog = page.getByRole("alertdialog", { name: "Відкликати імпорт" });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog).toContainText("contracts.xlsx");
+  await expect(confirmDialog).toContainText("2");
+  await confirmDialog.getByRole("button", { name: "Відкликати імпорт" }).click();
+
+  await expect.poll(() => rollbackRequested).toBe(true);
+  await expect(page.getByRole("cell", { name: "Імпорт відкликано. Видалено слухачів: 2" })).toBeVisible();
+});
+
 test("job center shows dedicated email intake status", async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
