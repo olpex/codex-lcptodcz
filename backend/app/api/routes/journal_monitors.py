@@ -19,6 +19,7 @@ from app.schemas.api import (
     JournalMonitorSectionUpdate,
 )
 from app.services.audit import write_audit
+from app.services.cache import cache_delete, cache_get_json, cache_set_json
 from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
@@ -40,20 +41,29 @@ from app.tasks.worker import process_import_job_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+JOURNAL_SECTIONS_CACHE_TTL_SECONDS = 15
 
 
 AutoTickPayload = dict[str, int | str | None]
 
 
+def _journal_sections_cache_key(branch_id: str) -> str:
+    return f"journal-monitors:sections:{branch_id}:v1"
+
+
+def _invalidate_journal_sections_cache(branch_id: str) -> None:
+    cache_delete(_journal_sections_cache_key(branch_id))
+
+
 def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
-    query = db.query(JournalMonitorSection.id).filter(JournalMonitorSection.is_active.is_(True))
+    query = db.query(JournalMonitorSection.id, JournalMonitorSection.branch_id).filter(JournalMonitorSection.is_active.is_(True))
     if branch_id is not None:
         query = query.filter(JournalMonitorSection.branch_id == branch_id)
-    section_ids = [row[0] for row in query.all()]
+    section_targets = query.all()
     processed_sections = 0
     failed_sections = 0
 
-    for section_id in section_ids:
+    for section_id, section_branch_id in section_targets:
         try:
             section = db.get(JournalMonitorSection, section_id)
             if not section or not section.is_active:
@@ -66,6 +76,7 @@ def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None 
                 target_year=target_year,
             )
             db.commit()
+            _invalidate_journal_sections_cache(section_branch_id)
             processed_sections += 1
         except Exception as exc:
             db.rollback()
@@ -167,13 +178,23 @@ def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: in
 
 @router.get("", response_model=list[JournalMonitorSectionResponse])
 def list_sections(db: DbSession, current_user: CurrentUser) -> list[JournalMonitorSectionResponse]:
+    cache_key = _journal_sections_cache_key(current_user.branch_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, list):
+        try:
+            return [JournalMonitorSectionResponse.model_validate(item) for item in cached]
+        except Exception:
+            pass
+
     sections = (
         apply_branch_scope(db.query(JournalMonitorSection), JournalMonitorSection, current_user.branch_id)
         .options(selectinload(JournalMonitorSection.entries))
         .order_by(JournalMonitorSection.created_at.desc())
         .all()
     )
-    return [JournalMonitorSectionResponse(**section_to_response_payload(section)) for section in sections]
+    response = [JournalMonitorSectionResponse(**section_to_response_payload(section)) for section in sections]
+    cache_set_json(cache_key, [item.model_dump(mode="json") for item in response], JOURNAL_SECTIONS_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.post(
@@ -206,6 +227,7 @@ def create_section(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Розділ з такою назвою вже існує") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
     write_audit(
         db,
         actor_user_id=current_user.id,
@@ -257,6 +279,7 @@ def update_section(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Розділ з такою назвою вже існує") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorSectionResponse(**section_to_response_payload(section))
 
 
@@ -267,8 +290,10 @@ def update_section(
 )
 def delete_section(section_id: int, db: DbSession, current_user: CurrentUser) -> None:
     section = _get_section_or_404(db, current_user, section_id)
+    branch_id = section.branch_id
     db.delete(section)
     db.commit()
+    _invalidate_journal_sections_cache(branch_id)
 
 
 @router.post(
@@ -326,6 +351,7 @@ def bulk_delete_entries(
         },
     )
     db.commit()
+    _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorEntryBulkDeleteResponse(
         deleted_count=len(deleted_ids),
         deleted_ids=deleted_ids,
@@ -363,6 +389,7 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
         },
     )
     db.commit()
+    _invalidate_journal_sections_cache(current_user.branch_id)
 
 
 @router.post(
@@ -388,8 +415,10 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
         section.last_sync_message = str(exc)[:500]
         db.add(section)
         db.commit()
+        _invalidate_journal_sections_cache(current_user.branch_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося оновити Google Drive: {exc}") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -409,6 +438,7 @@ def _start_section_processing(
     db.commit()
 
     db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -434,6 +464,7 @@ def _reprocess_section_all(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -452,6 +483,7 @@ def _process_section_once(
         logger.exception("Journal processing tick failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -481,6 +513,7 @@ def _start_section_workload_inline(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"{error_prefix}: {exc}") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -489,6 +522,7 @@ def _stop_section_processing(section: JournalMonitorSection, db: DbSession) -> J
     db.add(section)
     db.commit()
     db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -583,6 +617,7 @@ def background_tick_section_processing(
         logger.exception("Journal background processing failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося виконати фонове опрацювання журналів: {exc}") from exc
     db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
@@ -633,6 +668,7 @@ def process_section_workload(
     process_next_journal_workload(db, section, limit=limit, target_year=year, retry_failed=True)
     db.commit()
     db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 

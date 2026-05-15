@@ -8,6 +8,7 @@ from sqlalchemy import event
 from app.db.session import engine
 from app.core.crypto import cipher
 from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
+from app.api.routes import journal_monitors as journal_monitor_routes
 from app.services.import_export import collect_teacher_workload_summary
 from app.services import journal_monitor
 
@@ -110,6 +111,79 @@ def test_journal_detail_eager_loads_entries_workload_and_teachers(client, auth_h
     payload = response.json()
     assert len(payload["entries"]) == 3
     assert lazy_loads == 0
+
+
+def test_journal_sections_list_uses_short_lived_branch_cache(client, auth_headers, db_session, monkeypatch):
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+    section_id = create_response.json()["id"]
+    cache: dict[str, list[dict]] = {}
+    cache_sets: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(journal_monitor_routes, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: list[dict], ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(journal_monitor_routes, "cache_set_json", fake_cache_set)
+
+    first_response = client.get("/api/v1/journal-monitors", headers=auth_headers)
+    assert first_response.status_code == 200
+    first_payload = first_response.json()
+    assert first_payload[0]["name"] == "Журнали 2026"
+
+    section = db_session.get(journal_monitor.JournalMonitorSection, section_id)
+    section.name = "Оновлено напряму в БД"
+    db_session.add(section)
+    db_session.commit()
+
+    second_response = client.get("/api/v1/journal-monitors", headers=auth_headers)
+
+    assert second_response.status_code == 200
+    assert second_response.json() == first_payload
+    assert cache_sets == [("journal-monitors:sections:main:v1", 15)]
+
+
+def test_journal_section_mutations_invalidate_branch_cache(client, auth_headers, monkeypatch):
+    deleted_keys: list[str] = []
+    monkeypatch.setattr(journal_monitor_routes, "cache_delete", lambda key: deleted_keys.append(key))
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+    section_id = create_response.json()["id"]
+    assert "journal-monitors:sections:main:v1" in deleted_keys
+    deleted_keys.clear()
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [],
+    )
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert sync_response.status_code == 200
+    assert "journal-monitors:sections:main:v1" in deleted_keys
+    deleted_keys.clear()
+
+    patch_response = client.patch(
+        f"/api/v1/journal-monitors/{section_id}",
+        json={"name": "Журнали 2026 - оновлено"},
+        headers=auth_headers,
+    )
+    assert patch_response.status_code == 200
+    assert "journal-monitors:sections:main:v1" in deleted_keys
+    deleted_keys.clear()
+
+    delete_response = client.delete(f"/api/v1/journal-monitors/{section_id}", headers=auth_headers)
+    assert delete_response.status_code == 204
+    assert "journal-monitors:sections:main:v1" in deleted_keys
 
 
 def _journal_workbook_with_total_row_bytes(rows: list[tuple[str, float, str, str]], total_hours: float) -> bytes:
@@ -4101,6 +4175,11 @@ def test_journal_sync_tracks_drive_created_time_and_daily_change_start(db_sessio
     )
     db_session.add(section)
     db_session.commit()
+    monkeypatch.setattr(
+        journal_monitor,
+        "_journal_daily_cutoff",
+        lambda now=None: datetime(2026, 5, 13, 0, 0, tzinfo=timezone.utc),
+    )
     monkeypatch.setattr(
         journal_monitor,
         "list_drive_journal_workbook_files",
