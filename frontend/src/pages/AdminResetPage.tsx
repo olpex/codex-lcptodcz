@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { apiRequest } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -10,6 +10,15 @@ import { uiText } from "../i18n/uk";
 type MessageResponse = {
   message: string;
 };
+
+const RESET_FORM_TTL_SECONDS = 10 * 60;
+const MAX_RESET_ATTEMPTS = 3;
+
+function formatRemainingTime(totalSeconds: number): string {
+  const minutes = Math.floor(Math.max(0, totalSeconds) / 60);
+  const seconds = Math.max(0, totalSeconds) % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 
 export function AdminResetPage() {
   const { user } = useAuth();
@@ -28,6 +37,20 @@ export function AdminResetPage() {
   }>({});
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState(RESET_FORM_TTL_SECONDS);
+
+  const attemptsLeft = Math.max(0, MAX_RESET_ATTEMPTS - failedAttempts);
+  const isSessionExpired = remainingSeconds <= 0;
+  const isAttemptLimitReached = attemptsLeft <= 0;
+  const isResetBlocked = isSessionExpired || isAttemptLimitReached;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setRemainingSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (user) {
     return <Navigate to="/" replace />;
@@ -59,6 +82,14 @@ export function AdminResetPage() {
   };
 
   const submitReset = async () => {
+    if (isResetBlocked) {
+      showError(
+        isSessionExpired
+          ? "Сеанс форми завершено. Оновіть сторінку перед повторною спробою."
+          : "Ліміт спроб вичерпано. Оновіть сторінку або зверніться до адміністратора системи."
+      );
+      return;
+    }
     setSubmitting(true);
     try {
       const response = await apiRequest<MessageResponse>("/auth/admin-reset-password", {
@@ -72,7 +103,15 @@ export function AdminResetPage() {
       showSuccess(response.message || "Пароль адміністратора успішно скинуто");
       navigate("/login", { replace: true });
     } catch (error) {
-      showError((error as Error).message || "Не вдалося скинути пароль");
+      const nextFailedAttempts = Math.min(MAX_RESET_ATTEMPTS, failedAttempts + 1);
+      setFailedAttempts(nextFailedAttempts);
+      const nextAttemptsLeft = Math.max(0, MAX_RESET_ATTEMPTS - nextFailedAttempts);
+      const message = (error as Error).message || "Не вдалося скинути пароль";
+      showError(
+        nextAttemptsLeft > 0
+          ? `${message}. Спроб залишилось: ${nextAttemptsLeft}`
+          : `${message}. Ліміт спроб вичерпано.`
+      );
     } finally {
       setSubmitting(false);
     }
@@ -80,6 +119,14 @@ export function AdminResetPage() {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (isResetBlocked) {
+      showError(
+        isSessionExpired
+          ? "Сеанс форми завершено. Оновіть сторінку перед повторною спробою."
+          : "Ліміт спроб вичерпано. Оновіть сторінку або зверніться до адміністратора системи."
+      );
+      return;
+    }
     const errors = validate();
     if (Object.keys(errors).length > 0) {
       const firstError = Object.values(errors)[0];
@@ -97,90 +144,108 @@ export function AdminResetPage() {
         <p className="mb-6 rounded-lg bg-mist px-3 py-2 text-xs text-slate-600">
           Аварійне скидання пароля. Використайте службовий токен з `ADMIN_PASSWORD_RESET_TOKEN`.
         </p>
+        <div
+          className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+          data-testid="reset-safety-status"
+        >
+          <p className="font-semibold text-amber-950">Сеанс форми активний</p>
+          <p className="mt-1">
+            Час до завершення: {formatRemainingTime(remainingSeconds)}. Спроб залишилось: {attemptsLeft}.
+          </p>
+          {isResetBlocked && (
+            <p className="mt-1 font-semibold">
+              {isSessionExpired
+                ? "Сеанс завершено. Оновіть сторінку, щоб почати нову спробу."
+                : "Ліміт спроб вичерпано. Оновіть сторінку або зверніться до адміністратора системи."}
+            </p>
+          )}
+        </div>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <FormField
-            label="Логін"
-            required
-            helperText="Логін облікового запису адміністратора"
-            errorText={fieldErrors.username}
-          >
-            <input
-              className={formControlClass}
-              autoComplete="username"
-              value={username}
-              onChange={(event) => {
-                setUsername(event.target.value);
-                setFieldErrors((prev) => ({ ...prev, username: undefined }));
-              }}
+          <fieldset className="space-y-4" disabled={submitting || isResetBlocked}>
+            <FormField
+              label="Логін"
               required
-            />
-          </FormField>
+              helperText="Логін облікового запису адміністратора"
+              errorText={fieldErrors.username}
+            >
+              <input
+                className={formControlClass}
+                autoComplete="username"
+                value={username}
+                onChange={(event) => {
+                  setUsername(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, username: undefined }));
+                }}
+                required
+              />
+            </FormField>
 
-          <FormField
-            label="Службовий токен"
-            required
-            helperText="Змінна середовища ADMIN_PASSWORD_RESET_TOKEN"
-            errorText={fieldErrors.resetToken}
-          >
-            <input
-              type="password"
-              className={formControlClass}
-              value={resetToken}
-              onChange={(event) => {
-                setResetToken(event.target.value);
-                setFieldErrors((prev) => ({ ...prev, resetToken: undefined }));
-              }}
+            <FormField
+              label="Службовий токен"
               required
-            />
-          </FormField>
+              helperText="Змінна середовища ADMIN_PASSWORD_RESET_TOKEN"
+              errorText={fieldErrors.resetToken}
+            >
+              <input
+                type="password"
+                className={formControlClass}
+                value={resetToken}
+                onChange={(event) => {
+                  setResetToken(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, resetToken: undefined }));
+                }}
+                required
+              />
+            </FormField>
 
-          <FormField
-            label="Новий пароль"
-            required
-            helperText="Мінімум 8 символів, максимум 72"
-            errorText={fieldErrors.newPassword}
-          >
-            <input
-              type="password"
-              className={formControlClass}
-              value={newPassword}
-              onChange={(event) => {
-                setNewPassword(event.target.value);
-                setFieldErrors((prev) => ({ ...prev, newPassword: undefined }));
-              }}
-              minLength={8}
-              maxLength={72}
+            <FormField
+              label="Новий пароль"
               required
-            />
-          </FormField>
+              helperText="Мінімум 8 символів, максимум 72"
+              errorText={fieldErrors.newPassword}
+            >
+              <input
+                type="password"
+                className={formControlClass}
+                value={newPassword}
+                onChange={(event) => {
+                  setNewPassword(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, newPassword: undefined }));
+                }}
+                minLength={8}
+                maxLength={72}
+                required
+              />
+            </FormField>
 
-          <FormField
-            label="Підтвердження нового пароля"
-            required
-            helperText="Повторіть новий пароль без помилок"
-            errorText={fieldErrors.confirmPassword}
-          >
-            <input
-              type="password"
-              className={formControlClass}
-              value={confirmPassword}
-              onChange={(event) => {
-                setConfirmPassword(event.target.value);
-                setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
-              }}
-              minLength={8}
-              maxLength={72}
+            <FormField
+              label="Підтвердження нового пароля"
               required
-            />
-          </FormField>
+              helperText="Повторіть новий пароль без помилок"
+              errorText={fieldErrors.confirmPassword}
+            >
+              <input
+                type="password"
+                className={formControlClass}
+                value={confirmPassword}
+                onChange={(event) => {
+                  setConfirmPassword(event.target.value);
+                  setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+                }}
+                minLength={8}
+                maxLength={72}
+                required
+              />
+            </FormField>
 
-          <FormSubmitButton
-            isLoading={submitting}
-            idleLabel="Скинути пароль адміністратора"
-            loadingLabel="Скидаємо..."
-            className="w-full rounded-lg border border-pine bg-white px-4 py-2.5 font-semibold text-pine"
-          />
+            <FormSubmitButton
+              isLoading={submitting}
+              idleLabel="Скинути пароль адміністратора"
+              loadingLabel="Скидаємо..."
+              className="w-full rounded-lg border border-pine bg-white px-4 py-2.5 font-semibold text-pine"
+            />
+          </fieldset>
         </form>
 
         <Link className="mt-4 inline-block text-sm font-semibold text-pine hover:underline" to="/login">
@@ -193,6 +258,7 @@ export function AdminResetPage() {
         description={`Ви впевнені, що хочете скинути пароль для "${username.trim()}"?`}
         confirmLabel={submitting ? "Скидаємо..." : "Так, скинути пароль"}
         confirmVariant="danger"
+        confirmDisabled={submitting || isResetBlocked}
         onCancel={() => {
           if (submitting) return;
           setConfirmOpen(false);
