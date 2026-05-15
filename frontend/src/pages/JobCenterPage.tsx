@@ -200,6 +200,8 @@ export function JobCenterPage() {
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
   const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<JobListItem | null>(null);
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
   const [reprocessTarget, setReprocessTarget] = useState<JobListItem | null>(null);
   const [isReprocessingImport, setIsReprocessingImport] = useState(false);
   const [rollbackTarget, setRollbackTarget] = useState<JobListItem | null>(null);
@@ -581,13 +583,21 @@ export function JobCenterPage() {
   };
 
   const cancelJob = async (item: JobListItem) => {
+    setIsCancellingJob(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/cancel`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setCancelTarget(null);
       showSuccess(`Задачу #${item.job.id} скасовано`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsCancellingJob(false);
     }
+  };
+
+  const requestCancelJob = (item: JobListItem) => {
+    setCancelTarget(item);
   };
 
   const retryJob = async (item: JobListItem) => {
@@ -777,7 +787,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700"
-                onClick={() => cancelJob(item)}
+                onClick={() => requestCancelJob(item)}
               >
                 Скасувати
               </button>
@@ -862,6 +872,7 @@ export function JobCenterPage() {
       succeededCount: emailIntakeRows.filter((item) => item.job.status === "succeeded").length
     };
   }, [emailIntakeRows]);
+  const cancelTargetLabel = cancelTarget?.document_file_name || cancelTarget?.output_file_name || cancelTarget?.report_type || `задачу #${cancelTarget?.job.id ?? ""}`;
   const reprocessTargetFileName = reprocessTarget
     ? getPayloadText(reprocessTarget.job.result_payload, "drive_file_name") || reprocessTarget.document_file_name || `задача #${reprocessTarget.job.id}`
     : "цей файл";
@@ -1548,6 +1559,19 @@ export function JobCenterPage() {
           pageSizeOptions={[10, 20, 50, 100]}
         />
       </Panel>
+      <ConfirmDialog
+        open={Boolean(cancelTarget)}
+        title="Скасувати задачу"
+        description={`Скасувати активну задачу «${cancelTargetLabel}»? Уже виконані кроки можуть залишитися в історії, але задача більше не продовжуватиметься.`}
+        confirmLabel={isCancellingJob ? "Скасовуємо..." : "Скасувати задачу"}
+        confirmDisabled={isCancellingJob}
+        onConfirm={() => {
+          if (cancelTarget) void cancelJob(cancelTarget);
+        }}
+        onCancel={() => {
+          if (!isCancellingJob) setCancelTarget(null);
+        }}
+      />
       <ConfirmDialog
         open={Boolean(reprocessTarget)}
         title="Повторно імпортувати файл"

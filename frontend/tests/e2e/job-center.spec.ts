@@ -107,6 +107,121 @@ test("job center shows jobs and allows refresh", async ({ page }) => {
   await expect(page.getByRole("cell", { name: "Успішно" })).toBeVisible();
 });
 
+test("job center confirms cancellation before stopping an active job", async ({ page }) => {
+  let cancelRequested = false;
+
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 1,
+          username: "admin",
+          full_name: "Системний адміністратор",
+          branch_id: "main",
+          roles: [{ id: 1, name: "admin" }]
+        })
+      });
+    }
+
+    if (path.endsWith("/documents/import/batch/formats") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ supported_extensions: ["xlsx", "csv", "docx"] })
+      });
+    }
+
+    if (path.endsWith("/jobs/drive-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/email-intake") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/jobs/88/cancel") && method === "POST") {
+      cancelRequested = true;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          job_type: "import",
+          job: {
+            id: 88,
+            status: "failed",
+            message: "Скасовано користувачем",
+            result_payload: { source: "manual_upload" },
+            started_at: "2026-05-15T08:00:00Z",
+            finished_at: "2026-05-15T08:02:00Z",
+            created_at: "2026-05-15T07:59:50Z",
+            updated_at: "2026-05-15T08:02:00Z"
+          }
+        })
+      });
+    }
+
+    if (path.endsWith("/jobs") && method === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            job_type: "import",
+            import_source: "manual_upload",
+            document_id: 88,
+            document_file_name: "active-import.xlsx",
+            job: {
+              id: 88,
+              status: "running",
+              message: "Імпорт виконується",
+              result_payload: { source: "manual_upload" },
+              started_at: "2026-05-15T08:00:00Z",
+              finished_at: null,
+              created_at: "2026-05-15T07:59:50Z",
+              updated_at: "2026-05-15T08:01:00Z"
+            }
+          }
+        ])
+      });
+    }
+
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "not mocked" })
+    });
+  });
+
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "suptc_auth",
+      JSON.stringify({
+        accessToken: "test-access-token",
+        refreshToken: "test-refresh-token"
+      })
+    );
+  });
+
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "Скасувати" }).click();
+  await expect.poll(() => cancelRequested).toBe(false);
+
+  const confirmDialog = page.getByRole("alertdialog", { name: "Скасувати задачу" });
+  await expect(confirmDialog).toBeVisible();
+  await expect(confirmDialog).toContainText("active-import.xlsx");
+  await confirmDialog.getByRole("button", { name: "Скасувати задачу" }).click();
+
+  await expect.poll(() => cancelRequested).toBe(true);
+  await expect(page.getByRole("cell", { name: "Скасовано користувачем" }).first()).toBeVisible();
+});
+
 test("job center highlights failed Drive jobs that need attention", async ({ page }) => {
   let retryRequested = false;
 
