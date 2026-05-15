@@ -728,4 +728,7 @@ test("job center shows read-only worker health", async ({ page }) => {
   await expect(workerPanel).toContainText("import_parse");
   await expect(workerPanel).toContainText("google-drive-intake-auto");
   await expect(workerPanel).toContainText("45 с");
+  await expect(workerPanel).toContainText("Email канал: Google Apps Script");
+  await expect(workerPanel).toContainText("IMAP fallback: вимкнено");
+  await expect(workerPanel).toContainText("IMAP auto poll: вимкнено");
 });

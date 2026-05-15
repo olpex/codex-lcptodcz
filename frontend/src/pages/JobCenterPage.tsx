@@ -116,6 +116,16 @@ function formatJobDateTime(value: string | null | undefined): string {
   return date.toLocaleString("uk-UA");
 }
 
+function formatMailChannel(value: string): string {
+  if (value === "google_apps_script") return "Google Apps Script";
+  if (value === "imap") return "IMAP";
+  return value || "Не налаштовано";
+}
+
+function formatEnabled(value: boolean): string {
+  return value ? "увімкнено" : "вимкнено";
+}
+
 function getJobStage(job: Job): JobStage {
   if (job.status === "queued") {
     return { step: 1, total: 3, percent: 20, label: "Очікує worker" };
@@ -1076,6 +1086,20 @@ export function JobCenterPage() {
                 {item.queue || item.task}
               </span>
             ))}
+          </div>
+          <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">
+            <p>
+              <span className="font-semibold text-slate-900">Email канал:</span>{" "}
+              {formatMailChannel(workerHealth.settings.mail_primary_channel)}
+            </p>
+            <p className="mt-1">
+              <span className="font-semibold text-slate-900">IMAP fallback:</span>{" "}
+              {formatEnabled(workerHealth.settings.imap_fallback_enabled)}
+            </p>
+            <p className="mt-1">
+              <span className="font-semibold text-slate-900">IMAP auto poll:</span>{" "}
+              {formatEnabled(workerHealth.settings.imap_auto_poll_enabled)}
+            </p>
           </div>
         </section>
       )}
