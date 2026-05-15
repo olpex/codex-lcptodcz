@@ -56,6 +56,16 @@ def test_api_versioning_policy_is_documented():
         assert required_text in policy
 
 
+def test_frontend_lazy_routes_keep_layout_during_page_loads():
+    repo_root = Path(__file__).resolve().parents[3]
+    app_source = (repo_root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    assert "function PageFallback()" in app_source
+    assert "function withPageSuspense(" in app_source
+    assert "<Suspense fallback={<PageFallback />}>{children}</Suspense>" in app_source
+    assert "<Suspense fallback={<div className=\"p-6\">Завантаження...</div>}>" not in app_source
+
+
 def test_browser_auto_tick_endpoint_no_longer_runs_processing(client, auth_headers, monkeypatch):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("browser auto-tick must not trigger background processing")

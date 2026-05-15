@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, type ReactElement } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import { AppLayout } from "./layouts/AppLayout";
@@ -63,6 +63,22 @@ function GuardedLayout() {
   return <AppLayout />;
 }
 
+function PageFallback() {
+  return (
+    <div
+      className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-sm font-medium text-slate-600"
+      role="status"
+      aria-live="polite"
+    >
+      Завантаження сторінки...
+    </div>
+  );
+}
+
+function withPageSuspense(children: ReactElement) {
+  return <Suspense fallback={<PageFallback />}>{children}</Suspense>;
+}
+
 function RoleGuard({
   allowedRoles,
   children
@@ -82,105 +98,103 @@ function RoleGuard({
 
 export default function App() {
   return (
-    <Suspense fallback={<div className="p-6">Завантаження...</div>}>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/emergency-reset" element={<AdminResetPage />} />
-        <Route path="/" element={<GuardedLayout />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="forbidden" element={<ForbiddenPage />} />
-          <Route path="profile" element={<ProfilePage />} />
-          <Route
-            path="groups"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <GroupsPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="trainees"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <TraineesPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="orders"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <OrdersPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="search"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
-                <SearchPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="schedule"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
-                <SchedulePage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="workload"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
-                <WorkloadPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="performance"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
-                <PerformancePage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="jobs"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <JobCenterPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="journals"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <JournalMonitorsPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="documents"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <DocumentsPage />
-              </RoleGuard>
-            }
-          />
-          <Route
-            path="drafts"
-            element={
-              <RoleGuard allowedRoles={["admin", "methodist"]}>
-                <DraftsPage />
-              </RoleGuard>
-            }
-          />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+    <Routes>
+      <Route path="/login" element={withPageSuspense(<LoginPage />)} />
+      <Route path="/emergency-reset" element={withPageSuspense(<AdminResetPage />)} />
+      <Route path="/" element={<GuardedLayout />}>
+        <Route index element={withPageSuspense(<DashboardPage />)} />
+        <Route path="forbidden" element={withPageSuspense(<ForbiddenPage />)} />
+        <Route path="profile" element={withPageSuspense(<ProfilePage />)} />
+        <Route
+          path="groups"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <GroupsPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="trainees"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <TraineesPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="orders"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <OrdersPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="search"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <SearchPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="schedule"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <SchedulePage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="workload"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <WorkloadPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="performance"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist", "teacher"]}>
+              <PerformancePage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="jobs"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <JobCenterPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="journals"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <JournalMonitorsPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="documents"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <DocumentsPage />
+            </RoleGuard>
+          )}
+        />
+        <Route
+          path="drafts"
+          element={withPageSuspense(
+            <RoleGuard allowedRoles={["admin", "methodist"]}>
+              <DraftsPage />
+            </RoleGuard>
+          )}
+        />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
