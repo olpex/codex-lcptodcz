@@ -27,6 +27,7 @@ export function AppLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileMenuCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuPanelRef = useRef<HTMLElement>(null);
   const userRoles = user?.roles.map((role) => role.name) || [];
   const roles = userRoles.join(", ") || "—";
   const visibleItems = NAV_ITEMS.filter((item) => item.roles.some((role) => userRoles.includes(role)));
@@ -54,6 +55,30 @@ export function AppLayout() {
     if (event.key === "Escape") {
       event.preventDefault();
       closeMobileMenu();
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusableElements = Array.from(
+      mobileMenuPanelRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ) ?? []
+    ).filter((element) => element.tabIndex >= 0);
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    if (!firstElement || !lastElement) {
+      return;
+    }
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
     }
   };
 
@@ -136,11 +161,14 @@ export function AppLayout() {
           className="fixed inset-0 z-50 flex bg-ink/40 md:hidden"
           role="dialog"
           aria-modal="true"
+          aria-labelledby="mobile-navigation-title"
           onKeyDown={handleMobileDialogKeyDown}
         >
-          <aside className="h-full w-[86%] max-w-xs bg-white p-4 shadow-card">
+          <aside ref={mobileMenuPanelRef} className="h-full w-[86%] max-w-xs bg-white p-4 shadow-card">
             <div className="mb-3 flex items-center justify-between">
-              <p className="font-heading text-lg font-semibold text-pine">Навігація</p>
+              <p id="mobile-navigation-title" className="font-heading text-lg font-semibold text-pine">
+                Навігація
+              </p>
               <button
                 ref={mobileMenuCloseButtonRef}
                 type="button"
@@ -167,7 +195,13 @@ export function AppLayout() {
               ))}
             </nav>
           </aside>
-          <button className="h-full flex-1 cursor-default" type="button" onClick={closeMobileMenu} />
+          <button
+            className="h-full flex-1 cursor-default"
+            type="button"
+            onClick={closeMobileMenu}
+            aria-label="Закрити меню"
+            tabIndex={-1}
+          />
         </div>
       )}
     </div>
