@@ -60,6 +60,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 - Загальна топологія і runbook: `infra/DEPLOY.md`
 - Інструкція: `infra/vercel/README.md`
 - Compose-файл: `infra/vercel/docker-compose.workers.yml`
+- API versioning/deprecation policy: `docs/architecture/api-versioning.md`
 
 ### Автообробка вхідної пошти (контракти/договори)
 

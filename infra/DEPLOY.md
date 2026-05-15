@@ -188,3 +188,5 @@ docker compose -f infra/vercel/docker-compose.workers.yml --profile observabilit
 3. Покрити поведінку тестом.
 4. Увімкнути нову поведінку через env, а не через видалення старої логіки.
 5. Видаляти старий шлях тільки після окремої перевірки, що він більше не потрібен.
+
+Для змін у HTTP API застосовуйте `docs/architecture/api-versioning.md`: backward-compatible зміни залишаються в `/api/v1`, breaking change потребує нового namespace або явного deprecation path.

@@ -33,11 +33,27 @@ def test_celery_observability_is_optional_in_compose():
     requirements = (repo_root / "backend" / "requirements.txt").read_text(encoding="utf-8")
 
     for compose_text in (root_compose, worker_compose):
-      assert "flower:" in compose_text
-      assert "observability" in compose_text
-      assert "celery -A app.celery_app.celery_app flower" in compose_text
+        assert "flower:" in compose_text
+        assert "observability" in compose_text
+        assert "celery -A app.celery_app.celery_app flower" in compose_text
 
     assert "flower==" in requirements
+
+
+def test_api_versioning_policy_is_documented():
+    repo_root = Path(__file__).resolve().parents[3]
+    policy_path = repo_root / "docs" / "architecture" / "api-versioning.md"
+
+    assert policy_path.exists()
+    policy = policy_path.read_text(encoding="utf-8").lower()
+    for required_text in [
+        "/api/v1",
+        "x-api-version",
+        "deprecation",
+        "backward-compatible",
+        "breaking change",
+    ]:
+        assert required_text in policy
 
 
 def test_browser_auto_tick_endpoint_no_longer_runs_processing(client, auth_headers, monkeypatch):
