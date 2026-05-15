@@ -89,6 +89,13 @@ function getJobStage(job: Job): JobStage {
   return { step: 3, total: 3, percent: 100, label: "Потрібна увага" };
 }
 
+function getJobIssueMessage(item: JobListItem): string | null {
+  const markingError = getPayloadText(item.job.result_payload, "marking_error");
+  if (markingError) return markingError;
+  if (item.job.status === "failed") return item.job.message || "Задача завершилась з помилкою";
+  return null;
+}
+
 export function JobCenterPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
@@ -628,6 +635,10 @@ export function JobCenterPage() {
     () => rows.filter((item) => item.job.status === "queued" || item.job.status === "running"),
     [rows]
   );
+  const attentionJobRows = useMemo(
+    () => rows.filter((item) => item.job.status === "failed" || Boolean(getJobIssueMessage(item))).slice(0, 5),
+    [rows]
+  );
 
   return (
     <div className="space-y-5">
@@ -685,6 +696,72 @@ export function JobCenterPage() {
             ))}
           </div>
         </aside>
+      )}
+      {attentionJobRows.length > 0 && (
+        <section
+          className="rounded-lg border border-rose-200 bg-rose-50 p-4"
+          data-testid="job-attention-panel"
+          aria-labelledby="job-attention-heading"
+        >
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="job-attention-heading" className="text-base font-semibold text-rose-950">
+                Потребують уваги
+              </h2>
+              <p className="text-sm text-rose-800">Помилки імпорту, Drive або email, які варто перевірити першими.</p>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-semibold text-rose-800"
+              onClick={() => {
+                setJobType("all");
+                setJobStatus("failed");
+              }}
+            >
+              Показати всі помилки
+            </button>
+          </div>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {attentionJobRows.map((item) => {
+              const issueMessage = getJobIssueMessage(item) || "Потрібна перевірка";
+              const driveFileName = getPayloadText(item.job.result_payload, "drive_file_name");
+              const documentName = driveFileName || item.document_file_name || item.output_file_name || item.report_type || "Документ не вказано";
+              return (
+                <article key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-rose-200 bg-white p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-ink">
+                      #{item.job.id} {formatJobType(item.job_type)}
+                      {item.job_type === "import" && <span className="font-normal text-slate-500"> · {describeJobSource(item)}</span>}
+                    </div>
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                      {formatJobStatus(item.job.status)}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-700">{documentName}</p>
+                  <p className="mt-1 text-sm font-medium text-rose-800">{issueMessage}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.job.status === "failed" && (
+                      <button
+                        type="button"
+                        className="rounded bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700"
+                        onClick={() => retryJob(item)}
+                      >
+                        Повторити #{item.job.id}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded bg-amber px-2.5 py-1 text-xs font-semibold text-ink"
+                      onClick={() => refreshOne(item)}
+                    >
+                      Оновити #{item.job.id}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       )}
       <Panel title="1.1 Центр імпорту">
         <InlineNotice
