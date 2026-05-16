@@ -41,6 +41,7 @@ Expected scheduled tasks:
 | Task | Setting | Notes |
 |---|---|---|
 | `process_journal_monitor_auto_task` | `JOURNAL_WORKLOAD_AUTO_INTERVAL_SECONDS` | Processes active journal sections only |
+| `mail-imap-auto` / `poll_mailbox_task` | `IMAP_POLL_INTERVAL_SECONDS` | Checks IMAP only when fallback and auto polling are explicitly enabled |
 | `process_drive_intake_auto_task` | `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | Processes up to `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` files per tick |
 
 If beat is unavailable, use the guarded cron fallback:

@@ -9,6 +9,7 @@
 - `secrets.example.yaml` — приклад Secret (не комітити реальні значення)
 - `postgres.yaml` — PostgreSQL (StatefulSet + Service + PVC)
 - `redis.yaml` — Redis (Deployment + Service)
+- `documents-pvc.yaml` — спільне файлове сховище для API, worker і beat
 - `api.yaml` — FastAPI API (Deployment + Service)
 - `worker.yaml` — Celery worker
 - `beat.yaml` — Celery beat
@@ -30,6 +31,7 @@ kubectl apply -f infra/k8s/secrets.example.yaml
 ```bash
 kubectl apply -f infra/k8s/postgres.yaml
 kubectl apply -f infra/k8s/redis.yaml
+kubectl apply -f infra/k8s/documents-pvc.yaml
 ```
 
 3. Підняти застосунок:
@@ -46,4 +48,5 @@ kubectl apply -f infra/k8s/ingress.yaml
 
 - Для production бажано винести PostgreSQL/Redis у керовані сервіси.
 - Для `SECRET_KEY`, `DATA_ENCRYPTION_KEY`, `OPENAI_API_KEY`, `DATABASE_URL` використовуйте реальні значення у Secret.
-- `FILE_STORAGE_PATH` вказано як `/tmp/documents`; для production додайте PVC або S3-сумісне сховище.
+- `FILE_STORAGE_PATH` вказано як `/tmp/documents`; цей шлях має бути спільним для API, worker і beat, інакше queued/manual import та export не бачитимуть файли між pod-ами.
+- `documents-pvc.yaml` використовує `ReadWriteMany`. Якщо ваш Kubernetes storage class не підтримує RWX, використайте сумісне спільне сховище або тримайте API/worker на deployment-профілі зі спільним volume.

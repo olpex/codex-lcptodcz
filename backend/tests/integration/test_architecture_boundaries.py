@@ -40,6 +40,21 @@ def test_celery_observability_is_optional_in_compose():
     assert "flower==" in requirements
 
 
+def test_k8s_document_storage_is_shared_between_api_worker_and_beat():
+    repo_root = Path(__file__).resolve().parents[3]
+    k8s_dir = repo_root / "infra" / "k8s"
+
+    pvc = (k8s_dir / "documents-pvc.yaml").read_text(encoding="utf-8")
+    assert "kind: PersistentVolumeClaim" in pvc
+    assert "name: suptc-documents" in pvc
+
+    for filename in ["api.yaml", "worker.yaml", "beat.yaml"]:
+        manifest = (k8s_dir / filename).read_text(encoding="utf-8")
+        assert "emptyDir" not in manifest
+        assert "claimName: suptc-documents" in manifest
+        assert "mountPath: /tmp/documents" in manifest
+
+
 def test_api_versioning_policy_is_documented():
     repo_root = Path(__file__).resolve().parents[3]
     policy_path = repo_root / "docs" / "architecture" / "api-versioning.md"
@@ -181,6 +196,7 @@ def test_celery_worker_topology_runbook_is_documented():
         "process_import_job_task",
         "process_export_job_task",
         "poll_mailbox_task",
+        "mail-imap-auto",
         "process_ocr_task",
         "process_journal_monitor_auto_task",
         "process_drive_intake_auto_task",

@@ -44,7 +44,11 @@ def _fake_celery_for_worker_health(monkeypatch) -> None:
                 "google-drive-intake-auto": {
                     "task": "app.tasks.worker.process_drive_intake_auto_task",
                     "schedule": 45,
-                }
+                },
+                "mail-imap-auto": {
+                    "task": "app.tasks.worker.poll_mailbox_task",
+                    "schedule": 300,
+                },
             },
         },
     )()
@@ -478,6 +482,7 @@ def test_worker_health_reports_celery_and_branch_job_backlog(client, auth_header
     assert payload["backlog"]["total_active"] == 3
     assert "import_parse" in {queue["queue"] for queue in payload["queues"]}
     assert "google-drive-intake-auto" in {item["name"] for item in payload["beat_schedule"]}
+    assert "mail-imap-auto" in {item["name"] for item in payload["beat_schedule"]}
     assert payload["settings"]["drive_intake_batch_size"] == 5
 
 

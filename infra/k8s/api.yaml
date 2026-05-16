@@ -43,4 +43,5 @@ spec:
               mountPath: /tmp/documents
       volumes:
         - name: documents
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: suptc-documents
