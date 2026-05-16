@@ -440,6 +440,33 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByText("Пед.+слухачі:").locator("b")).toHaveText("1");
 });
 
+test("journal monitor shows section lifecycle and processing configuration", async ({ page }) => {
+  const processingSection = {
+    ...section,
+    has_service_account_credentials: true,
+    last_sync_status: "success",
+    workload_auto_enabled: true,
+    workload_auto_year: 2026
+  };
+  await loginAndMockJournals(page, {
+    sections: [{ ...processingSection, entries: [] }],
+    detailSection: processingSection
+  });
+
+  await page.goto("/journals");
+
+  const lifecycle = page.getByLabel("Життєвий цикл розділу журналів");
+  await expect(lifecycle).toBeVisible();
+  await expect(lifecycle.getByText("Стан секції")).toBeVisible();
+  await expect(lifecycle.getByText("Активна")).toBeVisible();
+  await expect(lifecycle.getByText("Google Drive")).toBeVisible();
+  await expect(lifecycle.getByText("Синхронізація успішна")).toBeVisible();
+  await expect(lifecycle.getByText("Service account")).toBeVisible();
+  await expect(lifecycle.getByText("Налаштовано")).toBeVisible();
+  await expect(lifecycle.getByText("Автоопрацювання")).toBeVisible();
+  await expect(lifecycle.getByText("Увімкнено, 2026")).toBeVisible();
+});
+
 test("journal monitor shows journals created and changed since 8 today", async ({ page }) => {
   await loginAndMockJournals(page);
 

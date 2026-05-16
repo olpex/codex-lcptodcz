@@ -203,6 +203,18 @@ function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "in
   return null;
 }
 
+function formatSyncLifecycleStatus(status: string | null | undefined): string {
+  if (status === "success") return "Синхронізація успішна";
+  if (status === "failed") return "Помилка синхронізації";
+  if (status === "never") return "Ще не синхронізовано";
+  return "Стан невідомий";
+}
+
+function formatProcessingLifecycleStatus(section: JournalMonitorSection): string {
+  if (!section.workload_auto_enabled) return "Вимкнено";
+  return section.workload_auto_year ? `Увімкнено, ${section.workload_auto_year}` : "Увімкнено";
+}
+
 function normalizeSearchValue(value: string | null | undefined): string {
   return (value || "").toLocaleLowerCase("uk-UA").trim();
 }
@@ -947,6 +959,33 @@ export function JournalMonitorsPage() {
             </label>
           )}
         </div>
+
+        {detail && (
+          <div
+            className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4"
+            role="region"
+            aria-label="Життєвий цикл розділу журналів"
+          >
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Стан секції</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{sectionActive ? "Активна" : "Архівована"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Google Drive</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{formatSyncLifecycleStatus(detail.last_sync_status)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Service account</p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {detail.has_service_account_credentials ? "Налаштовано" : "Не налаштовано"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Автоопрацювання</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{formatProcessingLifecycleStatus(detail)}</p>
+            </div>
+          </div>
+        )}
 
         {detail?.daily_activity && (
           <div className="mb-4 overflow-hidden border-y border-slate-200">
