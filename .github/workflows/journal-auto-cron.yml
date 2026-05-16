@@ -17,14 +17,14 @@ jobs:
     steps:
       - name: Trigger journal and Drive processing
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET || secrets.cron_secret }}
           APP_BASE_URL: ${{ vars.APP_BASE_URL || 'https://codex-lcptodcz.vercel.app' }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -z "${CRON_SECRET:-}" ]; then
-            echo "::error::Repository secret CRON_SECRET is not configured."
+            echo "::error::Repository secret CRON_SECRET/cron_secret is not configured."
             exit 1
           fi
 
