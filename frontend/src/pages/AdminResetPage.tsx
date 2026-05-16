@@ -105,6 +105,10 @@ export function AdminResetPage() {
     } catch (error) {
       const nextFailedAttempts = Math.min(MAX_RESET_ATTEMPTS, failedAttempts + 1);
       setFailedAttempts(nextFailedAttempts);
+      setResetToken("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setFieldErrors({});
       const nextAttemptsLeft = Math.max(0, MAX_RESET_ATTEMPTS - nextFailedAttempts);
       const message = (error as Error).message || "Не вдалося скинути пароль";
       showError(
