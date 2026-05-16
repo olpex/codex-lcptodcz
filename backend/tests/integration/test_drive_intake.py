@@ -989,6 +989,83 @@ def test_drive_intake_reprocesses_unmarked_schedule_without_duplicating_existing
     ]
 
 
+def test_drive_intake_does_not_mark_schedule_processed_when_slots_are_not_visible(db_session, tmp_path):
+    schedule_path = tmp_path / "schedule-with-no-visible-slots.docx"
+    schedule_path.write_bytes(_schedule_docx_bytes())
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Schedule.docx",
+        file_path=str(schedule_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="schedule-with-no-visible-slots",
+    )
+    db_session.add(document)
+    db_session.flush()
+    job = ImportJob(
+        branch_id="main",
+        idempotency_key=drive_intake._idempotency_key(
+            "main",
+            "schedule-46-26",
+            "2026-05-12T07:00:00Z",
+            "46-26 Schedule [processed].docx",
+        ),
+        document_id=document.id,
+        status=JobStatus.SUCCEEDED,
+        message="previously imported",
+        result_payload={
+            "source": "drive_intake",
+            "drive_file_id": "schedule-46-26",
+            "drive_file_name": "46-26 Schedule [processed].docx",
+            "drive_modified_time": "2026-05-12T07:00:00Z",
+            "import_result": {"created_slots": 1, "group_code": "46-26"},
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    marker_calls: list[tuple[str, str]] = []
+
+    def fake_success_without_slots(job_id: int) -> dict:
+        refreshed = db_session.get(ImportJob, job_id)
+        assert refreshed is not None
+        refreshed.status = JobStatus.SUCCEEDED
+        refreshed.message = "Імпорт виконано"
+        refreshed.result_payload = {
+            **(refreshed.result_payload or {}),
+            "import_result": {"created_slots": 1, "group_code": "46-26"},
+        }
+        db_session.add(refreshed)
+        db_session.commit()
+        return {"status": "ok", "job_id": job_id}
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Schedule.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _schedule_docx_bytes(),
+        import_job_runner=fake_success_without_slots,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append((file_id, next_name)),
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.SUCCEEDED.value
+    assert result["processed_drive_file_name"] == "46-26 Schedule [processed].docx"
+    assert "not visible" in result["marking_error"]
+    assert marker_calls == []
+    assert db_session.query(ScheduleSlot).count() == 0
+
+
 def test_drive_intake_defaults_xlsx_import_to_overwrite_for_corrections():
     assert drive_intake._default_import_mode(DocumentType.XLSX) == "overwrite"
 

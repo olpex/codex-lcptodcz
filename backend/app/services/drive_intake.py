@@ -425,8 +425,10 @@ def _job_status_value(job: ImportJob) -> str:
 
 
 def _mark_processed_after_success(
+    db: Session,
     job: ImportJob,
     *,
+    branch_id: str,
     file_id: str,
     original_name: str,
     service_account_json: str | None,
@@ -438,6 +440,14 @@ def _mark_processed_after_success(
     processed_name = _processed_drive_filename(original_name)
     if processed_name == original_name:
         return False, processed_name, None
+    if job.document and job.document.file_type == DocumentType.DOCX:
+        has_visible_slots = _schedule_docx_payload_has_slots(db, job, branch_id)
+        if has_visible_slots is not True:
+            return (
+                False,
+                processed_name,
+                "DOCX import succeeded but schedule slots are not visible in the project; file will be retried.",
+            )
 
     try:
         processed_file_marker(file_id, processed_name, service_account_json)
@@ -584,7 +594,9 @@ def process_next_drive_intake_file(
                     db.expire_all()
                     existing_job = db.get(ImportJob, existing_job.id) or existing_job
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
                     existing_job,
+                    branch_id=effective_branch_id,
                     file_id=file_id,
                     original_name=raw_name,
                     service_account_json=service_account_json,
@@ -617,7 +629,9 @@ def process_next_drive_intake_file(
                     import_mode=_default_import_mode(doc_type),
                 )
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
                     existing_job,
+                    branch_id=effective_branch_id,
                     file_id=file_id,
                     original_name=raw_name,
                     service_account_json=service_account_json,
@@ -676,7 +690,9 @@ def process_next_drive_intake_file(
                     import_mode=_default_import_mode(doc_type),
                 )
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
                     existing_job,
+                    branch_id=effective_branch_id,
                     file_id=file_id,
                     original_name=raw_name,
                     service_account_json=service_account_json,
@@ -706,7 +722,9 @@ def process_next_drive_intake_file(
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
             marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                db,
                 existing_job,
+                branch_id=effective_branch_id,
                 file_id=file_id,
                 original_name=raw_name,
                 service_account_json=service_account_json,
@@ -782,7 +800,9 @@ def process_next_drive_intake_file(
             db.expire_all()
             job = db.get(ImportJob, job.id) or job
         marked_processed, processed_name, marking_error = _mark_processed_after_success(
+            db,
             job,
+            branch_id=effective_branch_id,
             file_id=file_id,
             original_name=raw_name,
             service_account_json=service_account_json,
