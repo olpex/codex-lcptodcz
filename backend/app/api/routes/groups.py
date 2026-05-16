@@ -42,6 +42,8 @@ from app.schemas.api import (
     MembershipResponse,
 )
 from app.services.audit import write_audit
+from app.services.cache import cache_get_json, cache_set_json
+from app.services.group_cache import GROUP_LIST_CACHE_TTL_SECONDS, group_list_cache_key, invalidate_group_list_cache
 
 router = APIRouter()
 
@@ -200,6 +202,11 @@ def _delete_group_rows(db: DbSession, group: Group, delete_trainees: bool) -> di
 
 @router.get("", response_model=list[GroupResponse])
 def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]:
+    cache_key = group_list_cache_key(current_user.branch_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, list):
+        return [GroupResponse.model_validate(item) for item in cached]
+
     groups = (
         apply_branch_scope(db.query(Group), Group, current_user.branch_id)
         .filter(Group.hidden_from_registry.is_(False))
@@ -207,7 +214,9 @@ def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]
         .all()
     )
     schedule_ranges = _schedule_date_ranges(db, [group.id for group in groups])
-    return [_group_response(group, schedule_ranges) for group in groups]
+    response = [_group_response(group, schedule_ranges) for group in groups]
+    cache_set_json(cache_key, [item.model_dump(mode="json") for item in response], GROUP_LIST_CACHE_TTL_SECONDS)
+    return response
 
 
 def _validate_period(date_from: date | None, date_to: date | None) -> None:
@@ -408,6 +417,7 @@ def create_group(payload: GroupCreate, db: DbSession, current_user: CurrentUser)
     group = Group(**payload.model_dump(), branch_id=current_user.branch_id)
     db.add(group)
     db.commit()
+    invalidate_group_list_cache(current_user.branch_id)
     db.refresh(group)
     write_audit(
         db,
@@ -450,6 +460,7 @@ def bulk_delete_groups(
         deleted_trainees_count += int(details["deleted_trainees_count"])
 
     db.commit()
+    invalidate_group_list_cache(current_user.branch_id)
     missing_ids = [group_id for group_id in requested_ids if group_id not in groups_by_id]
     write_audit(
         db,
@@ -652,6 +663,7 @@ def update_group(group_id: int, payload: GroupUpdate, db: DbSession, current_use
         setattr(group, key, value)
     db.add(group)
     db.commit()
+    invalidate_group_list_cache(current_user.branch_id)
     db.refresh(group)
     write_audit(
         db,
@@ -681,6 +693,7 @@ def delete_group(
 
     details = _delete_group_rows(db, group, delete_trainees)
     db.commit()
+    invalidate_group_list_cache(current_user.branch_id)
     write_audit(
         db,
         actor_user_id=current_user.id,

@@ -8,6 +8,7 @@ from app.models import Group, GroupStatus, JournalMonitorEntry, RoleName, Room, 
 from app.schemas.api import ScheduleDeleteResponse, ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
 from app.services.audit import write_audit
 from app.services.cache import cache_delete, cache_get_json, cache_set_json
+from app.services.group_cache import invalidate_group_list_cache
 
 router = APIRouter()
 SCHEDULE_LIST_CACHE_TTL_SECONDS = 60
@@ -162,6 +163,7 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
                 continue
     db.commit()
     _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     for slot in created:
         db.refresh(slot)
 
@@ -263,6 +265,7 @@ def delete_group_schedule(group_id: int, db: DbSession, current_user: CurrentUse
     )
     db.commit()
     _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     return ScheduleDeleteResponse(
         group_id=group.id,
         group_code=group.code,
@@ -305,6 +308,7 @@ def update_schedule_slot(
     db.add(slot)
     db.commit()
     _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     db.refresh(slot)
 
     write_audit(
