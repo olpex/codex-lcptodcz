@@ -357,7 +357,6 @@ export function TraineesPage() {
     } catch (error) {
       const message = (error as Error).message;
       setLoadError(message);
-      if (!options.quiet) showError(message);
     } finally {
       if (showLoading) setIsLoading(false);
     }

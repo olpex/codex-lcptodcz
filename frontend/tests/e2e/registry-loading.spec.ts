@@ -201,6 +201,97 @@ test("trainees registry loads without journal auto tick", async ({ page }) => {
   }
 });
 
+test("trainees registry refresh errors render once inline without a duplicate toast", async ({ page }) => {
+  const serverError = "Внутрішня помилка сервера. Спробуйте ще раз пізніше.";
+  let traineeRequests = 0;
+
+  await installAuth(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(authUserPayload()) });
+    }
+
+    if (path.endsWith("/groups") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/trainees/bulk/dedupe") && method === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ duplicate_groups: 0, removed_count: 0, merged_count: 0 })
+      });
+    }
+
+    if (path.endsWith("/trainees") && method === "GET") {
+      traineeRequests += 1;
+      if (traineeRequests <= 2) {
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+      }
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Internal Server Error" })
+      });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/trainees");
+  await expect(page.getByText("За вибраним фільтром записів немає")).toBeVisible();
+  await expect(page.getByText(serverError)).toHaveCount(0);
+  await page.locator("main").getByRole("button", { name: "Оновити" }).click();
+
+  let duplicateToastAppeared = false;
+  try {
+    await expect(page.getByRole("alert").filter({ hasText: serverError })).toBeVisible({ timeout: 1000 });
+    duplicateToastAppeared = true;
+  } catch {
+    duplicateToastAppeared = false;
+  }
+  expect(duplicateToastAppeared).toBe(false);
+  await expect(page.getByText(serverError)).toHaveCount(1);
+});
+
+test("toast notifications do not overlap the sticky app header controls", async ({ page }) => {
+  await installAuth(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path.endsWith("/auth/me") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(authUserPayload()) });
+    }
+
+    if (path.endsWith("/groups") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    if (path.endsWith("/trainees") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+
+    return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not mocked" }) });
+  });
+
+  await page.goto("/trainees");
+  await page.locator("header").getByRole("button", { name: "Оновити" }).click();
+
+  const headerBox = await page.locator("header").boundingBox();
+  const toastBox = await page.getByRole("status").filter({ hasText: "Оновлюю поточну сторінку" }).boundingBox();
+  expect(headerBox).not.toBeNull();
+  expect(toastBox).not.toBeNull();
+  expect(toastBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+});
+
 test("trainees registry does not schedule browser-driven intake sync", async ({ page }) => {
   await installAuth(page);
   await page.addInitScript(() => {
