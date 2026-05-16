@@ -72,6 +72,7 @@ def ensure_runtime_schema() -> None:
             ("journal_monitor_entries", "drive_folder_id", "VARCHAR(255) NULL"),
             ("journal_monitor_entries", "drive_mime_type", "VARCHAR(255) NULL"),
             ("journal_monitor_entries", "drive_created_at", "TIMESTAMP NULL"),
+            ("journal_monitor_entries", "drive_modified_at", "TIMESTAMP NULL"),
             ("journal_monitor_entries", "drive_change_started_at", "TIMESTAMP NULL"),
         ]
         for table_name, column_name, ddl in column_plan:
