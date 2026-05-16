@@ -1,4 +1,8 @@
+import hashlib
+import re
 from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
 
 from celery.utils.log import get_task_logger
 from sqlalchemy.orm import Session
@@ -19,9 +23,14 @@ from app.services.import_export import (
 )
 from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.mail_ingest import ingest_mailbox
-from app.services.journal_monitor import list_drive_child_folders, process_journal_monitor_background_step
+from app.services.journal_monitor import (
+    download_drive_file_bytes,
+    list_drive_child_folders,
+    process_journal_monitor_background_step,
+)
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
 from app.services.schedule_import import import_schedule_docx
+from app.services.storage import storage_path
 
 logger = get_task_logger(__name__)
 _runtime_schema_checked = False
@@ -136,6 +145,76 @@ def _apply_group_hint(parsed: dict, payload: dict) -> dict:
     }
 
 
+def _safe_storage_filename(filename: str | None) -> str:
+    cleaned = re.sub(r"[\\/]+", "_", (filename or "drive-file").strip()) or "drive-file"
+    return cleaned[:240]
+
+
+def _source_drive_payload(db: Session, job: ImportJob, payload: dict) -> dict:
+    if payload.get("drive_file_id"):
+        return payload
+
+    source_job_id = payload.get("reprocess_of_job_id")
+    if not source_job_id and isinstance(job.request_payload, dict):
+        source_job_id = job.request_payload.get("reprocess_of_job_id")
+    if not source_job_id:
+        return payload
+
+    try:
+        source_job = db.get(ImportJob, int(source_job_id))
+    except (TypeError, ValueError):
+        return payload
+    source_payload = source_job.result_payload if source_job and isinstance(source_job.result_payload, dict) else {}
+    if not source_payload.get("drive_file_id"):
+        return payload
+
+    merged = {**source_payload, **payload}
+    merged.setdefault("original_source", source_payload.get("source"))
+    return merged
+
+
+def _restore_missing_drive_document(db: Session, job: ImportJob, payload: dict) -> dict:
+    document = job.document
+    if not document or Path(document.file_path).exists():
+        return payload
+    if document.source != "drive_intake":
+        return payload
+
+    drive_payload = _source_drive_payload(db, job, payload)
+    drive_file_id = str(drive_payload.get("drive_file_id") or "").strip()
+    if not drive_file_id:
+        return payload
+
+    mime_type = str(drive_payload.get("drive_mime_type") or document.mime_type or "").strip() or None
+    service_account_json = resolve_drive_intake_service_account_json(db, job.branch_id)
+    file_bytes = download_drive_file_bytes(drive_file_id, mime_type, service_account_json)
+    if not file_bytes:
+        raise ValueError("Не вдалося повторно завантажити файл з Google Drive для імпорту")
+
+    previous_path = document.file_path
+    filename = _safe_storage_filename(str(drive_payload.get("drive_file_name") or document.file_name or "drive-file"))
+    out_path = storage_path() / f"{uuid4().hex}_{filename}"
+    with out_path.open("wb") as handle:
+        handle.write(file_bytes)
+
+    document.file_name = filename
+    document.file_path = str(out_path)
+    document.mime_type = mime_type or document.mime_type
+    document.hash_sha256 = hashlib.sha256(file_bytes).hexdigest()
+
+    restored_payload = {
+        **drive_payload,
+        "drive_restored_from_missing_path": previous_path,
+        "drive_restored_at": datetime.now(timezone.utc).isoformat(),
+    }
+    job.result_payload = restored_payload
+    db.add(document)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return restored_payload
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.worker.process_import_job_task",
@@ -159,6 +238,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         db.commit()
 
         initial_payload = job.result_payload if isinstance(job.result_payload, dict) else {}
+        initial_payload = _restore_missing_drive_document(db, job, initial_payload)
         raw_import_mode = initial_payload.get("import_mode")
         import_mode = raw_import_mode if raw_import_mode in IMPORT_UPDATE_MODES else "skip_existing"
         parsed = parse_document_content(job.document.file_path, job.document.file_type)

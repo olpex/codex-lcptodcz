@@ -463,6 +463,22 @@ def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) 
         "source": "manual_reprocess",
         "reprocess_of_job_id": source_job.id,
     }
+    if source_job.document.source == "drive_intake":
+        for key in (
+            "channel",
+            "drive_file_id",
+            "drive_file_name",
+            "drive_modified_time",
+            "drive_url",
+            "group_code_hint",
+        ):
+            if previous_payload.get(key) is not None:
+                new_payload[key] = previous_payload[key]
+        new_payload["original_source"] = previous_payload.get("source") or "drive_intake"
+        if source_job.document.mime_type:
+            new_payload["drive_mime_type"] = source_job.document.mime_type
+        new_payload.setdefault("drive_file_name", source_job.document.file_name)
+
     new_job = ImportJob(
         branch_id=current_user.branch_id,
         idempotency_key=f"{current_user.branch_id}:reprocess-{source_job.id}-{uuid4().hex}",

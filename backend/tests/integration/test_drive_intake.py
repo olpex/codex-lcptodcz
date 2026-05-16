@@ -7,6 +7,7 @@ from docx import Document as DocxDocument
 from openpyxl import Workbook
 
 from app.core.crypto import cipher
+from app.api.routes import jobs as jobs_route
 from app.models import (
     Document,
     DocumentType,
@@ -730,6 +731,131 @@ def test_drive_intake_redownloads_processed_schedule_when_local_copy_is_missing(
     assert downloader_calls == ["schedule-46-26"]
     db_session.expire_all()
     assert db_session.get(ImportJob, job.id).status == JobStatus.SUCCEEDED
+    assert db_session.query(ScheduleSlot).count() == 1
+
+
+def test_import_worker_redownloads_missing_drive_intake_document(db_session, tmp_path, monkeypatch):
+    missing_path = tmp_path / "missing-worker-schedule.docx"
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Розклад.docx",
+        file_path=str(missing_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="missing-worker-copy",
+    )
+    db_session.add(document)
+    db_session.flush()
+    job = ImportJob(
+        branch_id="main",
+        idempotency_key="main:drive-worker-missing-doc",
+        document_id=document.id,
+        status=JobStatus.QUEUED,
+        message="queued",
+        result_payload={
+            "source": "drive_intake",
+            "channel": "google_drive_folder",
+            "drive_file_id": "schedule-46-26",
+            "drive_file_name": "46-26 Розклад.docx",
+            "drive_modified_time": "2026-05-12T07:00:00Z",
+            "import_mode": "overwrite",
+        },
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    download_calls: list[tuple[str, str | None, str | None]] = []
+
+    monkeypatch.setattr(
+        "app.tasks.worker.resolve_drive_intake_service_account_json",
+        lambda db, branch_id: "section-service-account-json",
+    )
+    monkeypatch.setattr(
+        "app.tasks.worker.download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: download_calls.append(
+            (file_id, mime_type, service_account_json)
+        )
+        or _schedule_docx_bytes(),
+        raising=False,
+    )
+
+    result = process_import_job_task.run(job.id)
+
+    assert result["status"] == "ok"
+    assert download_calls == [("schedule-46-26", drive_intake.GOOGLE_DRIVE_DOCX_MIME, "section-service-account-json")]
+    db_session.expire_all()
+    refreshed_document = db_session.get(Document, document.id)
+    assert refreshed_document is not None
+    assert refreshed_document.file_path != str(missing_path)
+    assert db_session.get(ImportJob, job.id).status == JobStatus.SUCCEEDED
+    assert db_session.query(ScheduleSlot).count() == 1
+
+
+def test_manual_reprocess_redownloads_missing_drive_intake_document(
+    client,
+    auth_headers,
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    missing_path = tmp_path / "missing-reprocess-schedule.docx"
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Розклад.docx",
+        file_path=str(missing_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="missing-reprocess-copy",
+    )
+    db_session.add(document)
+    db_session.flush()
+    source_job = ImportJob(
+        branch_id="main",
+        idempotency_key="main:drive-manual-reprocess-source",
+        document_id=document.id,
+        status=JobStatus.FAILED,
+        message="Package not found at old path",
+        result_payload={
+            "source": "drive_intake",
+            "channel": "google_drive_folder",
+            "drive_file_id": "schedule-46-26",
+            "drive_file_name": "46-26 Розклад.docx",
+            "drive_modified_time": "2026-05-12T07:00:00Z",
+            "drive_url": "https://drive.google.com/file/d/schedule-46-26/view",
+            "group_code_hint": "46-26",
+            "import_mode": "overwrite",
+        },
+    )
+    db_session.add(source_job)
+    db_session.commit()
+
+    download_calls: list[str] = []
+
+    monkeypatch.setattr(jobs_route.process_import_job_task, "delay", lambda job_id: (_ for _ in ()).throw(RuntimeError("queue off")))
+    monkeypatch.setattr(
+        "app.tasks.worker.resolve_drive_intake_service_account_json",
+        lambda db, branch_id: "section-service-account-json",
+    )
+    monkeypatch.setattr(
+        "app.tasks.worker.download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: download_calls.append(file_id)
+        or _schedule_docx_bytes(),
+        raising=False,
+    )
+
+    response = client.post(f"/api/v1/jobs/{source_job.id}/reprocess-import", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["status"] == JobStatus.SUCCEEDED.value
+    assert download_calls == ["schedule-46-26"]
+    db_session.expire_all()
+    reprocess_job = db_session.get(ImportJob, payload["job"]["id"])
+    assert reprocess_job is not None
+    assert reprocess_job.result_payload["drive_file_id"] == "schedule-46-26"
+    assert reprocess_job.result_payload["source"] == "manual_reprocess"
     assert db_session.query(ScheduleSlot).count() == 1
 
 
