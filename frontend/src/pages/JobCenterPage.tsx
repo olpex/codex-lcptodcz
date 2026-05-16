@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, formControlClass } from "../components/FormField";
@@ -93,6 +93,97 @@ type JobStage = {
   percent: number;
   label: string;
 };
+
+type CollapsibleTone = "sky" | "indigo" | "slate" | "rose";
+
+type CollapsibleSectionProps = {
+  id: string;
+  title: string;
+  description: string;
+  tone: CollapsibleTone;
+  testId: string;
+  defaultOpen?: boolean;
+  summary?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+};
+
+const COLLAPSIBLE_TONE_CLASSES: Record<CollapsibleTone, { section: string; title: string; description: string; icon: string }> = {
+  sky: {
+    section: "border-sky-200 bg-sky-50",
+    title: "text-sky-950",
+    description: "text-sky-800",
+    icon: "border-sky-300 bg-white text-sky-900"
+  },
+  indigo: {
+    section: "border-indigo-200 bg-indigo-50",
+    title: "text-indigo-950",
+    description: "text-indigo-800",
+    icon: "border-indigo-300 bg-white text-indigo-900"
+  },
+  slate: {
+    section: "border-slate-200 bg-slate-50",
+    title: "text-slate-950",
+    description: "text-slate-700",
+    icon: "border-slate-300 bg-white text-slate-800"
+  },
+  rose: {
+    section: "border-rose-200 bg-rose-50",
+    title: "text-rose-950",
+    description: "text-rose-800",
+    icon: "border-rose-300 bg-white text-rose-900"
+  }
+};
+
+function CollapsibleSection({
+  id,
+  title,
+  description,
+  tone,
+  testId,
+  defaultOpen = false,
+  summary,
+  action,
+  children
+}: CollapsibleSectionProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const classes = COLLAPSIBLE_TONE_CLASSES[tone];
+  const contentId = `${id}-content`;
+
+  return (
+    <section className={`rounded-lg border p-3 ${classes.section}`} data-testid={testId} aria-labelledby={id}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-start gap-3 text-left"
+          aria-expanded={isOpen}
+          aria-controls={contentId}
+          onClick={() => setIsOpen((value) => !value)}
+        >
+          <span
+            className={`mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-lg font-bold leading-none ${classes.icon}`}
+            aria-hidden="true"
+          >
+            {isOpen ? "−" : "+"}
+          </span>
+          <span className="min-w-0">
+            <span id={id} className={`block text-base font-semibold ${classes.title}`}>
+              {title}
+            </span>
+            <span className={`block text-sm ${classes.description}`}>{description}</span>
+          </span>
+        </button>
+        {summary && <div className="flex flex-wrap justify-end gap-2 text-xs font-semibold">{summary}</div>}
+        {action}
+      </div>
+      {isOpen && (
+        <div id={contentId} className="mt-3">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function toIsoDateRangeStart(value: string): string {
   return `${value}T00:00:00Z`;
@@ -1015,19 +1106,14 @@ export function JobCenterPage() {
         </aside>
       )}
       {shouldShowDriveIntakePanel && (
-        <section
-          className="rounded-lg border border-sky-200 bg-sky-50 p-4"
-          data-testid="drive-intake-panel"
-          aria-labelledby="drive-intake-heading"
-        >
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 id="drive-intake-heading" className="text-base font-semibold text-sky-950">
-                Google Drive intake
-              </h2>
-              <p className="text-sm text-sky-800">Останні файли з intake-папки та їхній стан імпорту.</p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+        <CollapsibleSection
+          id="drive-intake-heading"
+          title="Google Drive intake"
+          description="Останні файли з intake-папки та їхній стан імпорту."
+          tone="sky"
+          testId="drive-intake-panel"
+          summary={
+            <>
               <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {driveIntakeStatus.activeCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {driveIntakeStatus.failedCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {driveIntakeStatus.succeededCount}</span>
@@ -1048,8 +1134,9 @@ export function JobCenterPage() {
                   )}
                 </>
               )}
-            </div>
-          </div>
+            </>
+          }
+        >
           {driveIntakeDiagnostics && (
             <div className="mb-3 rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700">
               <div className="flex flex-wrap gap-2 text-xs font-semibold">
@@ -1179,27 +1266,23 @@ export function JobCenterPage() {
               </p>
             </article>
           )}
-        </section>
+        </CollapsibleSection>
       )}
       {emailIntakeStatus.latest && (
-        <section
-          className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
-          data-testid="email-intake-panel"
-          aria-labelledby="email-intake-heading"
-        >
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 id="email-intake-heading" className="text-base font-semibold text-indigo-950">
-                Email intake
-              </h2>
-              <p className="text-sm text-indigo-800">Останні імпорти з Gmail API, Google Apps Script та поштового fallback.</p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+        <CollapsibleSection
+          id="email-intake-heading"
+          title="Email intake"
+          description="Останні імпорти з Gmail API, Google Apps Script та поштового fallback."
+          tone="indigo"
+          testId="email-intake-panel"
+          summary={
+            <>
               <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {emailIntakeStatus.activeCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {emailIntakeStatus.failedCount}</span>
               <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {emailIntakeStatus.succeededCount}</span>
-            </div>
-          </div>
+            </>
+          }
+        >
           <div className="space-y-2">
             {emailIntakeRows.map((item) => {
               const issueMessage = getJobIssueMessage(item);
@@ -1222,32 +1305,26 @@ export function JobCenterPage() {
               );
             })}
           </div>
-        </section>
+        </CollapsibleSection>
       )}
       {workerHealth && (
-        <section
-          className="rounded-lg border border-slate-200 bg-slate-50 p-4"
-          data-testid="worker-health-panel"
-          aria-labelledby="worker-health-heading"
-        >
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 id="worker-health-heading" className="text-base font-semibold text-slate-950">
-                Worker health
-              </h2>
-              <p className="text-sm text-slate-700">
-                Celery, queues і beat schedule у режимі тільки перегляду.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+        <CollapsibleSection
+          id="worker-health-heading"
+          title="Worker health"
+          description="Celery, queues і beat schedule у режимі тільки перегляду."
+          tone="slate"
+          testId="worker-health-panel"
+          summary={
+            <>
               <span className={workerHealth.celery.ping_ok ? "rounded-full bg-emerald-100 px-2 py-1 text-emerald-800" : "rounded-full bg-rose-100 px-2 py-1 text-rose-800"}>
                 {workerHealth.celery.ping_ok ? "Celery online" : "Celery degraded"}
               </span>
               <span className="rounded-full bg-white px-2 py-1 text-slate-700">
                 Активних задач: {workerHealth.backlog.total_active}
               </span>
-            </div>
-          </div>
+            </>
+          }
+        >
           <div className="grid gap-3 lg:grid-cols-3">
             <article className="rounded-md border border-slate-200 bg-white p-3">
               <p className="text-xs font-semibold uppercase text-slate-500">Workers</p>
@@ -1313,21 +1390,17 @@ export function JobCenterPage() {
               </p>
             )}
           </div>
-        </section>
+        </CollapsibleSection>
       )}
       {attentionJobRows.length > 0 && (
-        <section
-          className="rounded-lg border border-rose-200 bg-rose-50 p-4"
-          data-testid="job-attention-panel"
-          aria-labelledby="job-attention-heading"
-        >
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 id="job-attention-heading" className="text-base font-semibold text-rose-950">
-                Потребують уваги
-              </h2>
-              <p className="text-sm text-rose-800">Помилки імпорту, Drive або email, які варто перевірити першими.</p>
-            </div>
+        <CollapsibleSection
+          id="job-attention-heading"
+          title="Потребують уваги"
+          description="Помилки імпорту, Drive або email, які варто перевірити першими."
+          tone="rose"
+          testId="job-attention-panel"
+          summary={<span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {attentionJobRows.length}</span>}
+          action={
             <button
               type="button"
               className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-semibold text-rose-800"
@@ -1338,7 +1411,8 @@ export function JobCenterPage() {
             >
               Показати всі помилки
             </button>
-          </div>
+          }
+        >
           <div className="grid gap-2 lg:grid-cols-2">
             {attentionJobRows.map((item) => {
               const issueMessage = getJobIssueMessage(item) || "Потрібна перевірка";
@@ -1381,7 +1455,7 @@ export function JobCenterPage() {
               );
             })}
           </div>
-        </section>
+        </CollapsibleSection>
       )}
       <Panel title="1.1 Центр імпорту">
         <InlineNotice
