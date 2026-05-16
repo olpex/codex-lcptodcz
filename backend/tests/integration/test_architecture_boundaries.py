@@ -171,6 +171,15 @@ def test_worker_deploy_runs_automatically_after_main_pushes():
     assert "автоматично запускається після push у `main`" in vercel_readme
 
 
+def test_vercel_config_does_not_define_unsupported_hobby_crons():
+    repo_root = Path(__file__).resolve().parents[3]
+    vercel_config = (repo_root / "vercel.json").read_text(encoding="utf-8")
+    vercel_readme = (repo_root / "infra" / "vercel" / "README.md").read_text(encoding="utf-8")
+
+    assert '"crons"' not in vercel_config
+    assert "Vercel Hobby не має project cron" in vercel_readme
+
+
 def test_perf_suite_covers_critical_background_routes():
     repo_root = Path(__file__).resolve().parents[3]
     perf_source = (repo_root / "backend" / "tests" / "perf" / "test_critical_routes.py").read_text(encoding="utf-8")

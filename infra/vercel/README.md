@@ -11,7 +11,7 @@ Vercel не запускає довгоживучі процеси `celery worke
    - IMAP/OCR змінні.
 4. Автоматичний IMAP Cron вимкнено, щоб він не конкурував із Google Apps Script за непрочитані листи.
 5. Для інтеграції з Google Apps Script задайте `MAIL_WEBHOOK_SECRET` і використовуйте endpoint `POST /api/v1/mail/gmail-api-webhook/contracts`.
-6. Для синхронізації журналів і intake-папки Google Drive без окремого `celery beat` задайте `CRON_SECRET` і викликайте `GET /api/v1/journal-monitors/auto-cron` із заголовком `Authorization: Bearer <CRON_SECRET>` через зовнішній cron. На Vercel Hobby часті cron-запуски недоступні, тому для режиму 24/7 потрібен зовнішній cron або окремий worker/beat.
+6. Для синхронізації журналів і intake-папки Google Drive без окремого `celery beat` задайте `CRON_SECRET` і викликайте `GET /api/v1/journal-monitors/auto-cron` із заголовком `Authorization: Bearer <CRON_SECRET>` через зовнішній cron. Vercel Hobby не має project cron для 30-секундного або 5-хвилинного запуску, тому `vercel.json` не містить `crons`; для режиму 24/7 потрібен зовнішній cron або окремий worker/beat.
 
 Детальніша схема сервісів і runbook перевірки: `../DEPLOY.md`.
 
