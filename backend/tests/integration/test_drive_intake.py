@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.services import drive_intake
 from app.services.import_export import collect_teacher_workload_summary
+from app.tasks import worker as worker_tasks
 from app.tasks.worker import process_drive_intake_auto_task, process_import_job_task
 
 
@@ -838,6 +839,84 @@ def test_drive_intake_retries_failed_existing_schedule_job(db_session, tmp_path)
     assert result["job_id"] == failed_job.id
     assert runner_calls == [failed_job.id]
     db_session.expire_all()
+    assert db_session.get(ImportJob, failed_job.id).status == JobStatus.SUCCEEDED
+    assert db_session.query(ScheduleSlot).count() == 1
+
+
+def test_drive_intake_retries_failed_schedule_job_when_local_copy_is_missing(db_session, tmp_path, monkeypatch):
+    missing_path = tmp_path / "missing-failed-schedule.docx"
+    document = Document(
+        branch_id="main",
+        file_name="46-26 Розклад.docx",
+        file_path=str(missing_path),
+        file_type=DocumentType.DOCX,
+        source="drive_intake",
+        mime_type=drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        hash_sha256="failed-missing-copy",
+    )
+    db_session.add(document)
+    db_session.flush()
+    failed_job = ImportJob(
+        branch_id="main",
+        idempotency_key=drive_intake._idempotency_key("main", "schedule-46-26", "2026-05-16T12:29:00Z"),
+        document_id=document.id,
+        status=JobStatus.FAILED,
+        message="Package not found at old temp path",
+        result_payload={
+            "source": "drive_intake",
+            "drive_file_id": "schedule-46-26",
+            "drive_file_name": "46-26 Розклад.docx",
+            "drive_modified_time": "2026-05-16T12:29:00Z",
+            "import_mode": "overwrite",
+        },
+    )
+    db_session.add(failed_job)
+    db_session.commit()
+
+    download_calls: list[str] = []
+
+    monkeypatch.setattr(
+        worker_tasks,
+        "resolve_drive_intake_service_account_json",
+        lambda db, branch_id: "section-service-account-json",
+    )
+    monkeypatch.setattr(
+        worker_tasks,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: download_calls.append(file_id)
+        or _schedule_docx_bytes(),
+        raising=False,
+    )
+
+    def rerun_existing_job(job_id: int) -> dict:
+        return process_import_job_task.run(job_id)
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Розклад.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-16T12:29:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: b"",
+        import_job_runner=rerun_existing_job,
+        processed_file_marker=None,
+    )
+
+    assert result["processed"] == 1
+    assert result["retried_failed_job"] is True
+    assert result["job_id"] == failed_job.id
+    assert download_calls == ["schedule-46-26"]
+    db_session.expire_all()
+    refreshed_document = db_session.get(Document, document.id)
+    assert refreshed_document is not None
+    assert refreshed_document.file_path != str(missing_path)
     assert db_session.get(ImportJob, failed_job.id).status == JobStatus.SUCCEEDED
     assert db_session.query(ScheduleSlot).count() == 1
 
