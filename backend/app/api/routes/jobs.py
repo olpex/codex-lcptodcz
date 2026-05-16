@@ -12,7 +12,16 @@ from app.models import Document, ExportJob, GroupMembership, ImportJob, JobStatu
 from app.schemas.api import JobListItemResponse, JobResponse, JobStatusResponse
 from app.services.audit import write_audit
 from app.services.dashboard_cache import invalidate_attention_cache
+from app.services.drive_intake import (
+    _document_type_for_drive_file,
+    _drive_filename_has_processed_marker,
+    _find_drive_intake_job,
+    _normalize_drive_filename,
+    list_drive_intake_files,
+    resolve_drive_intake_service_account_json,
+)
 from app.services.import_export import mark_job_failed
+from app.services.journal_monitor import extract_drive_folder_id
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
 router = APIRouter()
@@ -252,6 +261,93 @@ def list_drive_intake_jobs(
         )
         for job in jobs
     ]
+
+
+@router.get("/drive-intake/diagnostics")
+def get_drive_intake_diagnostics(db: DbSession, current_user: CurrentUser) -> dict:
+    folder_url = settings.google_drive_intake_folder_url.strip()
+    folder_id = extract_drive_folder_id(folder_url) if folder_url else ""
+    service_account_json = resolve_drive_intake_service_account_json(db, current_user.branch_id)
+    beat_schedule = getattr(celery_app.conf, "beat_schedule", {}) or {}
+    drive_beat = beat_schedule.get("google-drive-intake-auto") if isinstance(beat_schedule, dict) else None
+
+    payload: dict = {
+        "auto_enabled": settings.google_drive_intake_auto_enabled,
+        "folder_configured": bool(folder_id),
+        "folder_id": folder_id or None,
+        "credentials_configured": bool((service_account_json or "").strip() or settings.google_drive_api_key.strip()),
+        "beat_schedule_present": bool(drive_beat),
+        "beat_schedule_seconds": _schedule_seconds(drive_beat.get("schedule")) if isinstance(drive_beat, dict) else None,
+        "batch_size": settings.google_drive_intake_batch_size,
+        "supported_count": 0,
+        "unprocessed_supported_count": 0,
+        "marked_processed_count": 0,
+        "unsupported_count": 0,
+        "unprocessed_supported_files": [],
+        "scan_error": None,
+    }
+    if not folder_id:
+        payload["scan_error"] = "Google Drive intake folder is not configured"
+        return payload
+
+    try:
+        files = list_drive_intake_files(folder_id, service_account_json)
+    except Exception as exc:
+        payload["scan_error"] = str(exc)
+        return payload
+
+    unprocessed: list[dict] = []
+    marked_processed_count = 0
+    unsupported_count = 0
+    supported_count = 0
+    for item in files:
+        file_id = str(item.get("id") or "").strip()
+        raw_name = str(item.get("name") or file_id)
+        mime_type = str(item.get("mimeType") or "")
+        filename = _normalize_drive_filename(raw_name, mime_type)
+        doc_type = _document_type_for_drive_file(filename, mime_type)
+        if doc_type.value not in {"xlsx", "docx"}:
+            unsupported_count += 1
+            continue
+
+        supported_count += 1
+        marked_processed = _drive_filename_has_processed_marker(raw_name)
+        if marked_processed:
+            marked_processed_count += 1
+
+        job = _find_drive_intake_job(
+            db,
+            branch_id=current_user.branch_id,
+            file_id=file_id,
+            modified_time=str(item.get("modifiedTime") or ""),
+            filename=raw_name,
+        )
+        job_status = job.status.value if job and hasattr(job.status, "value") else str(job.status) if job else None
+        if not marked_processed and job_status != JobStatus.SUCCEEDED.value:
+            unprocessed.append(
+                {
+                    "drive_file_id": file_id,
+                    "name": filename,
+                    "mime_type": mime_type,
+                    "document_type": doc_type.value,
+                    "modified_time": item.get("modifiedTime"),
+                    "web_view_link": item.get("webViewLink"),
+                    "job_id": job.id if job else None,
+                    "job_status": job_status,
+                    "job_message": job.message if job else None,
+                }
+            )
+
+    payload.update(
+        {
+            "supported_count": supported_count,
+            "unprocessed_supported_count": len(unprocessed),
+            "marked_processed_count": marked_processed_count,
+            "unsupported_count": unsupported_count,
+            "unprocessed_supported_files": unprocessed[:20],
+        }
+    )
+    return payload
 
 
 @router.get("/email-intake", response_model=list[JobListItemResponse])

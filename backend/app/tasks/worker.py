@@ -79,6 +79,7 @@ def _drive_intake_batch_size() -> int:
 
 def _process_drive_intake_batch(db: Session, branch_id: str, service_account_json: str | None) -> dict:
     batch_size = _drive_intake_batch_size()
+    attempted_job_ids: set[int] = set()
     aggregate: dict = {
         "processed": 0,
         "failed": 0,
@@ -95,9 +96,12 @@ def _process_drive_intake_batch(db: Session, branch_id: str, service_account_jso
             branch_id=branch_id,
             service_account_json=service_account_json,
             import_job_runner=process_import_job_task.run,
+            excluded_job_ids=attempted_job_ids,
         )
         db.commit()
         aggregate["items"].append(result)
+        if result.get("job_id"):
+            attempted_job_ids.add(int(result["job_id"]))
 
         for key in _DRIVE_INTAKE_BATCH_SUM_KEYS:
             aggregate[key] += int(result.get(key) or 0)

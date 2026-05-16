@@ -44,6 +44,32 @@ type WorkerHealth = {
   };
 };
 
+type DriveIntakeDiagnostics = {
+  auto_enabled: boolean;
+  folder_configured: boolean;
+  folder_id: string | null;
+  credentials_configured: boolean;
+  beat_schedule_present: boolean;
+  beat_schedule_seconds: number | null;
+  batch_size: number;
+  supported_count: number;
+  unprocessed_supported_count: number;
+  marked_processed_count: number;
+  unsupported_count: number;
+  unprocessed_supported_files: Array<{
+    drive_file_id: string;
+    name: string;
+    mime_type: string;
+    document_type: string;
+    modified_time: string | null;
+    web_view_link: string | null;
+    job_id: number | null;
+    job_status: Job["status"] | null;
+    job_message: string | null;
+  }>;
+  scan_error: string | null;
+};
+
 type JobTypeFilter = "all" | "import" | "export";
 type JobStatusFilter = "all" | "queued" | "running" | "succeeded" | "failed";
 type ImportMode = "skip_existing" | "missing_only" | "overwrite";
@@ -210,6 +236,7 @@ export function JobCenterPage() {
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
   const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
   const [driveIntakeLoadError, setDriveIntakeLoadError] = useState<string | null>(null);
+  const [driveIntakeDiagnostics, setDriveIntakeDiagnostics] = useState<DriveIntakeDiagnostics | null>(null);
   const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
   const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
   const [cancelTarget, setCancelTarget] = useState<JobListItem | null>(null);
@@ -455,6 +482,15 @@ export function JobCenterPage() {
     }
   };
 
+  const loadDriveIntakeDiagnostics = async () => {
+    try {
+      const data = await request<DriveIntakeDiagnostics>("/jobs/drive-intake/diagnostics");
+      setDriveIntakeDiagnostics(data);
+    } catch {
+      setDriveIntakeDiagnostics(null);
+    }
+  };
+
   const loadEmailIntakeJobs = async () => {
     try {
       const data = await request<JobListItem[]>("/jobs/email-intake?limit=5");
@@ -515,6 +551,7 @@ export function JobCenterPage() {
       if (hasUnknownActiveJob || hasCompletedRequestedJob) {
         await loadJobs();
         await loadDriveIntakeJobs();
+        await loadDriveIntakeDiagnostics();
         await loadEmailIntakeJobs();
         await loadWorkerHealth();
       }
@@ -527,6 +564,7 @@ export function JobCenterPage() {
     setStatsHistory([]);
     loadJobs();
     loadDriveIntakeJobs();
+    loadDriveIntakeDiagnostics();
     loadEmailIntakeJobs();
     loadWorkerHealth();
   }, [jobType, jobStatus, dateFrom, dateTo]);
@@ -553,6 +591,7 @@ export function JobCenterPage() {
         void loadJobs();
       }
       void loadDriveIntakeJobs();
+      void loadDriveIntakeDiagnostics();
       void loadEmailIntakeJobs();
       void loadWorkerHealth();
     }, REFRESH_INTERVAL_MS);
@@ -1011,6 +1050,44 @@ export function JobCenterPage() {
               )}
             </div>
           </div>
+          {driveIntakeDiagnostics && (
+            <div className="mb-3 rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-800">
+                  Drive бачить: {driveIntakeDiagnostics.supported_count} DOCX/XLSX
+                </span>
+                <span
+                  className={`rounded-full px-2 py-1 ${
+                    driveIntakeDiagnostics.unprocessed_supported_count > 0
+                      ? "bg-amber-50 text-amber-800"
+                      : "bg-emerald-50 text-emerald-800"
+                  }`}
+                >
+                  Без [processed]: {driveIntakeDiagnostics.unprocessed_supported_count}
+                </span>
+                <span className="rounded-full bg-slate-50 px-2 py-1 text-slate-700">
+                  Beat: {driveIntakeDiagnostics.beat_schedule_present ? "є" : "немає"}
+                </span>
+                <span className="rounded-full bg-slate-50 px-2 py-1 text-slate-700">
+                  Credentials: {driveIntakeDiagnostics.credentials_configured ? "є" : "немає"}
+                </span>
+              </div>
+              {driveIntakeDiagnostics.scan_error && (
+                <p className="mt-2 text-sm font-medium text-rose-800">{driveIntakeDiagnostics.scan_error}</p>
+              )}
+              {driveIntakeDiagnostics.unprocessed_supported_files.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {driveIntakeDiagnostics.unprocessed_supported_files.slice(0, 3).map((file) => (
+                    <p key={file.drive_file_id} className="text-xs text-slate-700">
+                      <span className="font-semibold">{file.name}</span>
+                      {file.job_status ? ` · job: ${formatJobStatus(file.job_status)}` : " · job ще не створено"}
+                      {file.job_message ? ` · ${file.job_message}` : ""}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {driveIntakeLoadError ? (
             <div className="space-y-3">
               <InlineNotice tone="error" text={`Не вдалося отримати історію Drive intake: ${driveIntakeLoadError}`} />

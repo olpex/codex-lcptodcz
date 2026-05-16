@@ -5,6 +5,7 @@ from sqlalchemy import event
 from app.db.session import engine
 from app.models import Document, DocumentType, ExportJob, ImportJob, JobStatus
 from app.api.routes import jobs as jobs_route
+from app.services import drive_intake
 
 
 def _count_select_queries(callback) -> tuple[int, object]:
@@ -303,6 +304,45 @@ def test_drive_intake_jobs_returns_recent_branch_scoped_drive_history(client, au
     assert payload[0]["document_id"] == drive_document.id
     assert payload[0]["document_file_name"] == "46-26 Schedule.docx"
     assert payload[0]["job"]["result_payload"]["marking_error"] == "Google Drive denied rename"
+
+
+def test_drive_intake_diagnostics_reports_unprocessed_supported_files(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(jobs_route.settings, "google_drive_intake_folder_url", "https://drive.google.com/drive/folders/intake-folder")
+    monkeypatch.setattr(jobs_route.settings, "google_drive_intake_auto_enabled", True)
+    monkeypatch.setattr(jobs_route.settings, "google_drive_intake_batch_size", 5)
+    monkeypatch.setattr(jobs_route, "resolve_drive_intake_service_account_json", lambda db, branch_id: "service-account-json")
+    monkeypatch.setattr(
+        jobs_route,
+        "list_drive_intake_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Розклад.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-16T10:27:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            },
+            {
+                "id": "contracts-processed",
+                "name": "167-25 Договори [processed].xlsx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_XLSX_MIME,
+                "modifiedTime": "2026-05-15T10:27:00Z",
+            },
+        ],
+    )
+
+    response = client.get("/api/v1/jobs/drive-intake/diagnostics", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_enabled"] is True
+    assert payload["folder_configured"] is True
+    assert payload["credentials_configured"] is True
+    assert payload["beat_schedule_present"] is True
+    assert payload["supported_count"] == 2
+    assert payload["marked_processed_count"] == 1
+    assert payload["unprocessed_supported_count"] == 1
+    assert payload["unprocessed_supported_files"][0]["name"] == "46-26 Розклад.docx"
 
 
 def test_email_intake_jobs_returns_recent_branch_scoped_mail_history(client, auth_headers, db_session):

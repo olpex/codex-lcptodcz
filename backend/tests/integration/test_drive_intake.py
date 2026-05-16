@@ -1029,3 +1029,57 @@ def test_drive_intake_worker_processes_configured_batch_size(db_session, monkeyp
     assert [item["job_id"] for item in result["items"]] == [1, 2]
     assert result["job_id"] == 2
     assert result["filename"] == "file-2.xlsx"
+
+
+def test_drive_intake_failed_file_does_not_block_next_supported_file(db_session):
+    files = [
+        {
+            "id": "bad-schedule-46-26",
+            "name": "46-26 Bad Schedule.docx",
+            "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+            "modifiedTime": "2026-05-12T07:00:00Z",
+        },
+        {
+            "id": "good-schedule-90-26",
+            "name": "90-26 Good Schedule.docx",
+            "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+            "modifiedTime": "2026-05-12T07:01:00Z",
+        },
+    ]
+
+    def downloader(file_id, mime_type=None, service_account_json=None):
+        if file_id == "bad-schedule-46-26":
+            return b"not-a-docx-package"
+        return _schedule_docx_bytes("90-26")
+
+    excluded_job_ids: set[int] = set()
+    first = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: files,
+        downloader=downloader,
+        import_job_runner=_run_import_job,
+        processed_file_marker=None,
+        excluded_job_ids=excluded_job_ids,
+    )
+    assert first["processed"] == 1
+    assert first["failed"] == 1
+    excluded_job_ids.add(first["job_id"])
+
+    second = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: files,
+        downloader=downloader,
+        import_job_runner=_run_import_job,
+        processed_file_marker=None,
+        excluded_job_ids=excluded_job_ids,
+    )
+
+    assert second["processed"] == 1
+    assert second["status"] == JobStatus.SUCCEEDED.value
+    assert second["filename"] == "90-26 Good Schedule.docx"
+    assert db_session.query(ImportJob).filter(ImportJob.status == JobStatus.FAILED).count() == 1
+    assert db_session.query(ScheduleSlot).count() == 1
