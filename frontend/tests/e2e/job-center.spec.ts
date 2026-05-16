@@ -1190,4 +1190,6 @@ test("job center shows read-only worker health", async ({ page }) => {
   await expect(workerPanel).toContainText("Email канал: Google Apps Script");
   await expect(workerPanel).toContainText("IMAP fallback: вимкнено");
   await expect(workerPanel).toContainText("IMAP auto poll: вимкнено");
+  await expect(workerPanel).toContainText("IMAP fallback вимкнений навмисно");
+  await expect(workerPanel).toContainText("Увімкніть IMAP_FALLBACK_ENABLED=true тільки для контрольованого fallback");
 });

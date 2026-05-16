@@ -70,6 +70,21 @@ The following values must be consistent across API, Celery worker, and Celery be
 | `IMAP_FALLBACK_ENABLED` | API, worker | Keep `false` unless controlled fallback is needed |
 | `IMAP_AUTO_POLL_ENABLED` | worker | Keep `false` unless IMAP is deliberately the active channel |
 
+## Mail Channel And IMAP Fallback
+
+The safe default is `MAIL_PRIMARY_CHANNEL=google_apps_script` with `IMAP_FALLBACK_ENABLED=false` and `IMAP_AUTO_POLL_ENABLED=false`.
+In this mode Google Apps Script or Gmail API webhook remains the only active mailbox reader, and IMAP cannot accidentally mark messages as read or duplicate imports.
+
+Use IMAP only for a controlled fallback window:
+
+1. Confirm the primary webhook path is unavailable or intentionally paused.
+2. Set `IMAP_FALLBACK_ENABLED=true`.
+3. For a one-off admin run, call `POST /api/v1/mail/poll-now`.
+4. For temporary worker polling, set `IMAP_AUTO_POLL_ENABLED=true` and monitor `/api/v1/jobs/worker-health`.
+5. After the fallback window, restore `IMAP_FALLBACK_ENABLED=false` and `IMAP_AUTO_POLL_ENABLED=false`.
+
+Keep `MAIL_PRIMARY_CHANNEL=google_apps_script` unless the project deliberately promotes IMAP to the primary mail channel. Do not run Apps Script polling and IMAP auto polling as two active primary readers for the same inbox.
+
 ## Docker Commands
 
 Main compose:

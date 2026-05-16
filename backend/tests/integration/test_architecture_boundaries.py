@@ -95,6 +95,9 @@ def test_manual_imap_poll_is_disabled_when_apps_script_is_primary(client, auth_h
     payload = response.json()
     assert payload["dispatch_mode"] == "disabled"
     assert payload["primary_channel"] == "google_apps_script"
+    assert payload["disabled_reason"] == "primary_channel_google_apps_script"
+    assert "IMAP_FALLBACK_ENABLED=true" in payload["operator_hint"]
+    assert payload["runbook"] == "docs/architecture/celery-worker-topology.md#mail-channel-and-imap-fallback"
     assert payload["result"]["disabled"] is True
 
 
@@ -113,6 +116,22 @@ def test_forced_imap_worker_poll_is_disabled_without_fallback(monkeypatch):
 
     assert result["disabled"] is True
     assert result["primary_channel"] == "google_apps_script"
+
+
+def test_imap_fallback_runbook_is_documented():
+    repo_root = Path(__file__).resolve().parents[3]
+    runbook = (repo_root / "docs" / "architecture" / "celery-worker-topology.md").read_text(encoding="utf-8")
+
+    for required_text in [
+        "## Mail Channel And IMAP Fallback",
+        "`MAIL_PRIMARY_CHANNEL=google_apps_script`",
+        "`IMAP_FALLBACK_ENABLED=false`",
+        "`IMAP_FALLBACK_ENABLED=true`",
+        "`IMAP_AUTO_POLL_ENABLED=true`",
+        "`POST /api/v1/mail/poll-now`",
+        "`/api/v1/jobs/worker-health`",
+    ]:
+        assert required_text in runbook
 
 
 def test_drive_intake_batch_size_is_documented_as_recommended_default():

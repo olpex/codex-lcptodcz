@@ -128,6 +128,16 @@ function formatEnabled(value: boolean): string {
   return value ? "увімкнено" : "вимкнено";
 }
 
+function getMailFallbackNotice(settings: WorkerHealth["settings"]): string | null {
+  if (settings.mail_primary_channel === "google_apps_script" && !settings.imap_fallback_enabled) {
+    return "IMAP fallback вимкнений навмисно, поки основний канал - Google Apps Script. Увімкніть IMAP_FALLBACK_ENABLED=true тільки для контрольованого fallback.";
+  }
+  if (settings.imap_fallback_enabled && !settings.imap_auto_poll_enabled) {
+    return "IMAP fallback дозволений, але auto poll вимкнений. Запускайте IMAP вручну або увімкніть IMAP_AUTO_POLL_ENABLED=true лише на час контрольованого fallback.";
+  }
+  return null;
+}
+
 function getJobStage(job: Job): JobStage {
   if (job.status === "queued") {
     return { step: 1, total: 3, percent: 20, label: "Очікує worker" };
@@ -275,6 +285,7 @@ export function JobCenterPage() {
     return { supported, unsupported, total: batchImportFiles.length };
   }, [batchImportFiles, supportedBatchExtensionSet]);
   const isImportBusy = isImporting || isPreviewingImport || isBatchImporting;
+  const mailFallbackNotice = workerHealth ? getMailFallbackNotice(workerHealth.settings) : null;
 
   const describeImportResult = (item: JobListItem): string => {
     if (item.job_type !== "import") return "—";
@@ -1219,6 +1230,11 @@ export function JobCenterPage() {
               <span className="font-semibold text-slate-900">IMAP auto poll:</span>{" "}
               {formatEnabled(workerHealth.settings.imap_auto_poll_enabled)}
             </p>
+            {mailFallbackNotice && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-900">
+                {mailFallbackNotice}
+              </p>
+            )}
           </div>
         </section>
       )}
