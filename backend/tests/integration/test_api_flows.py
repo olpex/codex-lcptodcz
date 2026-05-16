@@ -512,6 +512,57 @@ def test_dashboard_kpi_uses_current_year_journal_count_when_section_exists(clien
     assert response.json()["active_groups"] == 2
 
 
+def test_dashboard_kpi_counts_journal_workbook_files_not_groups_or_folders(client, auth_headers, db_session):
+    groups = [
+        Group(branch_id="main", code=f"KPI-GROUP-{index}", name=f"Група {index}", status=GroupStatus.ACTIVE)
+        for index in range(7)
+    ]
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([*groups, section])
+    db_session.flush()
+    db_session.add_all(
+        [
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-16p-26-practice",
+                drive_folder_id="folder-16p-26",
+                journal_name="16п-26 Практика.xlsx",
+                group_code="16п-26",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-16p-26-theory",
+                drive_folder_id="folder-16p-26",
+                journal_name="16п-26 Теорія.xlsx",
+                group_code="16п-26",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-17-26",
+                drive_folder_id="folder-17-26",
+                journal_name="17-26 Журнал.xlsx",
+                group_code="17-26",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["journal_count"] == 3
+    assert payload["active_groups"] == 3
+
+
 def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_headers, db_session):
     for index in range(24):
         db_session.add(

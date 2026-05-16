@@ -455,6 +455,7 @@ class TeacherMergeResponse(BaseModel):
 
 class DashboardKPIResponse(BaseModel):
     active_groups: int
+    journal_count: int
     active_trainees: int
     training_plan_progress_pct: float
     student_plan_year: int

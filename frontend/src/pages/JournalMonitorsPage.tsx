@@ -383,7 +383,7 @@ export function JournalMonitorsPage() {
     [sections, selectedId]
   );
   const rows = detail?.entries || [];
-  const totalFolders = detail?.stats.total ?? 0;
+  const totalJournals = detail?.stats.total ?? 0;
   const sectionActive = detail?.is_active !== false;
   const visibleRows = useMemo(() => {
     const query = normalizeSearchValue(journalSearch);
@@ -937,7 +937,7 @@ export function JournalMonitorsPage() {
             </div>
             <p className="mt-2 text-xs text-slate-500">
               {detail
-                ? `${detail.stats.total} папок, оновлено: ${formatDateTime(detail.last_synced_at)}`
+                ? `${detail.stats.total} журналів, оновлено: ${formatDateTime(detail.last_synced_at)}`
                 : "Додайте перший розділ з посиланням на папку журналів."}
             </p>
           </div>
@@ -1049,7 +1049,7 @@ export function JournalMonitorsPage() {
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {PROGRESS_CARDS.map((card) => {
             const value = detail?.stats[card.key] ?? 0;
-            const percent = formatPercent(value, totalFolders);
+            const percent = formatPercent(value, totalJournals);
             return (
               <div key={card.key} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1063,7 +1063,7 @@ export function JournalMonitorsPage() {
                   <div className={clsx("h-full rounded-full", card.barClass)} style={{ width: percent }} />
                 </div>
                 <p className="mt-2 text-xs text-slate-600">
-                  {value} з {totalFolders} папок
+                  {value} з {totalJournals} журналів
                 </p>
               </div>
             );
@@ -1181,7 +1181,7 @@ export function JournalMonitorsPage() {
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-ink">Список журналів</p>
               <p className="text-xs text-slate-600">
-                Папок: {rows.length} | Показано: {visibleRows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
+                Журналів: {rows.length} | Показано: {visibleRows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
               </p>
             </div>
             <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
@@ -1276,7 +1276,7 @@ export function JournalMonitorsPage() {
                     <tr>
                       <th className="px-3 py-2">Вибір</th>
                       <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2 shadow-[1px_0_0_#e2e8f0]">{renderSortButton("group", "Група")}</th>
-                      <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
+                      <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Файл журналу")}</th>
                       <th className="px-2 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
                       <th className="px-3 py-2">Години</th>
