@@ -1,0 +1,65 @@
+name: Deploy Worker Beat
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-workers
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Validate worker host secrets
+        env:
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          WORKER_USER: ${{ secrets.WORKER_USER }}
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in WORKER_HOST WORKER_USER WORKER_SSH_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::GitHub secret ${name} is not configured."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: Configure SSH
+        env:
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          WORKER_PORT: ${{ secrets.WORKER_PORT || '22' }}
+          WORKER_SSH_KEY: ${{ secrets.WORKER_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${WORKER_SSH_KEY}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${WORKER_PORT}" "${WORKER_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Deploy worker and beat
+        env:
+          WORKER_HOST: ${{ secrets.WORKER_HOST }}
+          WORKER_USER: ${{ secrets.WORKER_USER }}
+          WORKER_PORT: ${{ secrets.WORKER_PORT || '22' }}
+          WORKER_APP_DIR: ${{ secrets.WORKER_APP_DIR || '~/codex-lcptodcz' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh -p "${WORKER_PORT}" "${WORKER_USER}@${WORKER_HOST}" \
+            "set -euo pipefail
+             cd ${WORKER_APP_DIR}
+             git fetch --all --prune
+             git checkout main
+             git pull --ff-only origin main
+             docker compose -f infra/vercel/docker-compose.workers.yml up -d --build redis worker beat
+             docker compose -f infra/vercel/docker-compose.workers.yml ps"
