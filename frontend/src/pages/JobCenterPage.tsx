@@ -914,6 +914,7 @@ export function JobCenterPage() {
             <div>
               <p className="text-sm font-semibold text-ink">Фонові задачі</p>
               <p className="text-xs text-slate-600">Активно: {activeJobRows.length}</p>
+              <p className="text-xs text-slate-600">Автооновлення кожні {REFRESH_INTERVAL_MS / 1000} с</p>
             </div>
             <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">live</span>
           </div>
@@ -951,6 +952,11 @@ export function JobCenterPage() {
                     <p className="mt-2 line-clamp-2 text-xs text-slate-600">
                       {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
                     </p>
+                    {(item.document_file_name || item.output_file_name) && (
+                      <p className="mt-1 truncate text-xs font-medium text-slate-700">
+                        Файл: {item.document_file_name || item.output_file_name}
+                      </p>
+                    )}
                   </div>
                 );
               })()

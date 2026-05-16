@@ -77,6 +77,8 @@ test("job center surfaces active background jobs in a live progress drawer", asy
   await expect(drawer).toBeVisible();
   await expect(drawer).toHaveAttribute("aria-live", "polite");
   await expect(drawer).toContainText("#41");
+  await expect(drawer).toContainText("Автооновлення кожні 8 с");
+  await expect(drawer).toContainText("Файл: large-import.xlsx");
   await expect(drawer).toContainText("Processing large-import.xlsx");
 });
 
