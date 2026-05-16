@@ -23,7 +23,7 @@ docker compose -f infra/vercel/docker-compose.workers.yml up -d --build
 
 ## Запуск worker/beat через GitHub Actions
 
-Workflow `.github/workflows/deploy-workers.yml` дозволяє вручну оновити окремий worker-host з GitHub UI:
+Workflow `.github/workflows/deploy-workers.yml` автоматично запускається після push у `main` для змін backend/worker infra, а також дозволяє вручну оновити окремий worker-host з GitHub UI:
 
 1. На сервері має бути клон репозиторію, Docker і Docker Compose plugin.
 2. У файлі `.env` на сервері мають бути production змінні: `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `DATA_ENCRYPTION_KEY`, `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_INTAKE_FOLDER_URL` та інші інтеграційні ключі.
@@ -33,9 +33,9 @@ Workflow `.github/workflows/deploy-workers.yml` дозволяє вручну о
    - `WORKER_SSH_KEY` - приватний SSH-ключ для доступу.
    - `WORKER_PORT` - опційно, якщо SSH не на `22`.
    - `WORKER_APP_DIR` - опційно, шлях до репозиторію на сервері, дефолт `~/codex-lcptodcz`.
-4. Запустіть workflow `Deploy Worker Beat` вручну через вкладку GitHub Actions.
+4. Після push у `main` workflow запуститься автоматично. Для позапланового перезапуску запустіть workflow `Deploy Worker Beat` вручну через вкладку GitHub Actions.
 
-Цей workflow не змінює дані і не запускається автоматично на кожен commit. Він лише оновлює код на worker-host і виконує:
+Цей workflow не змінює дані. Він лише оновлює код на worker-host і виконує:
 
 ```bash
 docker compose -f infra/vercel/docker-compose.workers.yml up -d --build redis worker beat

@@ -160,6 +160,17 @@ def test_drive_intake_batch_size_is_documented_as_recommended_default():
     assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `50` |" in deploy
 
 
+def test_worker_deploy_runs_automatically_after_main_pushes():
+    repo_root = Path(__file__).resolve().parents[3]
+    workflow = (repo_root / ".github" / "workflows" / "deploy-workers.yml").read_text(encoding="utf-8")
+    vercel_readme = (repo_root / "infra" / "vercel" / "README.md").read_text(encoding="utf-8")
+
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
+    assert ".github/workflows/deploy-workers.yml" in workflow
+    assert "автоматично запускається після push у `main`" in vercel_readme
+
+
 def test_perf_suite_covers_critical_background_routes():
     repo_root = Path(__file__).resolve().parents[3]
     perf_source = (repo_root / "backend" / "tests" / "perf" / "test_critical_routes.py").read_text(encoding="utf-8")
