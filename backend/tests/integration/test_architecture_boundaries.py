@@ -155,9 +155,9 @@ def test_drive_intake_batch_size_is_documented_as_recommended_default():
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
     deploy = (repo_root / "infra" / "DEPLOY.md").read_text(encoding="utf-8")
 
-    assert "GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5" in env_example
-    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`" in readme
-    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `5` |" in deploy
+    assert "GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50" in env_example
+    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50`" in readme
+    assert "`GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `50` |" in deploy
 
 
 def test_perf_suite_covers_critical_background_routes():

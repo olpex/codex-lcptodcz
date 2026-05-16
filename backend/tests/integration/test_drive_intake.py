@@ -553,8 +553,8 @@ def test_drive_intake_reports_marking_error_for_existing_successful_unmarked_fil
         ),
     )
 
-    assert result["processed"] == 0
-    assert result["skipped_already_processed"] == 1
+    assert result["processed"] == 1
+    assert result["reprocessed_unmarked_schedule"] is True
     assert result["processed_drive_file_name"] == "46-26 Schedule [processed].docx"
     assert result["marking_error"] == "Google Drive denied rename"
     assert db_session.query(ImportJob).count() == 1
@@ -944,6 +944,49 @@ def test_drive_intake_resyncs_unmarked_existing_schedule_before_marking_processe
     assert resync["job_id"] == first["job_id"]
     assert db_session.query(ScheduleSlot).count() == 1
     assert marker_calls == [("schedule-46-26", "46-26 Schedule [processed].docx")]
+
+
+def test_drive_intake_reprocesses_unmarked_schedule_without_duplicating_existing_slots(db_session):
+    file_payload = {
+        "id": "schedule-46-26",
+        "name": "46-26 Schedule.docx",
+        "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+        "modifiedTime": "2026-05-12T07:00:00Z",
+        "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+    }
+    marker_calls: list[tuple[str, str]] = []
+
+    first = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [file_payload],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _schedule_docx_bytes(),
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append((file_id, next_name)),
+    )
+    assert first["processed"] == 1
+    assert db_session.query(ScheduleSlot).count() == 1
+
+    second = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [file_payload],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _schedule_docx_bytes(),
+        import_job_runner=_run_import_job,
+        processed_file_marker=lambda file_id, next_name, service_account_json=None: marker_calls.append((file_id, next_name)),
+    )
+
+    assert second["processed"] == 1
+    assert second["status"] == JobStatus.SUCCEEDED.value
+    assert second["reprocessed_unmarked_schedule"] is True
+    assert db_session.query(ScheduleSlot).count() == 1
+    assert db_session.query(ImportJob).count() == 1
+    assert marker_calls == [
+        ("schedule-46-26", "46-26 Schedule [processed].docx"),
+        ("schedule-46-26", "46-26 Schedule [processed].docx"),
+    ]
 
 
 def test_drive_intake_defaults_xlsx_import_to_overwrite_for_corrections():

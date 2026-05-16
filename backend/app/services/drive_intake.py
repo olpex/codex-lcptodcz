@@ -605,6 +605,49 @@ def process_next_drive_intake_file(
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
             if (
+                not is_marked_processed
+                and existing_job.status == JobStatus.SUCCEEDED
+                and doc_type == DocumentType.DOCX
+            ):
+                resync_reason = _schedule_docx_resync_reason(db, existing_job, effective_branch_id)
+                runner_result, existing_job = _rerun_existing_import_job(
+                    db,
+                    existing_job,
+                    import_job_runner,
+                    import_mode=_default_import_mode(doc_type),
+                )
+                marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    existing_job,
+                    file_id=file_id,
+                    original_name=raw_name,
+                    service_account_json=service_account_json,
+                    processed_file_marker=processed_file_marker,
+                )
+                if marked_processed:
+                    _remember_processed_drive_name(
+                        db,
+                        existing_job,
+                        branch_id=effective_branch_id,
+                        file_id=file_id,
+                        modified_time=modified_time,
+                        processed_name=processed_name,
+                    )
+                return {
+                    "processed": 1,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": _job_status_value(existing_job),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    "runner_result": runner_result,
+                    "reprocessed_unmarked_schedule": True,
+                    **({"resynced_schedule": True} if resync_reason else {}),
+                    **({"failed": 1} if existing_job.status == JobStatus.FAILED else {}),
+                    **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
+                    **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
+                }
+            if (
                 existing_job.status == JobStatus.SUCCEEDED
                 and doc_type == DocumentType.DOCX
             ):

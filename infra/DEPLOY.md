@@ -51,7 +51,7 @@
 
 - Worker виконує довгі задачі: імпорт файлів, OCR, export, mail ingest, journal monitor, Drive intake.
 - Beat запускає періодичні задачі.
-- Drive intake за замовчуванням обробляє до `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5` файлів за tick. Для більш обережного rollout значення можна тимчасово зменшити до `1`.
+- Drive intake за замовчуванням обробляє до `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50` файлів за tick. Для більш обережного rollout значення можна тимчасово зменшити до `1`.
 
 ## 3. Email channels
 
@@ -76,17 +76,17 @@ IMAP лишається контрольованим fallback:
 |---|---|---|
 | `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED` | Вмикає server-side автообробку intake-папки | `true` |
 | `GOOGLE_DRIVE_INTAKE_FOLDER_URL` | URL intake-папки | поточна production папка |
-| `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | Інтервал beat-задачі | `45` |
-| `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `5` |
+| `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | Інтервал beat-задачі | `30` |
+| `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | Скільки файлів worker може обробити за один tick | `50` |
 | `GOOGLE_DRIVE_INTAKE_UPDATE_MODE` | Режим оновлення XLS/XLSX даних | `overwrite` |
 | `GOOGLE_DRIVE_INTAKE_PROCESSED_MARKER` | Маркер обробленого Drive-файлу | `[processed]` |
 
 Безпечний rollout batch:
 
-1. Для штатного запуску використовуйте `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`.
+1. Для штатного запуску використовуйте `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50`.
 2. Якщо потрібно дуже обережно перевірити нове середовище, тимчасово зменшіть до `1`.
 3. Перевірте logs worker, `GET /api/v1/jobs`, Worker Health у Job Center, кількість failed jobs і стан файлів у Drive.
-4. Піднімайте вище `5` тільки якщо немає таймаутів Drive API або помилок імпорту.
+4. Повертайте до `50` тільки якщо немає таймаутів Drive API або помилок імпорту.
 
 ## 5. Мінімальна перевірка після деплою
 

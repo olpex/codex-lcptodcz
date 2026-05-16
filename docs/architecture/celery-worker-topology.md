@@ -139,7 +139,7 @@ Expected results:
 |---|---|---|
 | Jobs stay `queued` | Worker running, `REDIS_URL` identical, queue list includes `import_parse` or `report_export` | Restart worker only; do not alter job rows manually |
 | Periodic Drive intake does not run | Beat running, `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED=true`, beat schedule present | Restart beat or call `/api/v1/journal-monitors/auto-cron` with `CRON_SECRET` |
-| Drive files process slowly | Worker Health Drive batch size, worker logs, Drive API errors | Keep `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`; raise only after logs are stable |
+| Drive files process slowly | Worker Health Drive batch size, worker logs, Drive API errors | Keep `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50`; lower temporarily only while investigating Drive API or import errors |
 | Drive files fail marking | Service account permission to folder/file | Give service account Editor access; then retry from Job Center |
 | IMAP unexpectedly processes mail | `MAIL_PRIMARY_CHANNEL`, `IMAP_FALLBACK_ENABLED`, `IMAP_AUTO_POLL_ENABLED` | Keep fallback disabled while Apps Script is primary |
 | Flower unavailable | Profile not started, bind address, Redis connection | Start observability profile locally only |
