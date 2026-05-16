@@ -7,6 +7,7 @@ from openpyxl import Workbook
 
 from app.api.routes import journal_monitors as journal_monitor_routes
 from app.models import Document, DocumentType, ExportJob, ImportJob, JobStatus, JournalMonitorSection
+from app.tasks import worker as worker_tasks
 
 
 IMPORT_PREVIEW_ROUTE = "/api/v1/documents/import/preview"
@@ -163,3 +164,36 @@ def test_job_statuses_route_keeps_bounded_p95_latency(client, auth_headers, db_s
         assert len(response.json()) >= len(job_ids)
 
     _assert_latency("job statuses", durations, p95_under=0.75, p99_under=1.0)
+
+
+@pytest.mark.perf
+def test_drive_intake_batch_worker_keeps_bounded_p95_latency(db_session, monkeypatch):
+    monkeypatch.setattr(worker_tasks.settings, "google_drive_intake_batch_size", 5)
+
+    calls = {"count": 0}
+
+    def fake_process_next_drive_intake_file(db, **kwargs):
+        calls["count"] += 1
+        return {
+            "processed": 1,
+            "failed": 0,
+            "skipped_already_processed": 0,
+            "skipped_unsupported": 0,
+            "skipped_marked_processed": 0,
+            "job_id": calls["count"],
+            "filename": f"batch-{calls['count']}.xlsx",
+        }
+
+    monkeypatch.setattr(worker_tasks, "process_next_drive_intake_file", fake_process_next_drive_intake_file)
+    durations: list[float] = []
+
+    for _ in range(12):
+        started = time.perf_counter()
+        result = worker_tasks._process_drive_intake_batch(db_session, "main", None)
+        durations.append(time.perf_counter() - started)
+        assert result["batch_size"] == 5
+        assert result["processed"] == 5
+        assert len(result["items"]) == 5
+
+    assert calls["count"] == 60
+    _assert_latency("Drive intake batch worker", durations, p95_under=0.25, p99_under=0.4)

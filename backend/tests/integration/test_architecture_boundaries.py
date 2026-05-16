@@ -137,6 +137,7 @@ def test_perf_suite_covers_critical_background_routes():
         "/api/v1/jobs/statuses",
     ]:
         assert route in perf_source
+    assert "test_drive_intake_batch_worker_keeps_bounded_p95_latency" in perf_source
     assert "@pytest.mark.perf" in perf_source
 
 
