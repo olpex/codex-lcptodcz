@@ -7,19 +7,23 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same
 from app.models import Group, GroupStatus, JournalMonitorEntry, RoleName, Room, ScheduleSlot, Subject, Teacher
 from app.schemas.api import ScheduleDeleteResponse, ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
 from app.services.audit import write_audit
-from app.services.cache import cache_delete, cache_get_json, cache_set_json
+from app.services.cache import cache_get_json, cache_set_json
 from app.services.group_cache import invalidate_group_list_cache
+from app.services.schedule_cache import (
+    SCHEDULE_LIST_CACHE_TTL_SECONDS,
+    invalidate_schedule_list_cache,
+    schedule_list_cache_key,
+)
 
 router = APIRouter()
-SCHEDULE_LIST_CACHE_TTL_SECONDS = 60
 
 
 def _schedule_list_cache_key(branch_id: str) -> str:
-    return f"schedule:list:{branch_id}:v1"
+    return schedule_list_cache_key(branch_id)
 
 
 def _invalidate_schedule_list_cache(branch_id: str) -> None:
-    cache_delete(_schedule_list_cache_key(branch_id))
+    invalidate_schedule_list_cache(branch_id)
 
 
 def _get_or_create_schedule_placeholder_room(db: DbSession, branch_id: str) -> Room:

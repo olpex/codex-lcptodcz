@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services import drive_intake
 from app.services.import_export import collect_teacher_workload_summary
+from app.tasks import worker as worker_tasks
 from app.tasks.worker import process_drive_intake_auto_task, process_import_job_task
 
 
@@ -252,6 +253,49 @@ def test_drive_intake_schedule_creates_calendar_without_duplicating_journal_work
     assert workload_rows[0]["total_hours"] == 2
     assert workload_rows[0]["groups"][0]["group_code"] == "46-26"
     assert workload_rows[0]["groups"][0]["hours"] == 2.0
+
+
+def test_drive_intake_import_invalidates_cross_section_caches(db_session, monkeypatch):
+    invalidated: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        worker_tasks,
+        "invalidate_schedule_list_cache",
+        lambda branch_id: invalidated.append(("schedule", branch_id)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_tasks,
+        "invalidate_group_list_cache",
+        lambda branch_id: invalidated.append(("groups", branch_id)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        worker_tasks,
+        "invalidate_attention_cache",
+        lambda branch_id: invalidated.append(("dashboard", branch_id)),
+        raising=False,
+    )
+
+    result = drive_intake.process_next_drive_intake_file(
+        db_session,
+        folder_url="https://drive.google.com/drive/folders/intake-folder",
+        branch_id="main",
+        file_lister=lambda folder_id, service_account_json=None: [
+            {
+                "id": "schedule-46-26",
+                "name": "46-26 Розклад.docx",
+                "mimeType": drive_intake.GOOGLE_DRIVE_DOCX_MIME,
+                "modifiedTime": "2026-05-12T07:00:00Z",
+                "webViewLink": "https://drive.google.com/file/d/schedule-46-26/view",
+            }
+        ],
+        downloader=lambda file_id, mime_type=None, service_account_json=None: _schedule_docx_bytes(),
+        import_job_runner=_run_import_job,
+    )
+
+    assert result["processed"] == 1
+    assert result["status"] == JobStatus.SUCCEEDED.value
+    assert invalidated == [("schedule", "main"), ("groups", "main"), ("dashboard", "main")]
 
 
 def test_drive_intake_skips_files_that_were_already_processed(db_session):

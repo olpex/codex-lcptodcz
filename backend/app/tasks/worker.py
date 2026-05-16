@@ -11,6 +11,8 @@ from app.celery_app import celery_app
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Document, ExportJob, ImportJob, JobStatus, JournalMonitorSection, OCRResult
+from app.services.dashboard_cache import invalidate_attention_cache
+from app.services.group_cache import invalidate_group_list_cache
 from app.services.import_export import (
     IMPORT_UPDATE_MODES,
     collect_report_rows,
@@ -29,6 +31,7 @@ from app.services.journal_monitor import (
     process_journal_monitor_background_step,
 )
 from app.services.ocr import extract_group_code_hint, guess_draft_from_text
+from app.services.schedule_cache import invalidate_schedule_list_cache
 from app.services.schedule_import import import_schedule_docx
 from app.services.storage import storage_path
 
@@ -147,6 +150,18 @@ def _apply_group_hint(parsed: dict, payload: dict) -> dict:
         "default_group_name": parsed.get("default_group_name") or f"Група {group_code_hint}",
         "group_context_source": parsed.get("group_context_source") or "filename",
     }
+
+
+def _invalidate_import_caches(branch_id: str) -> None:
+    for invalidate in (
+        invalidate_schedule_list_cache,
+        invalidate_group_list_cache,
+        invalidate_attention_cache,
+    ):
+        try:
+            invalidate(branch_id)
+        except Exception as exc:
+            logger.warning("Import cache invalidation failed for branch %s: %s", branch_id, exc)
 
 
 def _safe_storage_filename(filename: str | None) -> str:
@@ -286,6 +301,7 @@ def process_import_job_task(self, import_job_id: int) -> dict:
         mark_job_success(job, payload, "Імпорт виконано")
         db.add(job)
         db.commit()
+        _invalidate_import_caches(job.branch_id)
         return {"status": "ok", "job_id": import_job_id}
     except Exception as exc:
         logger.exception("Import job failed: %s", exc)
