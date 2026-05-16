@@ -1015,6 +1015,7 @@ def test_drive_intake_retries_failed_existing_schedule_job(db_session, tmp_path)
 
 def test_drive_intake_worker_reuses_active_journal_section_credentials(db_session, monkeypatch):
     captured: dict[str, object] = {}
+    monkeypatch.setattr("app.services.drive_intake.settings.google_drive_service_account_json", "")
     section = JournalMonitorSection(
         branch_id="main",
         name="Журнали 2026",

@@ -95,7 +95,7 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 Окремо від папки журналів підтримується intake-папка для файлів розкладу (`.docx`) та даних слухачів (`.xls/.xlsx`, Google Sheets). За замовчуванням це:
 
 - `GOOGLE_DRIVE_INTAKE_FOLDER_URL=https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY`
-- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=45`
+- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=30`
 - `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=5`
 - `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED=true`
 - `GOOGLE_DRIVE_INTAKE_UPDATE_MODE=overwrite`

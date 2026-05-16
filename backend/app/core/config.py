@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     journal_workload_auto_interval_seconds: int = Field(default=30)
     google_drive_intake_auto_enabled: bool = Field(default=True)
     google_drive_intake_folder_url: str = Field(default="https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY")
-    google_drive_intake_interval_seconds: int = Field(default=45)
+    google_drive_intake_interval_seconds: int = Field(default=30)
     google_drive_intake_batch_size: int = Field(default=5, ge=1, le=50)
     google_drive_intake_update_mode: str = Field(default="overwrite")
     google_drive_intake_processed_marker: str = Field(default="[processed]")
