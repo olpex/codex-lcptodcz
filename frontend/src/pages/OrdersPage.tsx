@@ -412,6 +412,7 @@ export function OrdersPage() {
           data={rows}
           columns={columns}
           rowKey={(row) => row.id}
+          ariaLabel="Реєстр наказів"
           isLoading={isLoading}
           errorText={loadError}
           onRetry={load}

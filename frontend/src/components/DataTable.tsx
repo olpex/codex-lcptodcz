@@ -144,6 +144,7 @@ export function DataTable<T>({
 
   const emptyLabel = query && search?.emptyResultText ? search.emptyResultText : emptyText;
   const showClearSearchAction = Boolean(query.trim() && search);
+  const tableRegionLabel = ariaLabel || caption || "Таблиця даних";
 
   return (
     <div className={clsx("space-y-3", className)}>
@@ -199,8 +200,14 @@ export function DataTable<T>({
         </div>
       )}
 
-      <div className="overflow-auto">
-        <table className="min-w-full text-sm" aria-label={ariaLabel}>
+      <div
+        className="overflow-x-auto overscroll-x-contain rounded-md focus:outline-none focus:ring-2 focus:ring-pine/30"
+        role="region"
+        aria-label={tableRegionLabel}
+        tabIndex={0}
+        data-testid="data-table-scroll-region"
+      >
+        <table className="min-w-[44rem] text-sm sm:min-w-full" aria-label={ariaLabel}>
           {caption && <caption className="sr-only">{caption}</caption>}
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-600">
