@@ -315,9 +315,20 @@ def _entry_workbook_files(
     workbook_lister,
     service_account_json: str | None = None,
 ) -> list[dict[str, Any]]:
+    if _entry_is_folder_audit_only(entry):
+        return []
     if entry.drive_folder_id:
         return [_entry_workbook_file_payload(entry)]
     return workbook_lister(entry.drive_file_id, service_account_json=service_account_json)
+
+
+def _entry_is_folder_audit_only(entry: JournalMonitorEntry) -> bool:
+    return (
+        bool(entry.drive_file_id)
+        and bool(entry.drive_folder_id)
+        and entry.drive_file_id == entry.drive_folder_id
+        and entry.drive_mime_type == GOOGLE_DRIVE_FOLDER_MIME
+    )
 
 
 def extract_group_code(folder_name: str) -> str | None:
@@ -1541,6 +1552,12 @@ def process_next_journal_workload(
     for entry in entries:
         if limit is not None and handled >= limit:
             break
+        if _entry_is_folder_audit_only(entry):
+            entry.workload_status = "no_data"
+            entry.workload_message = "У теці Google Drive не знайдено файлу журналу"
+            entry.workload_processed_at = entry.workload_processed_at or datetime.now(timezone.utc)
+            db.add(entry)
+            continue
         if entry.workload_status in {"processed", "no_data", "skipped_year"}:
             if _journal_workbooks_modified_after(entry, entry.workload_processed_at, section_service_account_json):
                 _requeue_entry_after_drive_change(db, entry)
@@ -1630,6 +1647,12 @@ def process_journal_trainees_for_section(
     for entry in entries:
         if limit is not None and handled >= limit:
             break
+        if _entry_is_folder_audit_only(entry):
+            entry.trainees_status = "no_data"
+            entry.trainees_message = "У теці Google Drive не знайдено файлу журналу"
+            entry.trainees_processed_at = entry.trainees_processed_at or datetime.now(timezone.utc)
+            db.add(entry)
+            continue
         if not entry.group_code:
             continue
         active_trainee_count = _active_trainee_count_for_group(db, entry.branch_id, entry.group_code)
@@ -2024,6 +2047,37 @@ def sync_journal_monitor_section(
                     seen_drive_ids.add(existing_entry.drive_file_id)
             continue
         if not workbook_files:
+            seen_drive_ids.add(drive_id)
+            entry = entries_by_drive_id.get(drive_id)
+            if not entry:
+                entry = JournalMonitorEntry(
+                    section_id=section.id,
+                    branch_id=section.branch_id,
+                    drive_file_id=drive_id,
+                    journal_name=name,
+                )
+                db.add(entry)
+                entries_by_drive_id[drive_id] = entry
+            folder_group_code = extract_group_code(name)
+            entry.drive_file_id = drive_id
+            entry.drive_folder_id = drive_id
+            entry.drive_mime_type = GOOGLE_DRIVE_FOLDER_MIME
+            entry.drive_url = str(folder.get("url") or f"https://drive.google.com/drive/folders/{drive_id}")
+            entry.journal_name = name
+            entry.group_code = folder_group_code
+            entry.workload_status = "no_data"
+            entry.workload_message = "У теці Google Drive не знайдено файлу журналу"
+            entry.workload_processed_at = entry.workload_processed_at or now
+            entry.workload_hours = 0.0
+            entry.workload_source_names = []
+            entry.trainees_status = "no_data"
+            entry.trainees_message = "У теці Google Drive не знайдено файлу журналу"
+            entry.trainees_processed_at = entry.trainees_processed_at or now
+            entry.trainees_source_names = []
+            entry.drive_created_at = _as_aware_utc(_parse_datetime(str(folder.get("created_time") or "")))
+            entry.drive_modified_at = _as_aware_utc(_parse_datetime(str(folder.get("modified_time") or "")))
+            _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
+            entry.last_seen_at = now
             continue
         legacy_folder_entry = entries_by_drive_id.get(drive_id)
         folder_group_code = extract_group_code(name)

@@ -58,6 +58,8 @@ export interface Group {
   start_date: string | null;
   end_date: string | null;
   year: number | null;
+  has_journal_folder: boolean;
+  has_journal_file: boolean;
 }
 
 export interface GroupAuditLog {

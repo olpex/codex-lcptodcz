@@ -1066,6 +1066,73 @@ def test_delete_journal_backed_group_hides_it_and_keeps_monitor_match(client, au
     assert entry.has_group is True
 
 
+def test_groups_api_includes_journal_drive_audit_flags(client, auth_headers, db_session):
+    groups = [
+        Group(branch_id="main", code="10-26", name="Папка і журнал", status=GroupStatus.ACTIVE),
+        Group(branch_id="main", code="11-26", name="Тільки папка", status=GroupStatus.ACTIVE),
+        Group(branch_id="main", code="12-26", name="Тільки журнал", status=GroupStatus.ACTIVE),
+    ]
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([*groups, section])
+    db_session.flush()
+    db_session.add_all(
+        [
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="sheet-10-26",
+                drive_folder_id="folder-10-26",
+                drive_mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                journal_name="10-26 Журнал",
+                group_code="10-26",
+                matched_group_id=groups[0].id,
+                has_group=True,
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="folder-11-26",
+                drive_folder_id="folder-11-26",
+                drive_mime_type="application/vnd.google-apps.folder",
+                drive_url="https://drive.google.com/drive/folders/folder-11-26",
+                journal_name="11-26 Тільки папка",
+                group_code="11-26",
+                matched_group_id=groups[1].id,
+                has_group=True,
+                workload_status="no_data",
+                trainees_status="no_data",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="sheet-12-26",
+                drive_mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                journal_name="12-26 Журнал без папки",
+                group_code="12-26",
+                matched_group_id=groups[2].id,
+                has_group=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/groups", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = {item["code"]: item for item in response.json()}
+    assert payload["10-26"]["has_journal_folder"] is True
+    assert payload["10-26"]["has_journal_file"] is True
+    assert payload["11-26"]["has_journal_folder"] is True
+    assert payload["11-26"]["has_journal_file"] is False
+    assert payload["12-26"]["has_journal_folder"] is False
+    assert payload["12-26"]["has_journal_file"] is True
+
+
 def test_bulk_delete_groups_archives_matching_trainees(client, auth_headers, db_session):
     kept_group = Group(branch_id="main", code="KEEP-001", name="Залишається", status=GroupStatus.ACTIVE)
     db_session.add(kept_group)

@@ -95,6 +95,20 @@ function buildTraineeName(trainee: Trainee): string {
   return `${trainee.last_name} ${trainee.first_name}`.trim();
 }
 
+function DriveAuditMark({ present, label }: { present: boolean; label: string }) {
+  return (
+    <span
+      aria-label={label}
+      title={label}
+      className={`inline-flex h-6 w-6 items-center justify-center rounded border text-base font-bold leading-none ${
+        present ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-600"
+      }`}
+    >
+      {present ? "✓" : "×"}
+    </span>
+  );
+}
+
 function formatAuditAction(action: string): string {
   if (action === "group.create") return "Групу створено";
   if (action === "group.update") return "Групу оновлено";
@@ -310,6 +324,26 @@ export function GroupsPage() {
         header: "Назва",
         render: (group) => group.name,
         sortAccessor: (group) => group.name
+      },
+      {
+        key: "journal_folder",
+        header: "Т",
+        headerClassName: "w-10 text-center",
+        className: "w-10 text-center",
+        render: (group) => (
+          <DriveAuditMark present={Boolean(group.has_journal_folder)} label={group.has_journal_folder ? "Тека є" : "Тека відсутня"} />
+        ),
+        sortAccessor: (group) => (group.has_journal_folder ? 1 : 0)
+      },
+      {
+        key: "journal_file",
+        header: "Ж",
+        headerClassName: "w-10 text-center",
+        className: "w-10 text-center",
+        render: (group) => (
+          <DriveAuditMark present={Boolean(group.has_journal_file)} label={group.has_journal_file ? "Журнал є" : "Журнал відсутній"} />
+        ),
+        sortAccessor: (group) => (group.has_journal_file ? 1 : 0)
       },
       {
         key: "status",

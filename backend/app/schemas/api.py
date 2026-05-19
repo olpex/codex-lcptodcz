@@ -238,6 +238,8 @@ class GroupResponse(ORMModel):
     start_date: date | None
     end_date: date | None
     year: int | None = None
+    has_journal_folder: bool = False
+    has_journal_file: bool = False
     created_at: datetime
 
 

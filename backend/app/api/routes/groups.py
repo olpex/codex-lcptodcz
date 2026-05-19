@@ -45,6 +45,8 @@ from app.services.audit import write_audit
 
 router = APIRouter()
 
+GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+
 
 def _infer_group_year(code: str | None, name: str | None = None) -> int | None:
     for value in (code, name):
@@ -80,10 +82,63 @@ def _schedule_date_ranges(db: DbSession, group_ids: list[int]) -> dict[int, tupl
     }
 
 
-def _group_response(group: Group, schedule_ranges: dict[int, tuple[date, date]]) -> GroupResponse:
+def _journal_entry_has_file(entry: JournalMonitorEntry) -> bool:
+    if not entry.drive_file_id:
+        return False
+    if entry.drive_mime_type == GOOGLE_DRIVE_FOLDER_MIME:
+        return False
+    if entry.drive_folder_id and entry.drive_file_id == entry.drive_folder_id:
+        return False
+    return True
+
+
+def _journal_drive_audit(db: DbSession, groups: list[Group]) -> dict[int, tuple[bool, bool]]:
+    if not groups:
+        return {}
+    group_ids = [group.id for group in groups]
+    group_codes = [group.code for group in groups if group.code]
+    filters = [JournalMonitorEntry.matched_group_id.in_(group_ids)]
+    if group_codes:
+        filters.append(JournalMonitorEntry.group_code.in_(group_codes))
+    entries = (
+        db.query(JournalMonitorEntry)
+        .filter(
+            JournalMonitorEntry.branch_id == groups[0].branch_id,
+            or_(*filters),
+        )
+        .all()
+    )
+    groups_by_code = {group.code: group.id for group in groups if group.code}
+    audit = {group.id: [False, False] for group in groups}
+    for entry in entries:
+        matched_ids: set[int] = set()
+        if entry.matched_group_id in audit:
+            matched_ids.add(entry.matched_group_id)
+        if entry.group_code in groups_by_code:
+            matched_ids.add(groups_by_code[entry.group_code])
+        if not matched_ids:
+            continue
+        has_folder = bool(entry.drive_folder_id) or entry.drive_mime_type == GOOGLE_DRIVE_FOLDER_MIME
+        has_file = _journal_entry_has_file(entry)
+        for group_id in matched_ids:
+            audit[group_id][0] = audit[group_id][0] or has_folder
+            audit[group_id][1] = audit[group_id][1] or has_file
+    return {group_id: (values[0], values[1]) for group_id, values in audit.items()}
+
+
+def _group_response(
+    group: Group,
+    schedule_ranges: dict[int, tuple[date, date]],
+    journal_audit: dict[int, tuple[bool, bool]] | None = None,
+) -> GroupResponse:
     response = GroupResponse.model_validate(group)
     schedule_range = schedule_ranges.get(group.id)
-    updates = {"year": _infer_group_year(group.code, group.name)}
+    has_journal_folder, has_journal_file = (journal_audit or {}).get(group.id, (False, False))
+    updates = {
+        "year": _infer_group_year(group.code, group.name),
+        "has_journal_folder": has_journal_folder,
+        "has_journal_file": has_journal_file,
+    }
     if not schedule_range:
         return response.model_copy(update=updates)
     start_date, end_date = schedule_range
@@ -207,7 +262,8 @@ def list_groups(db: DbSession, current_user: CurrentUser) -> list[GroupResponse]
         .all()
     )
     schedule_ranges = _schedule_date_ranges(db, [group.id for group in groups])
-    return [_group_response(group, schedule_ranges) for group in groups]
+    journal_audit = _journal_drive_audit(db, groups)
+    return [_group_response(group, schedule_ranges, journal_audit) for group in groups]
 
 
 def _validate_period(date_from: date | None, date_to: date | None) -> None:
@@ -416,7 +472,7 @@ def create_group(payload: GroupCreate, db: DbSession, current_user: CurrentUser)
         entity_type="group",
         entity_id=str(group.id),
     )
-    return GroupResponse.model_validate(group)
+    return _group_response(group, _schedule_date_ranges(db, [group.id]), _journal_drive_audit(db, [group]))
 
 
 @router.post(
@@ -480,7 +536,7 @@ def get_group(group_id: int, db: DbSession, current_user: CurrentUser) -> GroupR
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Групу не знайдено")
     ensure_same_branch(current_user, group, "Групу")
-    return _group_response(group, _schedule_date_ranges(db, [group.id]))
+    return _group_response(group, _schedule_date_ranges(db, [group.id]), _journal_drive_audit(db, [group]))
 
 
 @router.get("/{group_id}/audit", response_model=list[GroupAuditLogResponse])
@@ -660,7 +716,7 @@ def update_group(group_id: int, payload: GroupUpdate, db: DbSession, current_use
         entity_type="group",
         entity_id=str(group.id),
     )
-    return GroupResponse.model_validate(group)
+    return _group_response(group, _schedule_date_ranges(db, [group.id]), _journal_drive_audit(db, [group]))
 
 
 @router.delete(

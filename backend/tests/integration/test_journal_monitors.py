@@ -3255,6 +3255,46 @@ def test_journal_sync_creates_groups_from_drive_folders(client, auth_headers, db
     assert groups_payload["1-26"]["year"] == 2026
 
 
+def test_journal_sync_keeps_empty_drive_folder_as_folder_audit_entry(client, auth_headers, db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-92-26",
+                "name": "92-26 Професійна взаємодія",
+                "url": "https://drive.google.com/drive/folders/drive-92-26",
+                "modified_time": "2026-05-01T10:00:00Z",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [],
+        raising=False,
+    )
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    entry = sync_response.json()["entries"][0]
+    assert entry["group_code"] == "92-26"
+    assert entry["drive_file_id"] == "drive-92-26"
+    assert entry["drive_folder_id"] == "drive-92-26"
+    assert entry["has_group"] is True
+    assert entry["workload_status"] == "no_data"
+    assert entry["trainees_status"] == "no_data"
+    groups_payload = {item["code"]: item for item in client.get("/api/v1/groups", headers=auth_headers).json()}
+    assert groups_payload["92-26"]["has_journal_folder"] is True
+    assert groups_payload["92-26"]["has_journal_file"] is False
+
+
 def test_delete_journal_entry_and_background_tick_reimports_it(client, auth_headers, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.journal_monitors.list_drive_child_folders",
