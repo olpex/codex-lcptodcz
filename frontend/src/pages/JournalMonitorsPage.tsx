@@ -73,11 +73,11 @@ const NO_DATA_BADGE_CLASSES = "whitespace-nowrap rounded-full px-2 py-1 text-xs 
 
 const PROGRESS_CARDS = [
   {
-    key: "complete",
-    title: "Розклад і слухачі",
-    caption: "Є обидві частини",
-    barClass: "bg-emerald-600",
-    valueClass: "text-emerald-700"
+    key: "workload_only",
+    title: "Тільки педнавантаження",
+    caption: "Немає розкладу і слухачів",
+    barClass: "bg-violet-600",
+    valueClass: "text-violet-700"
   },
   {
     key: "schedule_only",
@@ -182,6 +182,37 @@ function formatPercent(count = 0, total = 0): string {
 function hasDailyActivity(section: JournalMonitorSection): boolean {
   const activity = section.daily_activity;
   return Boolean(activity && (activity.created_count > 0 || activity.changed_count > 0));
+}
+
+function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "info" | "error"; text: string } | null {
+  if (!section) return null;
+  if (section.last_sync_status === "failed") {
+    return {
+      tone: "error",
+      text: `Немає доступу до Google Drive. ${
+        section.last_sync_message || "Перевірте доступ до папки, service account або Google Drive API."
+      }`
+    };
+  }
+  if (section.last_sync_status !== "never" && section.stats.total === 0) {
+    return {
+      tone: "info",
+      text: "Папка Google Drive порожня. Перевірте, чи у вибраній папці є журнали груп, або оновіть моніторинг після додавання файлів."
+    };
+  }
+  return null;
+}
+
+function formatSyncLifecycleStatus(status: string | null | undefined): string {
+  if (status === "success") return "Синхронізація успішна";
+  if (status === "failed") return "Помилка синхронізації";
+  if (status === "never") return "Ще не синхронізовано";
+  return "Стан невідомий";
+}
+
+function formatProcessingLifecycleStatus(section: JournalMonitorSection): string {
+  if (!section.workload_auto_enabled) return "Вимкнено";
+  return section.workload_auto_year ? `Увімкнено, ${section.workload_auto_year}` : "Увімкнено";
 }
 
 function normalizeSearchValue(value: string | null | undefined): string {
@@ -296,6 +327,24 @@ function pickDefaultSectionId(sections: JournalMonitorSection[], currentYear = n
   return yearMatch?.id ?? sections[0].id;
 }
 
+function getJournalSectionYear(name: string): number | null {
+  const match = name.match(/\b(20\d{2}|21\d{2})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function getCopiedJournalSectionDraft(
+  source: JournalMonitorSection,
+  sections: JournalMonitorSection[],
+  currentYear = new Date().getFullYear()
+): { name: string; folderUrl: string } {
+  const sourceYear = getJournalSectionYear(source.name);
+  const knownYears = sections.map((section) => getJournalSectionYear(section.name)).filter((year): year is number => year !== null);
+  const baseYear = sourceYear ?? currentYear;
+  const nextYear = Math.max(baseYear + 1, knownYears.length ? Math.max(...knownYears) + 1 : baseYear + 1);
+  const nextName = sourceYear ? source.name.replace(String(sourceYear), String(nextYear)) : `Журнали ${nextYear}`;
+  return { name: nextName, folderUrl: source.folder_url };
+}
+
 export function JournalMonitorsPage() {
   const { request, accessToken } = useAuth();
   const { showError, showSuccess, showInfo } = useToast();
@@ -308,6 +357,7 @@ export function JournalMonitorsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isProcessingJournals, setIsProcessingJournals] = useState(false);
+  const [isTogglingSectionActive, setIsTogglingSectionActive] = useState(false);
   const [workloadYear, setWorkloadYear] = useState(String(new Date().getFullYear()));
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -326,13 +376,15 @@ export function JournalMonitorsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
   const backgroundStepInFlightRef = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const selectedSection = useMemo(
     () => sections.find((section) => section.id === selectedId) || null,
     [sections, selectedId]
   );
   const rows = detail?.entries || [];
-  const totalFolders = detail?.stats.total ?? 0;
+  const totalJournals = detail?.stats.total ?? 0;
+  const sectionActive = detail?.is_active !== false;
   const visibleRows = useMemo(() => {
     const query = normalizeSearchValue(journalSearch);
     const filtered = query
@@ -361,6 +413,7 @@ export function JournalMonitorsPage() {
   );
   const selectedEntryCount = selectedEntries.length;
   const allVisibleEntriesSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedEntryIds[row.id]);
+  const driveStateNotice = getDriveStateNotice(detail);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -408,7 +461,7 @@ export function JournalMonitorsPage() {
 
   const syncSelected = async (showToast = true) => {
     const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId) return;
+    if (!sectionId || !sectionActive) return;
     setIsSyncing(true);
     try {
       const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/sync`, { method: "POST" });
@@ -448,13 +501,13 @@ export function JournalMonitorsPage() {
 
   const processSelectedBackgroundStep = async () => {
     const sectionId = selectedId || selectedSection?.id;
-    if (!sectionId) return;
+    if (!sectionId || !sectionActive) return;
     await runBackgroundStep(sectionId, Number(workloadYear));
     await syncSelected(false);
   };
 
   const refreshSelectedActivity = async () => {
-    if (detail?.workload_auto_enabled || isSyncing) return;
+    if (!sectionActive || detail?.workload_auto_enabled || isSyncing) return;
     await syncSelected(false);
   };
 
@@ -472,13 +525,13 @@ export function JournalMonitorsPage() {
   }, [selectedId]);
 
   usePageRefresh(processSelectedBackgroundStep, {
-    enabled: Boolean(selectedId && detail?.workload_auto_enabled),
+    enabled: Boolean(selectedId && sectionActive && detail?.workload_auto_enabled),
     intervalMs: JOURNAL_PROCESSING_REFRESH_INTERVAL_MS,
     refreshOnFocus: false
   });
 
   usePageRefresh(refreshSelectedActivity, {
-    enabled: Boolean(selectedId && detail && !detail.workload_auto_enabled),
+    enabled: Boolean(selectedId && detail && sectionActive && !detail.workload_auto_enabled),
     intervalMs: JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS,
     refreshOnFocus: true
   });
@@ -544,7 +597,7 @@ export function JournalMonitorsPage() {
   };
 
   const toggleJournalProcessing = async () => {
-    if (!selectedId) return;
+    if (!selectedId || !sectionActive) return;
     if (detail?.workload_auto_enabled) {
       setIsProcessingJournals(true);
       try {
@@ -584,7 +637,7 @@ export function JournalMonitorsPage() {
   };
 
   const reprocessAllJournals = async () => {
-    if (!selectedId) return;
+    if (!selectedId || !sectionActive) return;
     const year = Number(workloadYear);
     if (!Number.isInteger(year) || year < 2025 || year > 2100) {
       showError("Вкажіть рік від 2025 до 2100");
@@ -605,6 +658,35 @@ export function JournalMonitorsPage() {
     } finally {
       setIsProcessingJournals(false);
     }
+  };
+
+  const toggleSelectedSectionActive = async () => {
+    if (!selectedId || isTogglingSectionActive) return;
+    const nextActive = !sectionActive;
+    setIsTogglingSectionActive(true);
+    try {
+      const data = await request<JournalMonitorSection>(`/journal-monitors/${selectedId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: nextActive })
+      });
+      setDetail(data);
+      await loadSections();
+      showSuccess(nextActive ? "Розділ активовано" : "Розділ архівовано");
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsTogglingSectionActive(false);
+    }
+  };
+
+  const copySelectedSectionToNextYear = () => {
+    const source = detail || selectedSection;
+    if (!source) return;
+    const draft = getCopiedJournalSectionDraft(source, sections);
+    setName(draft.name);
+    setFolderUrl(draft.folderUrl);
+    nameInputRef.current?.focus();
+    showInfo("Форму заповнено для нового розділу. Перевірте URL і натисніть «Додати».");
   };
 
   const deleteSelectedSection = async () => {
@@ -809,6 +891,7 @@ export function JournalMonitorsPage() {
           <label className="text-sm font-semibold text-slate-700">
             Назва розділу
             <input
+              ref={nameInputRef}
               className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -839,10 +922,22 @@ export function JournalMonitorsPage() {
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="font-heading text-xl font-semibold text-ink">{detail?.name || "Поточний стан"}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="font-heading text-xl font-semibold text-ink">{detail?.name || "Поточний стан"}</h2>
+              {detail && (
+                <span
+                  className={clsx(
+                    "rounded-full px-2 py-1 text-xs font-semibold",
+                    sectionActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
+                  )}
+                >
+                  {sectionActive ? "Активний" : "Архівовано"}
+                </span>
+              )}
+            </div>
             <p className="mt-2 text-xs text-slate-500">
               {detail
-                ? `${detail.stats.total} папок, оновлено: ${formatDateTime(detail.last_synced_at)}`
+                ? `${detail.stats.total} журналів, оновлено: ${formatDateTime(detail.last_synced_at)}`
                 : "Додайте перший розділ з посиланням на папку журналів."}
             </p>
           </div>
@@ -857,12 +952,40 @@ export function JournalMonitorsPage() {
                 {sections.map((section) => (
                   <option key={section.id} value={section.id}>
                     {section.name}
+                    {section.is_active === false ? " (архів)" : ""}
                   </option>
                 ))}
               </select>
             </label>
           )}
         </div>
+
+        {detail && (
+          <div
+            className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4"
+            role="region"
+            aria-label="Життєвий цикл розділу журналів"
+          >
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Стан секції</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{sectionActive ? "Активна" : "Архівована"}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Google Drive</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{formatSyncLifecycleStatus(detail.last_sync_status)}</p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Service account</p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {detail.has_service_account_credentials ? "Налаштовано" : "Не налаштовано"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Автоопрацювання</p>
+              <p className="mt-1 text-sm font-semibold text-ink">{formatProcessingLifecycleStatus(detail)}</p>
+            </div>
+          </div>
+        )}
 
         {detail?.daily_activity && (
           <div className="mb-4 overflow-hidden border-y border-slate-200">
@@ -912,11 +1035,21 @@ export function JournalMonitorsPage() {
           </div>
         )}
 
+        {detail && !sectionActive && (
+          <InlineNotice
+            className="mb-4"
+            tone="info"
+            text="Розділ вимкнено для автоматичного опрацювання. Активуйте його, щоб знову запускати синхронізацію та фонову обробку."
+          />
+        )}
+
+        {driveStateNotice && <InlineNotice className="mb-4" tone={driveStateNotice.tone} text={driveStateNotice.text} />}
+
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {PROGRESS_CARDS.map((card) => {
             const value = detail?.stats[card.key] ?? 0;
-            const percent = formatPercent(value, totalFolders);
+            const percent = formatPercent(value, totalJournals);
             return (
               <div key={card.key} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
@@ -930,7 +1063,7 @@ export function JournalMonitorsPage() {
                   <div className={clsx("h-full rounded-full", card.barClass)} style={{ width: percent }} />
                 </div>
                 <p className="mt-2 text-xs text-slate-600">
-                  {value} з {totalFolders} папок
+                  {value} з {totalJournals} журналів
                 </p>
               </div>
             );
@@ -955,7 +1088,7 @@ export function JournalMonitorsPage() {
                 value={workloadYear}
               onChange={(event) => setWorkloadYear(event.target.value)}
               inputMode="numeric"
-              disabled={Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
+              disabled={!sectionActive || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             />
           </label>
           <button
@@ -967,7 +1100,7 @@ export function JournalMonitorsPage() {
                 : "border-emerald-500 text-emerald-700"
             )}
             onClick={toggleJournalProcessing}
-            disabled={!selectedId || isProcessingJournals}
+            disabled={!selectedId || !sectionActive || isProcessingJournals}
           >
             {isProcessingJournals
               ? "Змінюємо..."
@@ -979,7 +1112,7 @@ export function JournalMonitorsPage() {
               type="button"
               className="rounded-lg border border-violet-500 px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
               onClick={reprocessAllJournals}
-              disabled={!selectedId || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
+              disabled={!selectedId || !sectionActive || Boolean(detail?.workload_auto_enabled) || isProcessingJournals}
             >
               Переобробити все
             </button>
@@ -987,10 +1120,34 @@ export function JournalMonitorsPage() {
               type="button"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
               onClick={() => syncSelected()}
-              disabled={!selectedId || isSyncing}
+              disabled={!selectedId || !sectionActive || isSyncing}
             >
               {isSyncing ? "Оновлюємо..." : "Оновити"}
             </button>
+            {detail && (
+              <button
+                type="button"
+                className={clsx(
+                  "rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50",
+                  sectionActive
+                    ? "border-slate-300 text-slate-700 hover:bg-slate-50"
+                    : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+                )}
+                onClick={toggleSelectedSectionActive}
+                disabled={!selectedId || isTogglingSectionActive}
+              >
+                {isTogglingSectionActive ? "Змінюємо..." : sectionActive ? "Архівувати розділ" : "Активувати розділ"}
+              </button>
+            )}
+            {detail && (
+              <button
+                type="button"
+                className="rounded-lg border border-sky-300 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                onClick={copySelectedSectionToNextYear}
+              >
+                Копіювати на новий рік
+              </button>
+            )}
             {EXPORT_FORMATS.map((format) => (
               <button
                 key={format}
@@ -1024,7 +1181,7 @@ export function JournalMonitorsPage() {
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-ink">Список журналів</p>
               <p className="text-xs text-slate-600">
-                Папок: {rows.length} | Показано: {visibleRows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
+                Журналів: {rows.length} | Показано: {visibleRows.length} | Повністю: {detail?.stats.complete ?? 0} | Не опрацьовано: {detail?.stats.not_processed ?? 0}
               </p>
             </div>
             <span className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold text-white">
@@ -1119,7 +1276,7 @@ export function JournalMonitorsPage() {
                     <tr>
                       <th className="px-3 py-2">Вибір</th>
                       <th className="sticky left-0 z-20 bg-slate-50 px-3 py-2 shadow-[1px_0_0_#e2e8f0]">{renderSortButton("group", "Група")}</th>
-                      <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Папка / файли журналів")}</th>
+                      <th className="min-w-[14rem] px-3 py-2">{renderSortButton("journal", "Файл журналу")}</th>
                       <th className="px-2 py-2 whitespace-nowrap">{renderSortButton("status", "Статус")}</th>
                       <th className="px-3 py-2 whitespace-nowrap">{renderSortButton("workload", "Педнавантаження")}</th>
                       <th className="px-3 py-2">Години</th>

@@ -66,6 +66,12 @@ export function WorkloadPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
+  useEffect(() => {
+    if (!canEditAnnualLoad) {
+      setSelectedTeacherIds([]);
+    }
+  }, [canEditAnnualLoad]);
+
   const buildSnapshot = (data: Workload[]): WorkloadSnapshot => {
     const totals = data.reduce(
       (acc, row) => {
@@ -121,6 +127,10 @@ export function WorkloadPage() {
   };
 
   const reconcileWorkload = async () => {
+    if (!canEditAnnualLoad) {
+      showError("Перерахунок годин доступний лише адміністратору або методисту");
+      return;
+    }
     setIsReconciling(true);
     try {
       const params = new URLSearchParams();
@@ -190,6 +200,10 @@ export function WorkloadPage() {
   };
 
   const openMergeDialog = () => {
+    if (!canEditAnnualLoad) {
+      showError("Об'єднання викладачів доступне лише адміністратору або методисту");
+      return;
+    }
     if (selectedRows.length < 2) {
       showError("Оберіть щонайменше двох викладачів для об'єднання");
       return;
@@ -205,6 +219,10 @@ export function WorkloadPage() {
   };
 
   const saveAnnualLoad = async (teacherId: number) => {
+    if (!canEditAnnualLoad) {
+      showError("Редагування річного педнавантаження доступне лише адміністратору або методисту");
+      return;
+    }
     if (savingTeacherId !== null) return;
     const draftValue = annualLoadDrafts[teacherId];
     const value = Number(draftValue);
@@ -231,6 +249,10 @@ export function WorkloadPage() {
   };
 
   const handleDeleteTeacher = async () => {
+    if (!canEditAnnualLoad) {
+      showError("Видалення викладачів доступне лише адміністратору або методисту");
+      return;
+    }
     if (!deletingTeacher) return;
     setIsDeleting(true);
     try {
@@ -246,6 +268,10 @@ export function WorkloadPage() {
   };
 
   const handleMergeTeachers = async () => {
+    if (!canEditAnnualLoad) {
+      showError("Об'єднання викладачів доступне лише адміністратору або методисту");
+      return;
+    }
     if (!mergeTarget || mergeSources.length === 0) return;
     const lastName = mergeLastName.trim();
     const firstName = mergeFirstName.trim();
@@ -279,6 +305,10 @@ export function WorkloadPage() {
   };
 
   const handleExport = async () => {
+    if (!canEditAnnualLoad) {
+      showError("Експорт звіту доступний лише адміністратору або методисту");
+      return;
+    }
     setIsExporting(true);
     try {
       const payload = {
@@ -380,24 +410,28 @@ export function WorkloadPage() {
   };
 
   const columns: DataTableColumn<Workload>[] = [
-    {
-      key: "select",
-      header: "Вибір",
-      render: (row) => (
-        <input
-          type="checkbox"
-          checked={selectedTeacherIds.includes(row.teacher_id)}
-          onChange={(e) => {
-            if (e.target.checked) {
-              setSelectedTeacherIds((prev) => [...prev, row.teacher_id]);
-            } else {
-              setSelectedTeacherIds((prev) => prev.filter((id) => id !== row.teacher_id));
-            }
-          }}
-          className="rounded border-slate-300 text-pine focus:ring-pine"
-        />
-      )
-    },
+    ...(canEditAnnualLoad
+      ? [
+          {
+            key: "select",
+            header: "Вибір",
+            render: (row: Workload) => (
+              <input
+                type="checkbox"
+                checked={selectedTeacherIds.includes(row.teacher_id)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedTeacherIds((prev) => [...prev, row.teacher_id]);
+                  } else {
+                    setSelectedTeacherIds((prev) => prev.filter((id) => id !== row.teacher_id));
+                  }
+                }}
+                className="rounded border-slate-300 text-pine focus:ring-pine"
+              />
+            )
+          }
+        ]
+      : []),
     {
       key: "row_number",
       header: "Номер за порядком",
@@ -574,6 +608,15 @@ export function WorkloadPage() {
             );
           })}
         </div>
+        {!canEditAnnualLoad && (
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="font-semibold text-ink">Режим перегляду</p>
+            <p className="mt-1">
+              Редагування річного педнавантаження, перерахунок, об'єднання, видалення та експорт доступні лише
+              адміністратору або методисту.
+            </p>
+          </div>
+        )}
         <div className="mb-3 flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-sm font-medium text-slate-700">Період з</label>

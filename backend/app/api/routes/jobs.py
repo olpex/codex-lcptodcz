@@ -6,16 +6,32 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import joinedload
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, require_roles
-from app.models import ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
+from app.celery_app import celery_app
+from app.core.config import settings
+from app.models import Document, ExportJob, GroupMembership, ImportJob, JobStatus, Performance, RoleName, Trainee
 from app.schemas.api import JobListItemResponse, JobResponse, JobStatusResponse
 from app.services.audit import write_audit
+from app.services.dashboard_cache import invalidate_attention_cache
+from app.services.drive_intake import (
+    _document_type_for_drive_file,
+    _drive_filename_has_processed_marker,
+    _find_drive_intake_job,
+    _normalize_drive_filename,
+    list_drive_intake_files,
+    resolve_drive_intake_service_account_json,
+)
 from app.services.import_export import mark_job_failed
+from app.services.journal_monitor import extract_drive_folder_id
 from app.tasks.worker import process_export_job_task, process_import_job_task
 
 router = APIRouter()
 
 STALE_RUNNING_MINUTES = 60
 STALE_QUEUED_HOURS = 6
+
+
+def _invalidate_dashboard_attention_cache(branch_id: str) -> None:
+    invalidate_attention_cache(branch_id)
 
 
 def _dispatch_with_fallback(task, job_id: int) -> str:
@@ -28,6 +44,15 @@ def _dispatch_with_fallback(task, job_id: int) -> str:
             return "inline"
         except Exception:
             return "inline_failed"
+
+
+def _schedule_seconds(value) -> float | None:
+    if hasattr(value, "total_seconds"):
+        return float(value.total_seconds())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mark_stale_jobs_as_failed(db: DbSession, branch_id: str) -> int:
@@ -172,6 +197,266 @@ def list_jobs(
     return items[:limit]
 
 
+@router.get("/statuses", response_model=list[JobStatusResponse])
+def list_job_statuses(
+    db: DbSession,
+    current_user: CurrentUser,
+    job_id: list[int] | None = Query(default=None),
+    include_active: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> list[JobStatusResponse]:
+    ids = set(job_id or [])
+    active_statuses = {JobStatus.QUEUED, JobStatus.RUNNING}
+
+    import_query = apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+    export_query = apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+    if ids:
+        import_filters = [ImportJob.id.in_(ids)]
+        export_filters = [ExportJob.id.in_(ids)]
+        if include_active:
+            import_filters.append(ImportJob.status.in_(active_statuses))
+            export_filters.append(ExportJob.status.in_(active_statuses))
+        import_query = import_query.filter(or_(*import_filters))
+        export_query = export_query.filter(or_(*export_filters))
+    else:
+        import_query = import_query.filter(ImportJob.status.in_(active_statuses))
+        export_query = export_query.filter(ExportJob.status.in_(active_statuses))
+
+    items = [
+        *(
+            JobStatusResponse(job_type="import", job=JobResponse.model_validate(job))
+            for job in import_query.order_by(ImportJob.updated_at.desc()).limit(limit).all()
+        ),
+        *(
+            JobStatusResponse(job_type="export", job=JobResponse.model_validate(job))
+            for job in export_query.order_by(ExportJob.updated_at.desc()).limit(limit).all()
+        ),
+    ]
+    items.sort(key=lambda item: item.job.updated_at, reverse=True)
+    return items[:limit]
+
+
+@router.get("/drive-intake", response_model=list[JobListItemResponse])
+def list_drive_intake_jobs(
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> list[JobListItemResponse]:
+    jobs = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .join(ImportJob.document)
+        .filter(Document.source == "drive_intake")
+        .options(joinedload(ImportJob.document))
+        .order_by(ImportJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        JobListItemResponse(
+            job_type="import",
+            job=JobResponse.model_validate(job),
+            import_source=job.document.source if job.document else None,
+            document_id=job.document_id,
+            document_file_name=job.document.file_name if job.document else None,
+        )
+        for job in jobs
+    ]
+
+
+@router.get("/drive-intake/diagnostics")
+def get_drive_intake_diagnostics(db: DbSession, current_user: CurrentUser) -> dict:
+    folder_url = settings.google_drive_intake_folder_url.strip()
+    folder_id = extract_drive_folder_id(folder_url) if folder_url else ""
+    service_account_json = resolve_drive_intake_service_account_json(db, current_user.branch_id)
+    beat_schedule = getattr(celery_app.conf, "beat_schedule", {}) or {}
+    drive_beat = beat_schedule.get("google-drive-intake-auto") if isinstance(beat_schedule, dict) else None
+
+    payload: dict = {
+        "auto_enabled": settings.google_drive_intake_auto_enabled,
+        "folder_configured": bool(folder_id),
+        "folder_id": folder_id or None,
+        "credentials_configured": bool((service_account_json or "").strip() or settings.google_drive_api_key.strip()),
+        "beat_schedule_present": bool(drive_beat),
+        "beat_schedule_seconds": _schedule_seconds(drive_beat.get("schedule")) if isinstance(drive_beat, dict) else None,
+        "batch_size": settings.google_drive_intake_batch_size,
+        "supported_count": 0,
+        "unprocessed_supported_count": 0,
+        "marked_processed_count": 0,
+        "unsupported_count": 0,
+        "unprocessed_supported_files": [],
+        "scan_error": None,
+    }
+    if not folder_id:
+        payload["scan_error"] = "Google Drive intake folder is not configured"
+        return payload
+
+    try:
+        files = list_drive_intake_files(folder_id, service_account_json)
+    except Exception as exc:
+        payload["scan_error"] = str(exc)
+        return payload
+
+    unprocessed: list[dict] = []
+    marked_processed_count = 0
+    unsupported_count = 0
+    supported_count = 0
+    for item in files:
+        file_id = str(item.get("id") or "").strip()
+        raw_name = str(item.get("name") or file_id)
+        mime_type = str(item.get("mimeType") or "")
+        filename = _normalize_drive_filename(raw_name, mime_type)
+        doc_type = _document_type_for_drive_file(filename, mime_type)
+        if doc_type.value not in {"xlsx", "docx"}:
+            unsupported_count += 1
+            continue
+
+        supported_count += 1
+        marked_processed = _drive_filename_has_processed_marker(raw_name)
+        if marked_processed:
+            marked_processed_count += 1
+
+        job = _find_drive_intake_job(
+            db,
+            branch_id=current_user.branch_id,
+            file_id=file_id,
+            modified_time=str(item.get("modifiedTime") or ""),
+            filename=raw_name,
+        )
+        job_status = job.status.value if job and hasattr(job.status, "value") else str(job.status) if job else None
+        if not marked_processed and job_status != JobStatus.SUCCEEDED.value:
+            unprocessed.append(
+                {
+                    "drive_file_id": file_id,
+                    "name": filename,
+                    "mime_type": mime_type,
+                    "document_type": doc_type.value,
+                    "modified_time": item.get("modifiedTime"),
+                    "web_view_link": item.get("webViewLink"),
+                    "job_id": job.id if job else None,
+                    "job_status": job_status,
+                    "job_message": job.message if job else None,
+                }
+            )
+
+    payload.update(
+        {
+            "supported_count": supported_count,
+            "unprocessed_supported_count": len(unprocessed),
+            "marked_processed_count": marked_processed_count,
+            "unsupported_count": unsupported_count,
+            "unprocessed_supported_files": unprocessed[:20],
+        }
+    )
+    return payload
+
+
+@router.get("/email-intake", response_model=list[JobListItemResponse])
+def list_email_intake_jobs(
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(default=10, ge=1, le=50),
+) -> list[JobListItemResponse]:
+    mail_sources = {"mail", "mail_gmail_api", "mail_google_script"}
+    jobs = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .join(ImportJob.document)
+        .filter(Document.source.in_(mail_sources))
+        .options(joinedload(ImportJob.document))
+        .order_by(ImportJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        JobListItemResponse(
+            job_type="import",
+            job=JobResponse.model_validate(job),
+            import_source=(
+                job.result_payload.get("source") if isinstance(job.result_payload, dict) and job.result_payload.get("source") else job.document.source
+            ),
+            document_id=job.document_id,
+            document_file_name=job.document.file_name if job.document else None,
+        )
+        for job in jobs
+    ]
+
+
+@router.get("/worker-health")
+def get_worker_health(db: DbSession, current_user: CurrentUser) -> dict:
+    ping_error: str | None = None
+    workers: list[str] = []
+    try:
+        inspector = celery_app.control.inspect(timeout=0.5)
+        ping_payload = inspector.ping() if inspector else None
+        if isinstance(ping_payload, dict):
+            workers = sorted(str(name) for name in ping_payload.keys())
+    except Exception as exc:
+        ping_error = str(exc)
+
+    import_queued = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .filter(ImportJob.status == JobStatus.QUEUED)
+        .count()
+    )
+    import_running = (
+        apply_branch_scope(db.query(ImportJob), ImportJob, current_user.branch_id)
+        .filter(ImportJob.status == JobStatus.RUNNING)
+        .count()
+    )
+    export_queued = (
+        apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+        .filter(ExportJob.status == JobStatus.QUEUED)
+        .count()
+    )
+    export_running = (
+        apply_branch_scope(db.query(ExportJob), ExportJob, current_user.branch_id)
+        .filter(ExportJob.status == JobStatus.RUNNING)
+        .count()
+    )
+
+    task_routes = getattr(celery_app.conf, "task_routes", {}) or {}
+    beat_schedule = getattr(celery_app.conf, "beat_schedule", {}) or {}
+    queues = [
+        {"task": task_name, "queue": route.get("queue")}
+        for task_name, route in sorted(task_routes.items())
+        if isinstance(route, dict)
+    ]
+    schedule = [
+        {
+            "name": name,
+            "task": entry.get("task") if isinstance(entry, dict) else None,
+            "schedule_seconds": _schedule_seconds(entry.get("schedule")) if isinstance(entry, dict) else None,
+        }
+        for name, entry in sorted(beat_schedule.items())
+    ]
+
+    ping_ok = bool(workers)
+    return {
+        "status": "ok" if ping_ok else "degraded",
+        "celery": {
+            "broker_configured": bool(settings.redis_url),
+            "ping_ok": ping_ok,
+            "workers": workers,
+            "error": ping_error,
+        },
+        "backlog": {
+            "import": {"queued": import_queued, "running": import_running},
+            "export": {"queued": export_queued, "running": export_running},
+            "total_active": import_queued + import_running + export_queued + export_running,
+        },
+        "queues": queues,
+        "beat_schedule": schedule,
+        "settings": {
+            "drive_intake_auto_enabled": settings.google_drive_intake_auto_enabled,
+            "drive_intake_interval_seconds": settings.google_drive_intake_interval_seconds,
+            "drive_intake_batch_size": settings.google_drive_intake_batch_size,
+            "journal_auto_interval_seconds": settings.journal_workload_auto_interval_seconds,
+            "imap_fallback_enabled": settings.imap_fallback_enabled,
+            "imap_auto_poll_enabled": settings.imap_auto_poll_enabled,
+            "mail_primary_channel": settings.mail_primary_channel,
+        },
+    }
+
+
 @router.get("/{job_id}", response_model=JobStatusResponse)
 def get_job_status(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatusResponse:
     job_type, job = _resolve_job(job_id, db, current_user.branch_id)
@@ -195,6 +480,7 @@ def cancel_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStat
     mark_job_failed(job, "Скасовано користувачем")
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
     write_audit(
         db,
@@ -226,6 +512,7 @@ def retry_job(job_id: int, db: DbSession, current_user: CurrentUser) -> JobStatu
     job.finished_at = None
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
 
     dispatch_mode = _dispatch_with_fallback(
@@ -272,6 +559,22 @@ def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) 
         "source": "manual_reprocess",
         "reprocess_of_job_id": source_job.id,
     }
+    if source_job.document.source == "drive_intake":
+        for key in (
+            "channel",
+            "drive_file_id",
+            "drive_file_name",
+            "drive_modified_time",
+            "drive_url",
+            "group_code_hint",
+        ):
+            if previous_payload.get(key) is not None:
+                new_payload[key] = previous_payload[key]
+        new_payload["original_source"] = previous_payload.get("source") or "drive_intake"
+        if source_job.document.mime_type:
+            new_payload["drive_mime_type"] = source_job.document.mime_type
+        new_payload.setdefault("drive_file_name", source_job.document.file_name)
+
     new_job = ImportJob(
         branch_id=current_user.branch_id,
         idempotency_key=f"{current_user.branch_id}:reprocess-{source_job.id}-{uuid4().hex}",
@@ -283,6 +586,7 @@ def reprocess_import_job(job_id: int, db: DbSession, current_user: CurrentUser) 
     )
     db.add(new_job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(new_job)
 
     dispatch_mode = _dispatch_with_fallback(process_import_job_task, new_job.id)
@@ -350,6 +654,7 @@ def rollback_import_job(job_id: int, db: DbSession, current_user: CurrentUser) -
     mark_job_failed(job, f"Імпорт відкликано. Видалено слухачів: {deleted_trainees}")
     db.add(job)
     db.commit()
+    _invalidate_dashboard_attention_cache(current_user.branch_id)
     db.refresh(job)
 
     write_audit(

@@ -18,6 +18,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.worker.process_journal_monitor_auto_task",
         "schedule": settings.journal_workload_auto_interval_seconds,
     },
+    "mail-imap-auto": {
+        "task": "app.tasks.worker.poll_mailbox_task",
+        "schedule": settings.imap_poll_interval_seconds,
+    },
     "google-drive-intake-auto": {
         "task": "app.tasks.worker.process_drive_intake_auto_task",
         "schedule": settings.google_drive_intake_interval_seconds,

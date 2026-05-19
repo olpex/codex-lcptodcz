@@ -114,7 +114,7 @@ Backend автоматично виконує нормалізацію пере�
 | Змінна | Значення |
 |--------|---------|
 | `gmailAccessToken` | OAuth 2.0 Bearer Token для **`lcptodcz.audyt@gmail.com`** |
-| `appEndpoint` | `https://<your-domain>/api/api/v1/mail/gmail-api-webhook/contracts` |
+| `appEndpoint` | `https://<your-domain>/api/v1/mail/gmail-api-webhook/contracts` |
 
 > **Увага:** У вузлі **Send file to application endpoint** обов'язково додайте header:
 > `Authorization: Bearer <MAIL_WEBHOOK_SECRET>`

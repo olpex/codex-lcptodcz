@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { KeyboardEvent, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -25,6 +25,9 @@ export function AppLayout() {
   const { user, logout } = useAuth();
   const { showInfo } = useToast();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuPanelRef = useRef<HTMLElement>(null);
   const userRoles = user?.roles.map((role) => role.name) || [];
   const roles = userRoles.join(", ") || "—";
   const visibleItems = NAV_ITEMS.filter((item) => item.roles.some((role) => userRoles.includes(role)));
@@ -41,19 +44,70 @@ export function AppLayout() {
     showInfo("Оновлюю поточну сторінку");
   };
 
+  const closeMobileMenu = () => {
+    setMobileMenuOpen(false);
+    window.setTimeout(() => {
+      mobileMenuButtonRef.current?.focus();
+    }, 0);
+  };
+
+  const handleMobileDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMobileMenu();
+      return;
+    }
+    if (event.key !== "Tab") {
+      return;
+    }
+
+    const focusableElements = Array.from(
+      mobileMenuPanelRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ) ?? []
+    ).filter((element) => element.tabIndex >= 0);
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    if (!firstElement || !lastElement) {
+      return;
+    }
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  };
+
+  const focusMainContent = () => {
+    window.setTimeout(() => {
+      document.getElementById("main-content")?.focus();
+    }, 0);
+  };
+
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      mobileMenuCloseButtonRef.current?.focus();
+    }
+  }, [mobileMenuOpen]);
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
-      <a href="#main-content" className="skip-link">
+      <a href="#main-content" className="skip-link" onClick={focusMainContent}>
         Перейти до основного контенту
       </a>
       <header className="sticky top-0 z-40 border-b border-pine/10 bg-white/85 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
-            <p className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</p>
+            <h1 className="font-heading text-2xl font-bold text-pine">{uiText.appTitle}</h1>
             <p className="text-sm text-slate-600">{uiText.appSubtitle}</p>
           </div>
           <div className="flex items-center gap-3">
             <button
+              ref={mobileMenuButtonRef}
               type="button"
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 md:hidden"
               onClick={() => setMobileMenuOpen(true)}
@@ -98,19 +152,28 @@ export function AppLayout() {
             ))}
           </nav>
         </aside>
-        <main id="main-content" className="space-y-5">
+        <main id="main-content" className="space-y-5" tabIndex={-1}>
           <Outlet />
         </main>
       </div>
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 flex bg-ink/40 md:hidden" role="dialog" aria-modal="true">
-          <aside className="h-full w-[86%] max-w-xs bg-white p-4 shadow-card">
+        <div
+          className="fixed inset-0 z-50 flex bg-ink/40 md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mobile-navigation-title"
+          onKeyDown={handleMobileDialogKeyDown}
+        >
+          <aside ref={mobileMenuPanelRef} className="h-full w-[86%] max-w-xs bg-white p-4 shadow-card">
             <div className="mb-3 flex items-center justify-between">
-              <p className="font-heading text-lg font-semibold text-pine">Навігація</p>
+              <p id="mobile-navigation-title" className="font-heading text-lg font-semibold text-pine">
+                Навігація
+              </p>
               <button
+                ref={mobileMenuCloseButtonRef}
                 type="button"
                 className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
-                onClick={() => setMobileMenuOpen(false)}
+                onClick={closeMobileMenu}
               >
                 Закрити
               </button>
@@ -132,7 +195,13 @@ export function AppLayout() {
               ))}
             </nav>
           </aside>
-          <button className="h-full flex-1 cursor-default" type="button" onClick={() => setMobileMenuOpen(false)} />
+          <button
+            className="h-full flex-1 cursor-default"
+            type="button"
+            onClick={closeMobileMenu}
+            aria-label="Закрити меню"
+            tabIndex={-1}
+          />
         </div>
       )}
     </div>

@@ -13,6 +13,7 @@ import type {
   Group,
   GroupAuditLog,
   GroupDetail as GroupDetailPayload,
+  JournalMonitorSection,
   ScheduleSlot,
   Trainee,
   Workload
@@ -85,6 +86,11 @@ function inferGroupYear(group: Group): number | null {
   if (fullYear) return Number(fullYear[1]);
   const shortYear = source.match(/[-–—/]\s*(\d{2})(?:\D|$)/);
   return shortYear ? 2000 + Number(shortYear[1]) : null;
+}
+
+function inferJournalSectionYear(section: JournalMonitorSection): number | null {
+  const match = section.name.match(/\b(20\d{2}|21\d{2})\b/);
+  return match ? Number(match[1]) : null;
 }
 
 function normalizeGroupCode(value: string | null | undefined): string {
@@ -235,6 +241,7 @@ export function GroupsPage() {
   const { request, user, accessToken } = useAuth();
   const { showError, showSuccess } = useToast();
   const [groups, setGroups] = useState<Group[]>([]);
+  const [journalSections, setJournalSections] = useState<JournalMonitorSection[]>([]);
   const [selectedGroupDetail, setSelectedGroupDetail] = useState<GroupDetail | null>(null);
   const [activeGroups, setActiveGroups] = useState<ActiveGroupBetweenDates[]>([]);
   const [name, setName] = useState("");
@@ -287,6 +294,14 @@ export function GroupsPage() {
     () => groupYearFilter ? groups.filter((group) => inferGroupYear(group) === Number(groupYearFilter)) : groups,
     [groupYearFilter, groups]
   );
+  const journalCountForSelectedYear = useMemo(() => {
+    if (!groupYearFilter) {
+      return journalSections.reduce((sum, section) => sum + (section.stats?.total || 0), 0);
+    }
+    const year = Number(groupYearFilter);
+    const section = journalSections.find((item) => inferJournalSectionYear(item) === year);
+    return section?.stats?.total ?? 0;
+  }, [groupYearFilter, journalSections]);
   const selectedGroupCount = selectedGroups.length;
   const allGroupsSelected = filteredGroups.length > 0 && filteredGroups.every((group) => selectedGroupIds[group.id]);
   const selectedDetailGroup = useMemo(
@@ -445,8 +460,12 @@ export function GroupsPage() {
     const showLoading = !options.quiet || groups.length === 0;
     if (showLoading) setIsLoading(true);
     try {
-      const data = await request<Group[]>("/groups");
+      const [data, sectionData] = await Promise.all([
+        request<Group[]>("/groups"),
+        request<JournalMonitorSection[]>("/journal-monitors").catch(() => [] as JournalMonitorSection[])
+      ]);
       setGroups(data);
+      setJournalSections(sectionData);
       setSelectedGroupIds((prev) => {
         const availableIds = new Set(data.map((group) => group.id));
         return Object.fromEntries(
@@ -1146,7 +1165,7 @@ export function GroupsPage() {
             ))}
           </select>
           <span className="text-slate-500">
-            Показано: {filteredGroups.length} з {groups.length}
+            Журналів: {journalCountForSelectedYear} · Груп у реєстрі: {filteredGroups.length} з {groups.length}
           </span>
         </div>
         <DataTable

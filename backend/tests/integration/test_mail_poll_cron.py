@@ -1,4 +1,5 @@
 from app.api.routes import mail as mail_routes
+from app.celery_app import celery_app
 
 
 def test_poll_cron_requires_valid_token(client, monkeypatch):
@@ -26,3 +27,10 @@ def test_poll_cron_is_disabled(client, monkeypatch):
     payload = response.json()
     assert payload["dispatch_mode"] == "disabled"
     assert payload["result"]["disabled"] is True
+
+
+def test_imap_poll_is_scheduled_by_celery_beat():
+    schedule = celery_app.conf.beat_schedule
+
+    assert schedule["mail-imap-auto"]["task"] == "app.tasks.worker.poll_mailbox_task"
+    assert schedule["mail-imap-auto"]["schedule"] == mail_routes.settings.imap_poll_interval_seconds

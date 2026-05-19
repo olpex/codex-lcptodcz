@@ -30,6 +30,7 @@ from app.schemas.api import (
     StudentPlanUpdateRequest,
 )
 from app.services.cache import cache_delete, cache_get_json, cache_set_json
+from app.services.dashboard_cache import ATTENTION_CACHE_TTL_SECONDS, attention_cache_key
 
 router = APIRouter()
 KPI_CACHE_TTL_SECONDS = 60
@@ -105,6 +106,17 @@ def _active_groups_count(db: DbSession, branch_id: str, year: int) -> int:
     )
 
 
+def _journal_count(db: DbSession, branch_id: str, year: int) -> int:
+    journal_section = _default_journal_section_for_year(db, branch_id, year)
+    if not journal_section:
+        return 0
+    return (
+        db.query(JournalMonitorEntry)
+        .filter(JournalMonitorEntry.section_id == journal_section.id)
+        .count()
+    )
+
+
 def _kpi_cache_key(branch_id: str, year: int) -> str:
     return f"dashboard:kpi:{branch_id}:{year}"
 
@@ -112,6 +124,7 @@ def _kpi_cache_key(branch_id: str, year: int) -> str:
 def _compute_kpi(db: DbSession, branch_id: str, plan_year: int) -> DashboardKPIResponse:
     student_plan = _student_plan_response(db, branch_id, plan_year)
     active_groups = _active_groups_count(db, branch_id, plan_year)
+    journal_count = _journal_count(db, branch_id, plan_year) or active_groups
     active_trainees = (
         db.query(Trainee)
         .filter(Trainee.branch_id == branch_id, Trainee.is_deleted.is_(False))
@@ -134,6 +147,7 @@ def _compute_kpi(db: DbSession, branch_id: str, plan_year: int) -> DashboardKPIR
 
     return DashboardKPIResponse(
         active_groups=active_groups,
+        journal_count=journal_count,
         active_trainees=active_trainees,
         training_plan_progress_pct=student_plan.progress_pct,
         student_plan_year=student_plan.year,
@@ -209,6 +223,11 @@ def _attention_item(
 @router.get("/attention", response_model=DashboardAttentionResponse)
 def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentionResponse:
     branch_id = current_user.branch_id
+    cache_key = attention_cache_key(branch_id)
+    cached = cache_get_json(cache_key)
+    if isinstance(cached, dict):
+        return DashboardAttentionResponse.model_validate(cached)
+
     failed_jobs = (
         db.query(ImportJob).filter(ImportJob.branch_id == branch_id, ImportJob.status == JobStatus.FAILED).count()
         + db.query(ExportJob).filter(ExportJob.branch_id == branch_id, ExportJob.status == JobStatus.FAILED).count()
@@ -319,11 +338,13 @@ def get_attention(db: DbSession, current_user: CurrentUser) -> DashboardAttentio
     items = [item for item in raw_items if item is not None]
     severity_order = {"error": 0, "warning": 1, "info": 2}
     items.sort(key=lambda item: (severity_order.get(item.severity, 3), item.title))
-    return DashboardAttentionResponse(
+    response = DashboardAttentionResponse(
         generated_at=datetime.now(timezone.utc),
         total_count=sum(item.count for item in items),
         items=items,
     )
+    cache_set_json(cache_key, response.model_dump(mode="json"), ATTENTION_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.get("/kpi/stream")

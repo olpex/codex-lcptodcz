@@ -268,7 +268,7 @@ function processOneAttachment_(target) {
     muteHttpExceptions: true,
   };
 
-  const url  = PROJECT_BASE_URL + "/api/api/v1/mail/gmail-api-webhook/contracts";
+  const url  = PROJECT_BASE_URL + "/api/v1/mail/gmail-api-webhook/contracts";
   const resp = UrlFetchApp.fetch(url, options);
   const code = resp.getResponseCode();
 

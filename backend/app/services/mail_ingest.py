@@ -1,6 +1,7 @@
 import email
 import hashlib
 import imaplib
+import logging
 import re
 from datetime import datetime, timezone
 from email.header import decode_header
@@ -29,7 +30,10 @@ from app.services.import_export import (
     parse_document_content,
     try_import_trainees,
 )
+from app.services.dashboard_cache import invalidate_attention_cache
+from app.services.group_cache import invalidate_group_list_cache
 from app.services.ocr import guess_draft_from_text, ocr_image_file
+from app.services.schedule_cache import invalidate_schedule_list_cache
 from app.services.storage import detect_document_type, storage_path
 from app.services.schedule_import import import_schedule_docx
 from app.models import Trainee
@@ -37,6 +41,19 @@ from app.models import Trainee
 GROUP_CODE_PATTERN = re.compile(r"(\d{1,4}\s*[A-Za-zА-Яа-яІіЇїЄєҐґ]?\s*[-/–—‑‒−﹘﹣]\s*\d{1,4})")
 CONTRACT_KEYWORD_FALLBACK = "договор"
 DASH_VARIANTS = "–—‑‒−﹘﹣"
+logger = logging.getLogger(__name__)
+
+
+def _invalidate_import_caches(branch_id: str) -> None:
+    for invalidate in (
+        invalidate_schedule_list_cache,
+        invalidate_group_list_cache,
+        invalidate_attention_cache,
+    ):
+        try:
+            invalidate(branch_id)
+        except Exception as exc:
+            logger.warning("Mail import cache invalidation failed for branch %s: %s", branch_id, exc)
 
 
 def _normalize_compact(value: str | None) -> str:
@@ -174,6 +191,7 @@ def ingest_mailbox(db: Session) -> dict:
     branch_id = settings.imap_branch_id or "main"
     allowed_senders = settings.imap_allowed_senders_list
     processed = 0
+    branches_to_invalidate: set[str] = set()
     mailbox = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port)
     mailbox.login(settings.imap_user, settings.imap_password)
     mailbox.select(settings.imap_mailbox)
@@ -341,6 +359,7 @@ def ingest_mailbox(db: Session) -> dict:
                     job.message = "Автоімпорт договорів із пошти виконано"
                     job.finished_at = datetime.now(timezone.utc)
                     attachment_notes.append(f"Імпорт договорів виконано ({filename})")
+                    branches_to_invalidate.add(branch_id)
                 except Exception as exc:
                     job.status = JobStatus.FAILED
                     job.message = f"Помилка автоімпорту договорів: {exc}"
@@ -389,6 +408,7 @@ def ingest_mailbox(db: Session) -> dict:
                     job.message = "Автоімпорт розкладу із пошти виконано"
                     job.finished_at = datetime.now(timezone.utc)
                     attachment_notes.append(f"Імпорт розкладу виконано ({filename})")
+                    branches_to_invalidate.add(branch_id)
                 except Exception as exc:
                     job.status = JobStatus.FAILED
                     job.message = f"Помилка автоімпорту розкладу: {exc}"
@@ -424,5 +444,7 @@ def ingest_mailbox(db: Session) -> dict:
         break
 
     db.commit()
+    for branch_id in branches_to_invalidate:
+        _invalidate_import_caches(branch_id)
     mailbox.logout()
     return {"processed": processed}

@@ -236,12 +236,14 @@ const MonthCalendar = ({
   monthKey, 
   slots, 
   conflictAnalysis,
-  onUpdateSlot 
+  onUpdateSlot,
+  canEdit
 }: { 
   monthKey: string; 
   slots: ScheduleSlot[]; 
   conflictAnalysis: ConflictAnalysis;
   onUpdateSlot: (id: number, payload: Partial<ScheduleSlot>) => void;
+  canEdit: boolean;
 }) => {
   const [yearStr, monthStr] = monthKey.split("-");
   const year = parseInt(yearStr, 10);
@@ -313,6 +315,7 @@ const MonthCalendar = ({
               key={day} 
               className={`bg-white p-2 min-h-[120px] relative group hover:bg-slate-50 transition-colors ${hasConflicts ? 'bg-red-50/30' : ''}`}
               onDragOver={(e) => {
+                if (!canEdit) return;
                 e.preventDefault();
                 e.currentTarget.classList.add('bg-blue-50');
               }}
@@ -320,6 +323,7 @@ const MonthCalendar = ({
                 e.currentTarget.classList.remove('bg-blue-50');
               }}
               onDrop={(e) => {
+                if (!canEdit) return;
                 e.preventDefault();
                 e.currentTarget.classList.remove('bg-blue-50');
                 const dataStr = e.dataTransfer.getData('application/json');
@@ -367,12 +371,17 @@ const MonthCalendar = ({
                     return (
                       <div 
                         key={group.map(s => s.id).join('-')} 
-                        draggable
+                        draggable={canEdit}
                         onDragStart={(e) => {
+                          if (!canEdit) {
+                            e.preventDefault();
+                            return;
+                          }
                           e.stopPropagation();
                           e.dataTransfer.setData('application/json', JSON.stringify({ type: 'slot', slotIds: group.map(s => s.id) }));
                         }}
                         onDragOver={(e) => {
+                          if (!canEdit) return;
                           e.preventDefault();
                           e.stopPropagation();
                           e.currentTarget.classList.add('opacity-50');
@@ -381,6 +390,7 @@ const MonthCalendar = ({
                           e.currentTarget.classList.remove('opacity-50');
                         }}
                         onDrop={(e) => {
+                          if (!canEdit) return;
                           e.preventDefault();
                           e.stopPropagation();
                           e.currentTarget.classList.remove('opacity-50');
@@ -398,7 +408,9 @@ const MonthCalendar = ({
                             console.error(err);
                           }
                         }}
-                        className={`text-[10px] p-1 mb-1 rounded cursor-grab border ${isConflict ? 'bg-red-100 border-red-300 text-red-800' : 'bg-green-50 border-green-200 text-green-800'}`}
+                        className={`text-[10px] p-1 mb-1 rounded border ${
+                          canEdit ? "cursor-grab" : "cursor-default"
+                        } ${isConflict ? 'bg-red-100 border-red-300 text-red-800' : 'bg-green-50 border-green-200 text-green-800'}`}
                       >
                         <div className="font-semibold">Пара {first.pair_number}</div>
                         <div className="truncate">{shortName(first.teacher_name)}</div>
@@ -465,10 +477,12 @@ export function SchedulePage() {
     try {
       const data = await request<ScheduleSlot[]>("/schedule");
       let teachersData: Teacher[] = [];
-      try {
-        teachersData = await request<Teacher[]>("/teachers");
-      } catch {
-        teachersData = [];
+      if (canGenerate) {
+        try {
+          teachersData = await request<Teacher[]>("/teachers");
+        } catch {
+          teachersData = [];
+        }
       }
 
       setSlots(data);
@@ -487,6 +501,10 @@ export function SchedulePage() {
 
   
   const handleUpdateSlot = async (slotId: number, payload: Partial<ScheduleSlot>) => {
+    if (!canGenerate) {
+      showError("Редагування розкладу доступне лише адміністратору або методисту");
+      return;
+    }
     const previousSlots = slots;
     const optimisticSlots = previousSlots.map((slot) => {
       if (slot.id !== slotId) return slot;
@@ -659,7 +677,7 @@ export function SchedulePage() {
     setExpandedDates((prev) => {
       const filteredEntries = Object.entries(prev).filter(([key]) => allowedDates.has(key));
       if (filteredEntries.length === 0) {
-        return { [visibleGroupedSchedule[0].dateKey]: true };
+        return {};
       }
       return Object.fromEntries(filteredEntries) as Record<string, boolean>;
     });
@@ -680,7 +698,11 @@ export function SchedulePage() {
 
   const generate = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canGenerate || isGenerating) return;
+    if (!canGenerate) {
+      showError("Генерація розкладу доступна лише адміністратору або методисту");
+      return;
+    }
+    if (isGenerating) return;
     const nextErrors: { startDate?: string; days?: string } = {};
     if (!startDate) {
       nextErrors.startDate = "Вкажіть дату старту";
@@ -714,6 +736,10 @@ export function SchedulePage() {
   };
 
   const openDeleteScheduleDialog = () => {
+    if (!canGenerate) {
+      showError("Видалення розкладу доступне лише адміністратору або методисту");
+      return;
+    }
     if (!selectedScheduleGroup || isDeletingSchedule) return;
     setScheduleGroupToDelete(selectedScheduleGroup);
   };
@@ -724,6 +750,10 @@ export function SchedulePage() {
   };
 
   const confirmDeleteSchedule = async () => {
+    if (!canGenerate) {
+      showError("Видалення розкладу доступне лише адміністратору або методисту");
+      return;
+    }
     if (!scheduleGroupToDelete || isDeletingSchedule) return;
     setIsDeletingSchedule(true);
     try {
@@ -755,6 +785,10 @@ export function SchedulePage() {
   };
 
   const confirmDeleteTeacher = async () => {
+    if (!canGenerate) {
+      showError("Видалення викладачів доступне лише адміністратору або методисту");
+      return;
+    }
     if (!teacherToDelete || isDeletingTeacher) return;
     setIsDeletingTeacher(true);
     try {
@@ -848,6 +882,15 @@ export function SchedulePage() {
             );
           })}
         </div>
+        {!canGenerate && (
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="font-semibold text-ink">Режим перегляду</p>
+            <p className="mt-1">
+              Перегляд розкладу доступний без редагування. Генерація, переміщення занять, заміна викладача та
+              видалення розкладів доступні лише адміністратору або методисту.
+            </p>
+          </div>
+        )}
         <StickyActionBar className="mb-3">
           <div className="flex flex-wrap items-center gap-3">
           <button className="rounded-lg bg-pine px-4 py-2 font-semibold text-white" onClick={fetchSchedule}>
@@ -987,7 +1030,13 @@ export function SchedulePage() {
 
                   {isExpanded && (
                     <div id={`schedule-day-${group.dateKey}`} className="border-t border-slate-200 px-3 py-2">
-                      <MonthCalendar monthKey={group.dateKey} slots={group.slots} conflictAnalysis={conflictAnalysis} onUpdateSlot={handleUpdateSlot} />
+                      <MonthCalendar
+                        monthKey={group.dateKey}
+                        slots={group.slots}
+                        conflictAnalysis={conflictAnalysis}
+                        onUpdateSlot={handleUpdateSlot}
+                        canEdit={canGenerate}
+                      />
                     </div>
                   )}
                 </div>

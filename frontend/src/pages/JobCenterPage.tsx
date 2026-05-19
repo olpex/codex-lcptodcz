@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DataTable, type DataTableColumn } from "../components/DataTable";
 import { FormField, formControlClass } from "../components/FormField";
 import { InlineNotice } from "../components/InlineNotice";
@@ -17,6 +18,58 @@ type JobStatusPayload = {
   job: Job;
 };
 
+type WorkerHealth = {
+  status: "ok" | "degraded" | string;
+  celery: {
+    broker_configured: boolean;
+    ping_ok: boolean;
+    workers: string[];
+    error: string | null;
+  };
+  backlog: {
+    import: { queued: number; running: number };
+    export: { queued: number; running: number };
+    total_active: number;
+  };
+  queues: Array<{ task: string; queue: string | null }>;
+  beat_schedule: Array<{ name: string; task: string | null; schedule_seconds: number | null }>;
+  settings: {
+    drive_intake_auto_enabled: boolean;
+    drive_intake_interval_seconds: number;
+    drive_intake_batch_size?: number;
+    journal_auto_interval_seconds: number;
+    imap_fallback_enabled: boolean;
+    imap_auto_poll_enabled: boolean;
+    mail_primary_channel: string;
+  };
+};
+
+type DriveIntakeDiagnostics = {
+  auto_enabled: boolean;
+  folder_configured: boolean;
+  folder_id: string | null;
+  credentials_configured: boolean;
+  beat_schedule_present: boolean;
+  beat_schedule_seconds: number | null;
+  batch_size: number;
+  supported_count: number;
+  unprocessed_supported_count: number;
+  marked_processed_count: number;
+  unsupported_count: number;
+  unprocessed_supported_files: Array<{
+    drive_file_id: string;
+    name: string;
+    mime_type: string;
+    document_type: string;
+    modified_time: string | null;
+    web_view_link: string | null;
+    job_id: number | null;
+    job_status: Job["status"] | null;
+    job_message: string | null;
+  }>;
+  scan_error: string | null;
+};
+
 type JobTypeFilter = "all" | "import" | "export";
 type JobStatusFilter = "all" | "queued" | "running" | "succeeded" | "failed";
 type ImportMode = "skip_existing" | "missing_only" | "overwrite";
@@ -33,6 +86,104 @@ type JobStatsSnapshot = {
   succeeded: number;
   failed: number;
 };
+
+type JobStage = {
+  step: number;
+  total: number;
+  percent: number;
+  label: string;
+};
+
+type CollapsibleTone = "sky" | "indigo" | "slate" | "rose";
+
+type CollapsibleSectionProps = {
+  id: string;
+  title: string;
+  description: string;
+  tone: CollapsibleTone;
+  testId: string;
+  defaultOpen?: boolean;
+  summary?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+};
+
+const COLLAPSIBLE_TONE_CLASSES: Record<CollapsibleTone, { section: string; title: string; description: string; icon: string }> = {
+  sky: {
+    section: "border-sky-200 bg-sky-50",
+    title: "text-sky-950",
+    description: "text-sky-800",
+    icon: "border-sky-300 bg-white text-sky-900"
+  },
+  indigo: {
+    section: "border-indigo-200 bg-indigo-50",
+    title: "text-indigo-950",
+    description: "text-indigo-800",
+    icon: "border-indigo-300 bg-white text-indigo-900"
+  },
+  slate: {
+    section: "border-slate-200 bg-slate-50",
+    title: "text-slate-950",
+    description: "text-slate-700",
+    icon: "border-slate-300 bg-white text-slate-800"
+  },
+  rose: {
+    section: "border-rose-200 bg-rose-50",
+    title: "text-rose-950",
+    description: "text-rose-800",
+    icon: "border-rose-300 bg-white text-rose-900"
+  }
+};
+
+function CollapsibleSection({
+  id,
+  title,
+  description,
+  tone,
+  testId,
+  defaultOpen = false,
+  summary,
+  action,
+  children
+}: CollapsibleSectionProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const classes = COLLAPSIBLE_TONE_CLASSES[tone];
+  const contentId = `${id}-content`;
+
+  return (
+    <section className={`rounded-lg border p-3 ${classes.section}`} data-testid={testId} aria-labelledby={id}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-start gap-3 text-left"
+          aria-expanded={isOpen}
+          aria-controls={contentId}
+          onClick={() => setIsOpen((value) => !value)}
+        >
+          <span
+            className={`mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-lg font-bold leading-none ${classes.icon}`}
+            aria-hidden="true"
+          >
+            {isOpen ? "−" : "+"}
+          </span>
+          <span className="min-w-0">
+            <span id={id} className={`block text-base font-semibold ${classes.title}`}>
+              {title}
+            </span>
+            <span className={`block text-sm ${classes.description}`}>{description}</span>
+          </span>
+        </button>
+        {summary && <div className="flex flex-wrap justify-end gap-2 text-xs font-semibold">{summary}</div>}
+        {action}
+      </div>
+      {isOpen && (
+        <div id={contentId} className="mt-3">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function toIsoDateRangeStart(value: string): string {
   return `${value}T00:00:00Z`;
@@ -55,6 +206,14 @@ function getJobRowClassName(item: JobListItem): string | undefined {
   return undefined;
 }
 
+function isActiveJobStatus(status: Job["status"]): boolean {
+  return status === "queued" || status === "running";
+}
+
+function getJobKey(jobType: string, jobId: number): string {
+  return `${jobType}-${jobId}`;
+}
+
 function getFileExtension(fileName: string): string {
   const parts = fileName.toLowerCase().split(".");
   return parts.length < 2 ? "" : parts[parts.length - 1];
@@ -62,6 +221,86 @@ function getFileExtension(fileName: string): string {
 
 function getRelativeFilePath(file: File): string {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+}
+
+function getPayloadText(payload: Record<string, unknown> | null, key: string): string | null {
+  const value = payload?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatJobDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("uk-UA");
+}
+
+function formatMailChannel(value: string): string {
+  if (value === "google_apps_script") return "Google Apps Script";
+  if (value === "imap") return "IMAP";
+  return value || "Не налаштовано";
+}
+
+function formatEnabled(value: boolean): string {
+  return value ? "увімкнено" : "вимкнено";
+}
+
+function getMailFallbackNotice(settings: WorkerHealth["settings"]): string | null {
+  if (settings.mail_primary_channel === "google_apps_script" && !settings.imap_fallback_enabled) {
+    return "IMAP fallback вимкнений навмисно, поки основний канал - Google Apps Script. Увімкніть IMAP_FALLBACK_ENABLED=true тільки для контрольованого fallback.";
+  }
+  if (settings.imap_fallback_enabled && !settings.imap_auto_poll_enabled) {
+    return "IMAP fallback дозволений, але auto poll вимкнений. Запускайте IMAP вручну або увімкніть IMAP_AUTO_POLL_ENABLED=true лише на час контрольованого fallback.";
+  }
+  return null;
+}
+
+function getJobStage(job: Job): JobStage {
+  if (job.status === "queued") {
+    return { step: 1, total: 3, percent: 20, label: "Очікує worker" };
+  }
+  if (job.status === "running") {
+    return { step: 2, total: 3, percent: 60, label: "Обробляється" };
+  }
+  if (job.status === "succeeded") {
+    return { step: 3, total: 3, percent: 100, label: "Завершено" };
+  }
+  return { step: 3, total: 3, percent: 100, label: "Потрібна увага" };
+}
+
+function getJobIssueMessage(item: JobListItem): string | null {
+  const markingError = getPayloadText(item.job.result_payload, "marking_error");
+  if (markingError) return markingError;
+  if (item.job.status === "failed") return item.job.message || "Задача завершилась з помилкою";
+  return null;
+}
+
+function getJobIssueHint(item: JobListItem): string | null {
+  const issueMessage = (getJobIssueMessage(item) || "").toLocaleLowerCase("uk-UA");
+  const source = `${item.import_source || ""} ${getPayloadText(item.job.result_payload, "source") || ""}`.toLocaleLowerCase("uk-UA");
+
+  if (source.includes("drive_intake") || issueMessage.includes("google drive") || issueMessage.includes("drive")) {
+    if (issueMessage.includes("rename") || issueMessage.includes("переймен")) {
+      return "Надайте service account доступ Editor до intake-папки або файлу, потім оновіть/повторіть задачу.";
+    }
+    if (issueMessage.includes("access") || issueMessage.includes("доступ")) {
+      return "Перевірте service account JSON і доступ до Google Drive папки.";
+    }
+    if (issueMessage.includes("folder") || issueMessage.includes("папк")) {
+      return "Перевірте URL intake-папки та чи є в ній підтримувані файли XLS/XLSX/CSV/DOCX.";
+    }
+  }
+
+  if (source.includes("mail") || source.includes("gmail") || issueMessage.includes("mail") || issueMessage.includes("webhook")) {
+    if (issueMessage.includes("secret") || issueMessage.includes("token")) {
+      return "Перевірте MAIL_WEBHOOK_SECRET у backend і Apps Script/Postman Flow.";
+    }
+    if (issueMessage.includes("attachment") || issueMessage.includes("вклад")) {
+      return "Перевірте формат вкладення та правила відправника для email-імпорту.";
+    }
+  }
+
+  return null;
 }
 
 export function JobCenterPage() {
@@ -86,6 +325,19 @@ export function JobCenterPage() {
   const [batchImportResult, setBatchImportResult] = useState<BatchImportResult | null>(null);
   const [supportedBatchExtensions, setSupportedBatchExtensions] = useState(FALLBACK_BATCH_IMPORT_EXTENSIONS);
   const [importNotice, setImportNotice] = useState<{ tone: "info" | "success" | "error"; text: string } | null>(null);
+  const [driveIntakeRows, setDriveIntakeRows] = useState<JobListItem[]>([]);
+  const [driveIntakeLoadError, setDriveIntakeLoadError] = useState<string | null>(null);
+  const [driveIntakeDiagnostics, setDriveIntakeDiagnostics] = useState<DriveIntakeDiagnostics | null>(null);
+  const [emailIntakeRows, setEmailIntakeRows] = useState<JobListItem[]>([]);
+  const [workerHealth, setWorkerHealth] = useState<WorkerHealth | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<JobListItem | null>(null);
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
+  const [retryTarget, setRetryTarget] = useState<JobListItem | null>(null);
+  const [isRetryingJob, setIsRetryingJob] = useState(false);
+  const [reprocessTarget, setReprocessTarget] = useState<JobListItem | null>(null);
+  const [isReprocessingImport, setIsReprocessingImport] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<JobListItem | null>(null);
+  const [isRollingBackImport, setIsRollingBackImport] = useState(false);
 
   const buildSnapshot = (data: JobListItem[]): JobStatsSnapshot => {
     const snapshot: JobStatsSnapshot = {
@@ -151,9 +403,13 @@ export function JobCenterPage() {
     return { supported, unsupported, total: batchImportFiles.length };
   }, [batchImportFiles, supportedBatchExtensionSet]);
   const isImportBusy = isImporting || isPreviewingImport || isBatchImporting;
+  const mailFallbackNotice = workerHealth ? getMailFallbackNotice(workerHealth.settings) : null;
 
   const describeImportResult = (item: JobListItem): string => {
     if (item.job_type !== "import") return "—";
+    const driveFileName = getPayloadText(item.job.result_payload, "drive_file_name");
+    if (driveFileName) return `Файл Drive: ${driveFileName}`;
+
     const result = item.job.result_payload?.import_result;
     if (!result || typeof result !== "object") return item.job.message || "—";
 
@@ -173,6 +429,12 @@ export function JobCenterPage() {
     const memberships = Number(data.memberships_created || 0);
     if (data.note && inserted === 0 && updated === 0) return String(data.note);
     return `Слухачі: додано ${inserted}, оновлено ${updated}, прив'язок ${memberships}, пропущено ${skippedExisting + skippedInvalid}`;
+  };
+
+  const describeJobSource = (item: JobListItem): string => {
+    if (item.job_type === "export") return "—";
+    const payloadSource = getPayloadText(item.job.result_payload, "source");
+    return formatImportSource(item.import_source || payloadSource);
   };
 
   const previewImport = async () => {
@@ -300,9 +562,102 @@ export function JobCenterPage() {
     }
   };
 
+  const loadDriveIntakeJobs = async () => {
+    try {
+      const data = await request<JobListItem[]>("/jobs/drive-intake?limit=5");
+      setDriveIntakeRows(data);
+      setDriveIntakeLoadError(null);
+    } catch (error) {
+      setDriveIntakeRows([]);
+      setDriveIntakeLoadError((error as Error).message);
+    }
+  };
+
+  const loadDriveIntakeDiagnostics = async () => {
+    try {
+      const data = await request<DriveIntakeDiagnostics>("/jobs/drive-intake/diagnostics");
+      setDriveIntakeDiagnostics(data);
+    } catch {
+      setDriveIntakeDiagnostics(null);
+    }
+  };
+
+  const loadEmailIntakeJobs = async () => {
+    try {
+      const data = await request<JobListItem[]>("/jobs/email-intake?limit=5");
+      setEmailIntakeRows(data);
+    } catch {
+      setEmailIntakeRows([]);
+    }
+  };
+
+  const loadWorkerHealth = async () => {
+    try {
+      const data = await request<WorkerHealth>("/jobs/worker-health");
+      setWorkerHealth(data);
+    } catch {
+      setWorkerHealth(null);
+    }
+  };
+
+  const buildJobStatusesPath = (items: JobListItem[]) => {
+    const params = new URLSearchParams();
+    params.set("limit", "200");
+    for (const item of items) {
+      params.append("job_id", String(item.job.id));
+    }
+    return `/jobs/statuses?${params.toString()}`;
+  };
+
+  const refreshActiveJobStatuses = async (items: JobListItem[]) => {
+    try {
+      const payload = await request<JobStatusPayload[]>(buildJobStatusesPath(items));
+      const requestedKeys = new Set(items.map((item) => getJobKey(item.job_type, item.job.id)));
+      const currentKeys = new Set(rows.map((item) => getJobKey(item.job_type, item.job.id)));
+      const statusByKey = new Map(payload.map((item) => [getJobKey(item.job_type, item.job.id), item]));
+      const hasUnknownActiveJob = payload.some(
+        (item) => isActiveJobStatus(item.job.status) && !currentKeys.has(getJobKey(item.job_type, item.job.id))
+      );
+      const hasCompletedRequestedJob = payload.some(
+        (item) => requestedKeys.has(getJobKey(item.job_type, item.job.id)) && !isActiveJobStatus(item.job.status)
+      );
+
+      setRows((prev) => {
+        let changed = false;
+        const nextRows = prev.map((row) => {
+          const status = statusByKey.get(getJobKey(row.job_type, row.job.id));
+          if (!status) return row;
+          changed = true;
+          return {
+            ...row,
+            job_type: status.job_type,
+            job: status.job
+          };
+        });
+        if (changed) appendSnapshot(nextRows);
+        return changed ? nextRows : prev;
+      });
+      setLoadError(null);
+
+      if (hasUnknownActiveJob || hasCompletedRequestedJob) {
+        await loadJobs();
+        await loadDriveIntakeJobs();
+        await loadDriveIntakeDiagnostics();
+        await loadEmailIntakeJobs();
+        await loadWorkerHealth();
+      }
+    } catch (error) {
+      setLoadError((error as Error).message);
+    }
+  };
+
   useEffect(() => {
     setStatsHistory([]);
     loadJobs();
+    loadDriveIntakeJobs();
+    loadDriveIntakeDiagnostics();
+    loadEmailIntakeJobs();
+    loadWorkerHealth();
   }, [jobType, jobStatus, dateFrom, dateTo]);
 
   useEffect(() => {
@@ -320,10 +675,19 @@ export function JobCenterPage() {
   useEffect(() => {
     if (!autoRefresh) return;
     const timer = window.setInterval(() => {
-      loadJobs();
+      const activeRows = rows.filter((item) => isActiveJobStatus(item.job.status));
+      if (activeRows.length > 0) {
+        void refreshActiveJobStatuses(activeRows);
+      } else {
+        void loadJobs();
+      }
+      void loadDriveIntakeJobs();
+      void loadDriveIntakeDiagnostics();
+      void loadEmailIntakeJobs();
+      void loadWorkerHealth();
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [autoRefresh, jobType, jobStatus, dateFrom, dateTo]);
+  }, [autoRefresh, rows, jobType, jobStatus, dateFrom, dateTo]);
 
   usePageRefresh(() => loadJobs(), { intervalMs: 0, refreshOnFocus: false });
 
@@ -366,23 +730,39 @@ export function JobCenterPage() {
   };
 
   const cancelJob = async (item: JobListItem) => {
+    setIsCancellingJob(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/cancel`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setCancelTarget(null);
       showSuccess(`Задачу #${item.job.id} скасовано`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsCancellingJob(false);
     }
   };
 
+  const requestCancelJob = (item: JobListItem) => {
+    setCancelTarget(item);
+  };
+
   const retryJob = async (item: JobListItem) => {
+    setIsRetryingJob(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/retry`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setRetryTarget(null);
       showSuccess(`Задачу #${item.job.id} перезапущено`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsRetryingJob(false);
     }
+  };
+
+  const requestRetryJob = (item: JobListItem) => {
+    setRetryTarget(item);
   };
 
   const reprocessImportJob = async (item: JobListItem) => {
@@ -390,6 +770,7 @@ export function JobCenterPage() {
       showError("Для цієї задачі немає документа для повторного імпорту");
       return;
     }
+    setIsReprocessingImport(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/reprocess-import`, { method: "POST" });
       setJobType("import");
@@ -397,25 +778,55 @@ export function JobCenterPage() {
       const data = await request<JobListItem[]>("/jobs?limit=200&job_type=import");
       setRows(data);
       appendSnapshot(data);
+      await loadDriveIntakeJobs();
+      await loadEmailIntakeJobs();
+      setReprocessTarget(null);
       showSuccess(`Створено повторний імпорт #${payload.job.id}`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsReprocessingImport(false);
     }
   };
 
+  const requestReprocessImportJob = (item: JobListItem) => {
+    if (item.job_type !== "import" || !item.document_id) {
+      showError("Для цієї задачі немає документа для повторного імпорту");
+      return;
+    }
+    setReprocessTarget(item);
+  };
+
   const rollbackImportJob = async (item: JobListItem) => {
+    setIsRollingBackImport(true);
     try {
       const payload = await request<JobStatusPayload>(`/jobs/${item.job.id}/rollback-import`, { method: "POST" });
       updateRowFromStatus(item.job.id, payload);
+      setRollbackTarget(null);
       showSuccess(`Імпорт #${item.job.id} відкликано`);
     } catch (error) {
       showError((error as Error).message);
+    } finally {
+      setIsRollingBackImport(false);
     }
   };
 
   const hasRollbackData = (item: JobListItem) => {
     const inserted = item.job.result_payload?.import_result as Record<string, unknown> | undefined;
     return Array.isArray(inserted?.inserted_ids) && inserted.inserted_ids.length > 0;
+  };
+
+  const getRollbackInsertedCount = (item: JobListItem | null): number => {
+    const inserted = item?.job.result_payload?.import_result as Record<string, unknown> | undefined;
+    return Array.isArray(inserted?.inserted_ids) ? inserted.inserted_ids.length : 0;
+  };
+
+  const requestRollbackImportJob = (item: JobListItem) => {
+    if (!hasRollbackData(item)) {
+      showError("Цей імпорт не містить даних для відклику");
+      return;
+    }
+    setRollbackTarget(item);
   };
 
   const downloadExport = async (item: JobListItem) => {
@@ -471,8 +882,8 @@ export function JobCenterPage() {
       {
         key: "source",
         header: "Джерело",
-        render: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "—"),
-        sortAccessor: (item) => (item.job_type === "import" ? formatImportSource(item.import_source) : "")
+        render: (item) => describeJobSource(item),
+        sortAccessor: (item) => describeJobSource(item)
       },
       {
         key: "status",
@@ -531,7 +942,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-red-100 px-2 py-1 text-xs font-semibold text-red-700"
-                onClick={() => cancelJob(item)}
+                onClick={() => requestCancelJob(item)}
               >
                 Скасувати
               </button>
@@ -540,7 +951,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-indigo-100 px-2 py-1 text-xs font-semibold text-indigo-700"
-                onClick={() => retryJob(item)}
+                onClick={() => requestRetryJob(item)}
               >
                 Повторити
               </button>
@@ -549,7 +960,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-700"
-                onClick={() => reprocessImportJob(item)}
+                onClick={() => requestReprocessImportJob(item)}
               >
                 2.2 Повторно імпортувати
               </button>
@@ -558,7 +969,7 @@ export function JobCenterPage() {
               <button
                 type="button"
                 className="rounded bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700"
-                onClick={() => rollbackImportJob(item)}
+                onClick={() => requestRollbackImportJob(item)}
               >
                 Відкликати імпорт
               </button>
@@ -591,9 +1002,45 @@ export function JobCenterPage() {
   );
 
   const activeJobRows = useMemo(
-    () => rows.filter((item) => item.job.status === "queued" || item.job.status === "running"),
+    () => rows.filter((item) => isActiveJobStatus(item.job.status)),
     [rows]
   );
+  const attentionJobRows = useMemo(
+    () => rows.filter((item) => item.job.status === "failed" || Boolean(getJobIssueMessage(item))).slice(0, 5),
+    [rows]
+  );
+  const driveIntakeStatus = useMemo(() => {
+    const latest = driveIntakeRows[0] || null;
+    return {
+      latest,
+      activeCount: driveIntakeRows.filter((item) => isActiveJobStatus(item.job.status)).length,
+      failedCount: driveIntakeRows.filter((item) => item.job.status === "failed" || Boolean(getJobIssueMessage(item))).length,
+      succeededCount: driveIntakeRows.filter((item) => item.job.status === "succeeded").length
+    };
+  }, [driveIntakeRows]);
+  const emailIntakeStatus = useMemo(() => {
+    const latest = emailIntakeRows[0] || null;
+    return {
+      latest,
+      activeCount: emailIntakeRows.filter((item) => isActiveJobStatus(item.job.status)).length,
+      failedCount: emailIntakeRows.filter((item) => item.job.status === "failed" || Boolean(getJobIssueMessage(item))).length,
+      succeededCount: emailIntakeRows.filter((item) => item.job.status === "succeeded").length
+    };
+  }, [emailIntakeRows]);
+  const cancelTargetLabel = cancelTarget?.document_file_name || cancelTarget?.output_file_name || cancelTarget?.report_type || `задачу #${cancelTarget?.job.id ?? ""}`;
+  const retryTargetLabel = retryTarget
+    ? getPayloadText(retryTarget.job.result_payload, "drive_file_name") ||
+      retryTarget.document_file_name ||
+      retryTarget.output_file_name ||
+      retryTarget.report_type ||
+      `задачу #${retryTarget.job.id}`
+    : "цю задачу";
+  const reprocessTargetFileName = reprocessTarget
+    ? getPayloadText(reprocessTarget.job.result_payload, "drive_file_name") || reprocessTarget.document_file_name || `задача #${reprocessTarget.job.id}`
+    : "цей файл";
+  const rollbackTargetFileName = rollbackTarget?.document_file_name || `імпорт #${rollbackTarget?.job.id ?? ""}`;
+  const rollbackInsertedCount = getRollbackInsertedCount(rollbackTarget);
+  const shouldShowDriveIntakePanel = Boolean(driveIntakeStatus.latest || driveIntakeLoadError || workerHealth);
 
   return (
     <div className="space-y-5">
@@ -608,25 +1055,407 @@ export function JobCenterPage() {
             <div>
               <p className="text-sm font-semibold text-ink">Фонові задачі</p>
               <p className="text-xs text-slate-600">Активно: {activeJobRows.length}</p>
+              <p className="text-xs text-slate-600">Автооновлення кожні {REFRESH_INTERVAL_MS / 1000} с</p>
             </div>
             <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">live</span>
           </div>
           <div className="max-h-64 space-y-2 overflow-auto">
             {activeJobRows.map((item) => (
-              <div key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="flex items-center justify-between gap-2 text-sm">
-                  <span className="font-semibold text-ink">#{item.job.id} {formatJobType(item.job_type)}</span>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-800">
-                    {formatJobStatus(item.job.status)}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs text-slate-600">
-                  {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
-                </p>
-              </div>
+              (() => {
+                const stage = getJobStage(item.job);
+                return (
+                  <div key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="font-semibold text-ink">
+                        #{item.job.id} {formatJobType(item.job_type)}
+                        {item.job_type === "import" && <span className="font-normal text-slate-500"> · {describeJobSource(item)}</span>}
+                      </span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-800">
+                        {formatJobStatus(item.job.status)}
+                      </span>
+                    </div>
+                    <div className="mt-2">
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs text-slate-600">
+                        <span>Крок {stage.step} з {stage.total}</span>
+                        <span>{stage.label}</span>
+                      </div>
+                      <div
+                        role="progressbar"
+                        aria-label={`Прогрес задачі #${item.job.id}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={stage.percent}
+                        className="h-2 overflow-hidden rounded-full bg-white"
+                      >
+                        <div className="h-full rounded-full bg-amber" style={{ width: `${stage.percent}%` }} />
+                      </div>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-xs text-slate-600">
+                      {item.job.message || item.document_file_name || item.output_file_name || "Очікує оновлення статусу"}
+                    </p>
+                    {(item.document_file_name || item.output_file_name) && (
+                      <p className="mt-1 truncate text-xs font-medium text-slate-700">
+                        Файл: {item.document_file_name || item.output_file_name}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()
             ))}
           </div>
         </aside>
+      )}
+      {shouldShowDriveIntakePanel && (
+        <CollapsibleSection
+          id="drive-intake-heading"
+          title="Google Drive intake"
+          description="Останні файли з intake-папки та їхній стан імпорту."
+          tone="sky"
+          testId="drive-intake-panel"
+          summary={
+            <>
+              <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {driveIntakeStatus.activeCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {driveIntakeStatus.failedCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {driveIntakeStatus.succeededCount}</span>
+              {workerHealth && (
+                <>
+                  <span className="rounded-full bg-white px-2 py-1 text-sky-800">
+                    {workerHealth.settings.drive_intake_auto_enabled
+                      ? "Автообробка: увімкнено"
+                      : "Автообробку Drive intake вимкнено"}
+                  </span>
+                  <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                    Інтервал: {workerHealth.settings.drive_intake_interval_seconds} с
+                  </span>
+                  {typeof workerHealth.settings.drive_intake_batch_size === "number" && (
+                    <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                      Batch: {workerHealth.settings.drive_intake_batch_size} файлів/tick
+                    </span>
+                  )}
+                </>
+              )}
+            </>
+          }
+        >
+          {driveIntakeDiagnostics && (
+            <div className="mb-3 rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                <span className="rounded-full bg-sky-50 px-2 py-1 text-sky-800">
+                  Drive бачить: {driveIntakeDiagnostics.supported_count} DOCX/XLSX
+                </span>
+                <span
+                  className={`rounded-full px-2 py-1 ${
+                    driveIntakeDiagnostics.unprocessed_supported_count > 0
+                      ? "bg-amber-50 text-amber-800"
+                      : "bg-emerald-50 text-emerald-800"
+                  }`}
+                >
+                  Без [processed]: {driveIntakeDiagnostics.unprocessed_supported_count}
+                </span>
+                <span className="rounded-full bg-slate-50 px-2 py-1 text-slate-700">
+                  Beat: {driveIntakeDiagnostics.beat_schedule_present ? "є" : "немає"}
+                </span>
+                <span className="rounded-full bg-slate-50 px-2 py-1 text-slate-700">
+                  Credentials: {driveIntakeDiagnostics.credentials_configured ? "є" : "немає"}
+                </span>
+              </div>
+              {driveIntakeDiagnostics.scan_error && (
+                <p className="mt-2 text-sm font-medium text-rose-800">{driveIntakeDiagnostics.scan_error}</p>
+              )}
+              {driveIntakeDiagnostics.unprocessed_supported_files.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {driveIntakeDiagnostics.unprocessed_supported_files.slice(0, 3).map((file) => (
+                    <p key={file.drive_file_id} className="text-xs text-slate-700">
+                      <span className="font-semibold">{file.name}</span>
+                      {file.job_status ? ` · job: ${formatJobStatus(file.job_status)}` : " · job ще не створено"}
+                      {file.job_message ? ` · ${file.job_message}` : ""}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {driveIntakeLoadError ? (
+            <div className="space-y-3">
+              <InlineNotice tone="error" text={`Не вдалося отримати історію Drive intake: ${driveIntakeLoadError}`} />
+              <p className="rounded-md border border-sky-200 bg-white px-3 py-2 text-sm text-sky-900">
+                Перевірте доступ API або service account до intake-папки. Поточні імпортовані дані не змінюються.
+              </p>
+            </div>
+          ) : driveIntakeStatus.latest ? (
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+              <article className="rounded-md border border-sky-200 bg-white p-3">
+                <p className="text-xs font-semibold uppercase text-slate-500">Останній файл</p>
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {getPayloadText(driveIntakeStatus.latest.job.result_payload, "drive_file_name") ||
+                    driveIntakeStatus.latest.document_file_name ||
+                    "Файл не вказано"}
+                </p>
+                <p className="mt-1 text-sm text-slate-700">
+                  #{driveIntakeStatus.latest.job.id} · {formatJobStatus(driveIntakeStatus.latest.job.status)}
+                </p>
+                <dl className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                  <div>
+                    <dt className="font-semibold text-slate-500">Оновлено:</dt>
+                    <dd>{formatJobDateTime(driveIntakeStatus.latest.job.updated_at)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-slate-500">Завершено:</dt>
+                    <dd>{formatJobDateTime(driveIntakeStatus.latest.job.finished_at)}</dd>
+                  </div>
+                </dl>
+                {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name") && (
+                  <p className="mt-2 text-sm text-slate-700">
+                    <span className="font-semibold">Drive після маркування:</span>{" "}
+                    {getPayloadText(driveIntakeStatus.latest.job.result_payload, "processed_drive_file_name")}
+                  </p>
+                )}
+                {driveIntakeStatus.latest.job.message && (
+                  <p className="mt-1 text-sm text-slate-700">{driveIntakeStatus.latest.job.message}</p>
+                )}
+                {getJobIssueHint(driveIntakeStatus.latest) && (
+                  <p className="mt-2 text-sm font-medium text-sky-900">{getJobIssueHint(driveIntakeStatus.latest)}</p>
+                )}
+              </article>
+              <div className="space-y-2">
+                {driveIntakeRows.map((item) => {
+                  const issueMessage = getJobIssueMessage(item);
+                  const fileName = getPayloadText(item.job.result_payload, "drive_file_name") || item.document_file_name || "Файл не вказано";
+                  const processedFileName = getPayloadText(item.job.result_payload, "processed_drive_file_name");
+                  return (
+                    <div key={`drive-intake-${item.job.id}`} className="rounded-md border border-sky-200 bg-white px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-ink">
+                          #{item.job.id} {fileName}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          {formatJobStatus(item.job.status)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Оновлено: {formatJobDateTime(item.job.updated_at)}
+                        {item.job.finished_at ? ` · Завершено: ${formatJobDateTime(item.job.finished_at)}` : ""}
+                      </p>
+                      {processedFileName && (
+                        <p className="mt-1 text-xs text-slate-600">
+                          <span className="font-semibold">Drive після маркування:</span> {processedFileName}
+                        </p>
+                      )}
+                      {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
+                      {item.document_id && (
+                        <button
+                          type="button"
+                          className="mt-2 rounded bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800"
+                          onClick={() => requestReprocessImportJob(item)}
+                        >
+                          Повторно імпортувати #{item.job.id}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <article className="rounded-md border border-sky-200 bg-white p-3">
+              <p className="text-sm font-semibold text-ink">Файлів Drive intake ще не оброблялось</p>
+              <p className="mt-1 text-sm text-slate-700">
+                {workerHealth?.settings.drive_intake_auto_enabled === false
+                  ? "Автообробку Drive intake вимкнено. Увімкніть її у конфігурації backend, коли потрібно забирати файли автоматично."
+                  : "Панель готова показати перші файли після наступної обробки intake-папки."}
+              </p>
+            </article>
+          )}
+        </CollapsibleSection>
+      )}
+      {emailIntakeStatus.latest && (
+        <CollapsibleSection
+          id="email-intake-heading"
+          title="Email intake"
+          description="Останні імпорти з Gmail API, Google Apps Script та поштового fallback."
+          tone="indigo"
+          testId="email-intake-panel"
+          summary={
+            <>
+              <span className="rounded-full bg-white px-2 py-1 text-amber-800">Активно: {emailIntakeStatus.activeCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {emailIntakeStatus.failedCount}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-emerald-800">Успішно: {emailIntakeStatus.succeededCount}</span>
+            </>
+          }
+        >
+          <div className="space-y-2">
+            {emailIntakeRows.map((item) => {
+              const issueMessage = getJobIssueMessage(item);
+              const issueHint = getJobIssueHint(item);
+              const fileName = item.document_file_name || "Вкладення не вказано";
+              return (
+                <div key={`email-intake-${item.job.id}`} className="rounded-md border border-indigo-200 bg-white px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-ink">
+                      #{item.job.id} {formatImportSource(item.import_source)} · {fileName}
+                    </span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                      {formatJobStatus(item.job.status)}
+                    </span>
+                  </div>
+                  {item.job.message && <p className="mt-1 text-sm text-slate-700">{item.job.message}</p>}
+                  {issueMessage && <p className="mt-1 text-sm text-rose-800">{issueMessage}</p>}
+                  {issueHint && <p className="mt-1 text-sm font-medium text-indigo-900">{issueHint}</p>}
+                </div>
+              );
+            })}
+          </div>
+        </CollapsibleSection>
+      )}
+      {workerHealth && (
+        <CollapsibleSection
+          id="worker-health-heading"
+          title="Worker health"
+          description="Celery, queues і beat schedule у режимі тільки перегляду."
+          tone="slate"
+          testId="worker-health-panel"
+          summary={
+            <>
+              <span className={workerHealth.celery.ping_ok ? "rounded-full bg-emerald-100 px-2 py-1 text-emerald-800" : "rounded-full bg-rose-100 px-2 py-1 text-rose-800"}>
+                {workerHealth.celery.ping_ok ? "Celery online" : "Celery degraded"}
+              </span>
+              <span className="rounded-full bg-white px-2 py-1 text-slate-700">
+                Активних задач: {workerHealth.backlog.total_active}
+              </span>
+            </>
+          }
+        >
+          <div className="grid gap-3 lg:grid-cols-3">
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Workers</p>
+              <p className="mt-1 text-sm font-semibold text-ink">
+                {workerHealth.celery.workers.length ? workerHealth.celery.workers.join(", ") : "Не відповідають"}
+              </p>
+              {workerHealth.celery.error && <p className="mt-1 text-sm text-rose-800">{workerHealth.celery.error}</p>}
+            </article>
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Backlog</p>
+              <p className="mt-1 text-sm text-slate-700">
+                Import: {workerHealth.backlog.import.queued} у черзі, {workerHealth.backlog.import.running} виконується
+              </p>
+              <p className="text-sm text-slate-700">
+                Export: {workerHealth.backlog.export.queued} у черзі, {workerHealth.backlog.export.running} виконується
+              </p>
+            </article>
+            <article className="rounded-md border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">Beat</p>
+              <div className="mt-1 space-y-1 text-sm text-slate-700">
+                {workerHealth.beat_schedule.length ? (
+                  workerHealth.beat_schedule.map((item) => (
+                    <p key={item.name}>
+                      {item.name}
+                      {typeof item.schedule_seconds === "number" ? ` · ${item.schedule_seconds} с` : ""}
+                    </p>
+                  ))
+                ) : (
+                  <p>Немає налаштованих beat задач</p>
+                )}
+              </div>
+            </article>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
+            {workerHealth.queues.map((item) => (
+              <span key={`${item.task}-${item.queue}`} className="rounded-full bg-white px-2 py-1 text-slate-700">
+                {item.queue || item.task}
+              </span>
+            ))}
+          </div>
+          <div className="mt-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">
+            <p>
+              <span className="font-semibold text-slate-900">Email канал:</span>{" "}
+              {formatMailChannel(workerHealth.settings.mail_primary_channel)}
+            </p>
+            {typeof workerHealth.settings.drive_intake_batch_size === "number" && (
+              <p className="mt-1">
+                <span className="font-semibold text-slate-900">Drive batch:</span>{" "}
+                {workerHealth.settings.drive_intake_batch_size} файлів/tick
+              </p>
+            )}
+            <p className="mt-1">
+              <span className="font-semibold text-slate-900">IMAP fallback:</span>{" "}
+              {formatEnabled(workerHealth.settings.imap_fallback_enabled)}
+            </p>
+            <p className="mt-1">
+              <span className="font-semibold text-slate-900">IMAP auto poll:</span>{" "}
+              {formatEnabled(workerHealth.settings.imap_auto_poll_enabled)}
+            </p>
+            {mailFallbackNotice && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-900">
+                {mailFallbackNotice}
+              </p>
+            )}
+          </div>
+        </CollapsibleSection>
+      )}
+      {attentionJobRows.length > 0 && (
+        <CollapsibleSection
+          id="job-attention-heading"
+          title="Потребують уваги"
+          description="Помилки імпорту, Drive або email, які варто перевірити першими."
+          tone="rose"
+          testId="job-attention-panel"
+          summary={<span className="rounded-full bg-white px-2 py-1 text-rose-800">Помилок: {attentionJobRows.length}</span>}
+          action={
+            <button
+              type="button"
+              className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-semibold text-rose-800"
+              onClick={() => {
+                setJobType("all");
+                setJobStatus("failed");
+              }}
+            >
+              Показати всі помилки
+            </button>
+          }
+        >
+          <div className="grid gap-2 lg:grid-cols-2">
+            {attentionJobRows.map((item) => {
+              const issueMessage = getJobIssueMessage(item) || "Потрібна перевірка";
+              const issueHint = getJobIssueHint(item);
+              const driveFileName = getPayloadText(item.job.result_payload, "drive_file_name");
+              const documentName = driveFileName || item.document_file_name || item.output_file_name || item.report_type || "Документ не вказано";
+              return (
+                <article key={`${item.job_type}-${item.job.id}`} className="rounded-md border border-rose-200 bg-white p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-ink">
+                      #{item.job.id} {formatJobType(item.job_type)}
+                      {item.job_type === "import" && <span className="font-normal text-slate-500"> · {describeJobSource(item)}</span>}
+                    </div>
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                      {formatJobStatus(item.job.status)}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-700">{documentName}</p>
+                  <p className="mt-1 text-sm font-medium text-rose-800">{issueMessage}</p>
+                  {issueHint && <p className="mt-1 text-sm text-slate-700">{issueHint}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {item.job.status === "failed" && (
+                      <button
+                        type="button"
+                        className="rounded bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700"
+                        onClick={() => requestRetryJob(item)}
+                      >
+                        Повторити #{item.job.id}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded bg-amber px-2.5 py-1 text-xs font-semibold text-ink"
+                      onClick={() => refreshOne(item)}
+                    >
+                      Оновити #{item.job.id}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </CollapsibleSection>
       )}
       <Panel title="1.1 Центр імпорту">
         <InlineNotice
@@ -966,6 +1795,60 @@ export function JobCenterPage() {
           pageSizeOptions={[10, 20, 50, 100]}
         />
       </Panel>
+      <ConfirmDialog
+        open={Boolean(cancelTarget)}
+        title="Скасувати задачу"
+        description={`Скасувати активну задачу «${cancelTargetLabel}»? Уже виконані кроки можуть залишитися в історії, але задача більше не продовжуватиметься.`}
+        confirmLabel={isCancellingJob ? "Скасовуємо..." : "Скасувати задачу"}
+        confirmDisabled={isCancellingJob}
+        onConfirm={() => {
+          if (cancelTarget) void cancelJob(cancelTarget);
+        }}
+        onCancel={() => {
+          if (!isCancellingJob) setCancelTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(retryTarget)}
+        title="Повторити задачу"
+        description={`Повторити задачу «${retryTargetLabel}»? Вона знову буде поставлена в чергу та може повторно звернутися до зовнішнього джерела або файлу.`}
+        confirmLabel={isRetryingJob ? "Перезапускаємо..." : "Повторити задачу"}
+        confirmVariant="primary"
+        confirmDisabled={isRetryingJob}
+        onConfirm={() => {
+          if (retryTarget) void retryJob(retryTarget);
+        }}
+        onCancel={() => {
+          if (!isRetryingJob) setRetryTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(reprocessTarget)}
+        title="Повторно імпортувати файл"
+        description={`Створити нову задачу імпорту для «${reprocessTargetFileName}»? Поточна історія залишиться без змін, а новий імпорт піде окремою задачею.`}
+        confirmLabel={isReprocessingImport ? "Створюємо..." : "Повторно імпортувати"}
+        confirmVariant="primary"
+        confirmDisabled={isReprocessingImport}
+        onConfirm={() => {
+          if (reprocessTarget) void reprocessImportJob(reprocessTarget);
+        }}
+        onCancel={() => {
+          if (!isReprocessingImport) setReprocessTarget(null);
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(rollbackTarget)}
+        title="Відкликати імпорт"
+        description={`Відкликати імпорт «${rollbackTargetFileName}»? Буде видалено записи, створені цим імпортом: ${rollbackInsertedCount}.`}
+        confirmLabel={isRollingBackImport ? "Відкликаємо..." : "Відкликати імпорт"}
+        confirmDisabled={isRollingBackImport}
+        onConfirm={() => {
+          if (rollbackTarget) void rollbackImportJob(rollbackTarget);
+        }}
+        onCancel={() => {
+          if (!isRollingBackImport) setRollbackTarget(null);
+        }}
+      />
     </div>
   );
 }

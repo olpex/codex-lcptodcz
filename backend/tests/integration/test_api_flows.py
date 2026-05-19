@@ -512,6 +512,57 @@ def test_dashboard_kpi_uses_current_year_journal_count_when_section_exists(clien
     assert response.json()["active_groups"] == 2
 
 
+def test_dashboard_kpi_counts_journal_workbook_files_not_groups_or_folders(client, auth_headers, db_session):
+    groups = [
+        Group(branch_id="main", code=f"KPI-GROUP-{index}", name=f"Група {index}", status=GroupStatus.ACTIVE)
+        for index in range(7)
+    ]
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([*groups, section])
+    db_session.flush()
+    db_session.add_all(
+        [
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-16p-26-practice",
+                drive_folder_id="folder-16p-26",
+                journal_name="16п-26 Практика.xlsx",
+                group_code="16п-26",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-16p-26-theory",
+                drive_folder_id="folder-16p-26",
+                journal_name="16п-26 Теорія.xlsx",
+                group_code="16п-26",
+            ),
+            JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="workbook-17-26",
+                drive_folder_id="folder-17-26",
+                journal_name="17-26 Журнал.xlsx",
+                group_code="17-26",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/dashboard/kpi?year=2026", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["journal_count"] == 3
+    assert payload["active_groups"] == 3
+
+
 def test_dashboard_student_plan_uses_processed_group_trainees(client, auth_headers, db_session):
     for index in range(24):
         db_session.add(
@@ -668,6 +719,47 @@ def test_dashboard_attention_collects_actionable_items(client, auth_headers, db_
     assert items["orphan_group_codes"]["count"] == 1
     assert items["groups_without_schedule"]["count"] == 1
     assert payload["total_count"] == 5
+
+
+def test_dashboard_attention_uses_very_short_lived_cache(client, auth_headers, db_session, monkeypatch):
+    cache: dict[str, dict] = {}
+    cache_sets: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(dashboard_route, "cache_get_json", lambda key: cache.get(key))
+
+    def fake_cache_set(key: str, payload: dict, ttl_seconds: int) -> None:
+        cache[key] = payload
+        cache_sets.append((key, ttl_seconds))
+
+    monkeypatch.setattr(dashboard_route, "cache_set_json", fake_cache_set)
+
+    first = client.get("/api/v1/dashboard/attention", headers=auth_headers)
+    assert first.status_code == 200
+    assert cache_sets == [("dashboard:attention:main", 15)]
+
+    document = Document(
+        branch_id="main",
+        file_name="late-attention.docx",
+        file_path="tmp/late-attention.docx",
+        file_type=DocumentType.DOCX,
+        source="upload",
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        ImportJob(
+            branch_id="main",
+            idempotency_key="main:attention-cache-late-failed",
+            document_id=document.id,
+            status=JobStatus.FAILED,
+            message="Пізня помилка",
+        )
+    )
+    db_session.commit()
+
+    second = client.get("/api/v1/dashboard/attention", headers=auth_headers)
+    assert second.status_code == 200
+    assert second.json() == first.json()
 
 
 def test_active_groups_between_dates_and_excel_export(client, auth_headers, db_session):

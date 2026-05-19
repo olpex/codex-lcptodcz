@@ -7,8 +7,23 @@ from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same
 from app.models import Group, GroupStatus, JournalMonitorEntry, RoleName, Room, ScheduleSlot, Subject, Teacher
 from app.schemas.api import ScheduleDeleteResponse, ScheduleGenerateRequest, ScheduleSlotResponse, ScheduleSlotUpdate
 from app.services.audit import write_audit
+from app.services.cache import cache_get_json, cache_set_json
+from app.services.group_cache import invalidate_group_list_cache
+from app.services.schedule_cache import (
+    SCHEDULE_LIST_CACHE_TTL_SECONDS,
+    invalidate_schedule_list_cache,
+    schedule_list_cache_key,
+)
 
 router = APIRouter()
+
+
+def _schedule_list_cache_key(branch_id: str) -> str:
+    return schedule_list_cache_key(branch_id)
+
+
+def _invalidate_schedule_list_cache(branch_id: str) -> None:
+    invalidate_schedule_list_cache(branch_id)
 
 
 def _get_or_create_schedule_placeholder_room(db: DbSession, branch_id: str) -> Room:
@@ -151,6 +166,8 @@ def generate_schedule(payload: ScheduleGenerateRequest, db: DbSession, current_u
                 # If no slot is available for this group/day, continue generation for others.
                 continue
     db.commit()
+    _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     for slot in created:
         db.refresh(slot)
 
@@ -173,6 +190,13 @@ def list_schedule(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
 ) -> list[ScheduleSlotResponse]:
+    can_use_cache = group_id is None and date_from is None and date_to is None
+    cache_key = _schedule_list_cache_key(current_user.branch_id)
+    if can_use_cache:
+        cached = cache_get_json(cache_key)
+        if isinstance(cached, list):
+            return [ScheduleSlotResponse.model_validate(item) for item in cached]
+
     query = db.query(ScheduleSlot).join(Group, Group.id == ScheduleSlot.group_id).filter(Group.branch_id == current_user.branch_id)
     if group_id:
         group = db.get(Group, group_id)
@@ -186,7 +210,10 @@ def list_schedule(
         query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
     slots = query.order_by(ScheduleSlot.starts_at.asc()).all()
-    return _to_schedule_responses(db, slots)
+    response = _to_schedule_responses(db, slots)
+    if can_use_cache:
+        cache_set_json(cache_key, [item.model_dump(mode="json") for item in response], SCHEDULE_LIST_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.delete(
@@ -241,6 +268,8 @@ def delete_group_schedule(group_id: int, db: DbSession, current_user: CurrentUse
         },
     )
     db.commit()
+    _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     return ScheduleDeleteResponse(
         group_id=group.id,
         group_code=group.code,
@@ -282,6 +311,8 @@ def update_schedule_slot(
 
     db.add(slot)
     db.commit()
+    _invalidate_schedule_list_cache(current_user.branch_id)
+    invalidate_group_list_cache(current_user.branch_id)
     db.refresh(slot)
 
     write_audit(

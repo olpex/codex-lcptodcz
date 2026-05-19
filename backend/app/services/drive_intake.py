@@ -380,7 +380,13 @@ def _rerun_existing_import_job(
     db.add(job)
     db.commit()
 
-    runner_result = import_job_runner(job.id)
+    try:
+        runner_result = import_job_runner(job.id)
+    except Exception as exc:
+        db.rollback()
+        db.expire_all()
+        refreshed = db.get(ImportJob, job.id)
+        return {"error": str(exc)}, refreshed or job
     db.expire_all()
     return runner_result, db.get(ImportJob, job.id) or job
 
@@ -419,8 +425,10 @@ def _job_status_value(job: ImportJob) -> str:
 
 
 def _mark_processed_after_success(
+    db: Session,
     job: ImportJob,
     *,
+    branch_id: str,
     file_id: str,
     original_name: str,
     service_account_json: str | None,
@@ -432,6 +440,14 @@ def _mark_processed_after_success(
     processed_name = _processed_drive_filename(original_name)
     if processed_name == original_name:
         return False, processed_name, None
+    if job.document and job.document.file_type == DocumentType.DOCX:
+        has_visible_slots = _schedule_docx_payload_has_slots(db, job, branch_id)
+        if has_visible_slots is not True:
+            return (
+                False,
+                processed_name,
+                "DOCX import succeeded but schedule slots are not visible in the project; file will be retried.",
+            )
 
     try:
         processed_file_marker(file_id, processed_name, service_account_json)
@@ -477,6 +493,7 @@ def process_next_drive_intake_file(
     downloader: Downloader = download_drive_file_bytes,
     import_job_runner: ImportJobRunner | None = None,
     processed_file_marker: ProcessedFileMarker | None = mark_drive_intake_file_processed,
+    excluded_job_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     effective_folder_url = (folder_url if folder_url is not None else settings.google_drive_intake_folder_url).strip()
     effective_folder_id = (folder_id or "").strip() or (extract_drive_folder_id(effective_folder_url) if effective_folder_url else "")
@@ -513,6 +530,9 @@ def process_next_drive_intake_file(
             modified_time=modified_time,
             filename=raw_name,
         )
+        if existing_job and excluded_job_ids and existing_job.id in excluded_job_ids:
+            skipped_already_processed += 1
+            continue
         reprocesses_legacy_success_job = False
         if existing_job and existing_job.idempotency_key == legacy_idempotency_key:
             if existing_job.status == JobStatus.SUCCEEDED:
@@ -557,6 +577,7 @@ def process_next_drive_intake_file(
                     "drive_file_id": file_id,
                     "runner_result": runner_result,
                     "resynced_schedule": True,
+                    **({"failed": 1} if existing_job.status == JobStatus.FAILED else {}),
                 }
             skipped_marked_processed += 1
             continue
@@ -565,11 +586,17 @@ def process_next_drive_intake_file(
             if existing_job.status == JobStatus.FAILED:
                 runner_result = None
                 if import_job_runner is not None:
-                    runner_result = import_job_runner(existing_job.id)
+                    try:
+                        runner_result = import_job_runner(existing_job.id)
+                    except Exception as exc:
+                        db.rollback()
+                        runner_result = {"error": str(exc)}
                     db.expire_all()
                     existing_job = db.get(ImportJob, existing_job.id) or existing_job
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
                     existing_job,
+                    branch_id=effective_branch_id,
                     file_id=file_id,
                     original_name=raw_name,
                     service_account_json=service_account_json,
@@ -585,6 +612,52 @@ def process_next_drive_intake_file(
                     "drive_file_id": file_id,
                     "runner_result": runner_result,
                     "retried_failed_job": True,
+                    **({"failed": 1} if existing_job.status == JobStatus.FAILED else {}),
+                    **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
+                    **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
+                }
+            if (
+                not is_marked_processed
+                and existing_job.status == JobStatus.SUCCEEDED
+                and doc_type == DocumentType.DOCX
+            ):
+                resync_reason = _schedule_docx_resync_reason(db, existing_job, effective_branch_id)
+                runner_result, existing_job = _rerun_existing_import_job(
+                    db,
+                    existing_job,
+                    import_job_runner,
+                    import_mode=_default_import_mode(doc_type),
+                )
+                marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
+                    existing_job,
+                    branch_id=effective_branch_id,
+                    file_id=file_id,
+                    original_name=raw_name,
+                    service_account_json=service_account_json,
+                    processed_file_marker=processed_file_marker,
+                )
+                if marked_processed:
+                    _remember_processed_drive_name(
+                        db,
+                        existing_job,
+                        branch_id=effective_branch_id,
+                        file_id=file_id,
+                        modified_time=modified_time,
+                        processed_name=processed_name,
+                    )
+                return {
+                    "processed": 1,
+                    "skipped_already_processed": skipped_already_processed,
+                    "skipped_unsupported": skipped_unsupported,
+                    "job_id": existing_job.id,
+                    "status": _job_status_value(existing_job),
+                    "filename": filename,
+                    "drive_file_id": file_id,
+                    "runner_result": runner_result,
+                    "reprocessed_unmarked_schedule": True,
+                    **({"resynced_schedule": True} if resync_reason else {}),
+                    **({"failed": 1} if existing_job.status == JobStatus.FAILED else {}),
                     **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
@@ -617,7 +690,9 @@ def process_next_drive_intake_file(
                     import_mode=_default_import_mode(doc_type),
                 )
                 marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                    db,
                     existing_job,
+                    branch_id=effective_branch_id,
                     file_id=file_id,
                     original_name=raw_name,
                     service_account_json=service_account_json,
@@ -642,11 +717,14 @@ def process_next_drive_intake_file(
                     "drive_file_id": file_id,
                     "runner_result": runner_result,
                     "resynced_schedule": True,
+                    **({"failed": 1} if existing_job.status == JobStatus.FAILED else {}),
                     **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
                     **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
                 }
             marked_processed, processed_name, marking_error = _mark_processed_after_success(
+                db,
                 existing_job,
+                branch_id=effective_branch_id,
                 file_id=file_id,
                 original_name=raw_name,
                 service_account_json=service_account_json,
@@ -714,11 +792,17 @@ def process_next_drive_intake_file(
 
         runner_result = None
         if import_job_runner is not None:
-            runner_result = import_job_runner(job.id)
+            try:
+                runner_result = import_job_runner(job.id)
+            except Exception as exc:
+                db.rollback()
+                runner_result = {"error": str(exc)}
             db.expire_all()
             job = db.get(ImportJob, job.id) or job
         marked_processed, processed_name, marking_error = _mark_processed_after_success(
+            db,
             job,
+            branch_id=effective_branch_id,
             file_id=file_id,
             original_name=raw_name,
             service_account_json=service_account_json,
@@ -743,6 +827,7 @@ def process_next_drive_intake_file(
             "filename": filename,
             "drive_file_id": file_id,
             "runner_result": runner_result,
+            **({"failed": 1} if job.status == JobStatus.FAILED else {}),
             **({"marked_processed": True, "processed_drive_file_name": processed_name} if marked_processed else {}),
             **({"processed_drive_file_name": processed_name, "marking_error": marking_error} if marking_error else {}),
             **({"reprocessed_legacy_success_job": True} if reprocesses_legacy_success_job else {}),

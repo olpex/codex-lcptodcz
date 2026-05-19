@@ -1,6 +1,10 @@
 import re
+from pathlib import Path
 
-with open("frontend/src/pages/SchedulePage.tsx", "r", encoding="utf-8") as f:
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SCHEDULE_PAGE = REPO_ROOT / "frontend" / "src" / "pages" / "SchedulePage.tsx"
+
+with SCHEDULE_PAGE.open("r", encoding="utf-8") as f:
     content = f.read()
 
 # 1. We don't need DataTable anymore for the Schedule grids
@@ -170,7 +174,7 @@ render_calendar_code = """
 """
 content = re.sub(r'<DataTable[\s\S]*?pageSizeOptions=\{\[10, 20, 50\]\}\n\s*\/>', render_calendar_code.strip(), content)
 
-with open("frontend/src/pages/SchedulePage.tsx", "w", encoding="utf-8") as f:
+with SCHEDULE_PAGE.open("w", encoding="utf-8") as f:
     f.write(content)
 
 print("SchedulePage updated successfully.")

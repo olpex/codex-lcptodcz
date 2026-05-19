@@ -85,12 +85,89 @@ test("schedule date accordion toggles with keyboard", async ({ page }) => {
   await page.goto("/schedule");
 
   const firstDateToggle = page.locator("div.space-y-3 > div > button").first();
-  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "false");
 
   await firstDateToggle.focus();
   await page.keyboard.press("Enter");
-  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "true");
 
   await page.keyboard.press("Enter");
-  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(firstDateToggle).toHaveAttribute("aria-expanded", "false");
+});
+
+test("app layout skip link moves keyboard focus to main content", async ({ page }) => {
+  await mockAuthorizedSchedule(page);
+  await page.goto("/schedule");
+
+  const skipLink = page.getByRole("link", { name: "Перейти до основного контенту" });
+  await expect(skipLink).toBeAttached();
+  const firstFocusableText = await page.evaluate(() => {
+    const focusable = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => element.tabIndex >= 0 && !element.hasAttribute("disabled"));
+    return focusable[0]?.textContent?.trim() ?? "";
+  });
+  expect(firstFocusableText).toBe("Перейти до основного контенту");
+
+  await skipLink.focus();
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toBeVisible();
+
+  await page.keyboard.press("Enter");
+  const mainContent = page.locator("main#main-content");
+  await expect(page).toHaveURL(/#main-content$/);
+  await expect(mainContent).toBeFocused();
+});
+
+test("mobile navigation dialog manages keyboard focus", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthorizedSchedule(page);
+  await page.goto("/schedule");
+
+  const openMenuButton = page.getByRole("button", { name: "Відкрити меню" });
+  await openMenuButton.focus();
+  await page.keyboard.press("Enter");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Закрити", exact: true })).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(openMenuButton).toBeFocused();
+});
+
+test("mobile navigation dialog has an accessible name", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthorizedSchedule(page);
+  await page.goto("/schedule");
+
+  await page.getByRole("button", { name: "Відкрити меню" }).click();
+
+  await expect(page.getByRole("dialog", { name: "Навігація" })).toBeVisible();
+});
+
+test("mobile navigation dialog traps tab focus", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthorizedSchedule(page);
+  await page.goto("/schedule");
+
+  await page.getByRole("button", { name: "Відкрити меню" }).click();
+
+  const dialog = page.getByRole("dialog");
+  const closeButton = dialog.getByRole("button", { name: "Закрити", exact: true });
+  const firstLink = dialog.getByRole("link", { name: "Дашборд" });
+  const lastLink = dialog.getByRole("link", { name: "Пошук" });
+
+  await expect(closeButton).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(lastLink).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(closeButton).toBeFocused();
+
+  await page.keyboard.press("Tab");
+  await expect(firstLink).toBeFocused();
 });

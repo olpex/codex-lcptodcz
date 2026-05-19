@@ -457,6 +457,7 @@ class TeacherMergeResponse(BaseModel):
 
 class DashboardKPIResponse(BaseModel):
     active_groups: int
+    journal_count: int
     active_trainees: int
     training_plan_progress_pct: float
     student_plan_year: int
@@ -499,6 +500,7 @@ class JournalMonitorStats(BaseModel):
     trainees_only: int = 0
     not_processed: int = 0
     unknown_code: int = 0
+    workload_only: int = 0
     workload_and_trainees: int = 0
     workload_trainees_schedule: int = 0
 

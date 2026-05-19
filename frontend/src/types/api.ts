@@ -181,6 +181,7 @@ export interface TeacherMergeResult {
 
 export interface KPI {
   active_groups: number;
+  journal_count: number;
   active_trainees: number;
   training_plan_progress_pct: number;
   student_plan_year: number;
@@ -219,6 +220,7 @@ export interface JournalMonitorStats {
   trainees_only: number;
   not_processed: number;
   unknown_code: number;
+  workload_only: number;
   workload_and_trainees: number;
   workload_trainees_schedule: number;
 }

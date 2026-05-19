@@ -57,8 +57,11 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 
 Для черг Celery (`worker`, `beat`) потрібен окремий хостинг процесів поза Vercel.
 
+- Загальна топологія і runbook: `infra/DEPLOY.md`
+- Детальна топологія Celery worker/beat: `docs/architecture/celery-worker-topology.md`
 - Інструкція: `infra/vercel/README.md`
 - Compose-файл: `infra/vercel/docker-compose.workers.yml`
+- API versioning/deprecation policy: `docs/architecture/api-versioning.md`
 
 ### Автообробка вхідної пошти (контракти/договори)
 
@@ -92,12 +95,13 @@ Backend endpoint: `POST /api/v1/auth/admin-reset-password`.
 Окремо від папки журналів підтримується intake-папка для файлів розкладу (`.docx`) та даних слухачів (`.xls/.xlsx`, Google Sheets). За замовчуванням це:
 
 - `GOOGLE_DRIVE_INTAKE_FOLDER_URL=https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY`
-- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=45`
+- `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS=30`
+- `GOOGLE_DRIVE_INTAKE_BATCH_SIZE=50`
 - `GOOGLE_DRIVE_INTAKE_AUTO_ENABLED=true`
 - `GOOGLE_DRIVE_INTAKE_UPDATE_MODE=overwrite`
 - `GOOGLE_DRIVE_INTAKE_PROCESSED_MARKER=[processed]`
 
-Один tick обробляє один ще не оброблений файл. Запуск відбувається серверно через Celery beat/worker або через cron endpoint `/api/v1/journal-monitors/auto-cron`; сесійний `/api/v1/journal-monitors/auto-tick`, який фронтенд викликає фоново, є лише додатковим прискоренням під час відкритої вкладки.
+За замовчуванням один Celery tick може обробити до 50 ще не оброблених файлів, але зупиняється раніше, якщо папка порожня, файл уже оброблений або виникла контрольована помилка. Для більш обережного rollout можна тимчасово зменшити `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` до `1`; максимальне значення обмежене `50`. Запуск відбувається серверно через Celery beat/worker або через cron endpoint `/api/v1/journal-monitors/auto-cron`. Deprecated endpoint `/api/v1/journal-monitors/auto-tick` залишений як захисна сумісність для старих клієнтів і повертає `410 Gone`; frontend не має запускати фонову обробку через відкриту вкладку браузера.
 Після успішного імпорту backend додає маркер до назви Drive-файлу, наприклад `184-25 Contracts [processed].xlsx`, і наступні tick-и пропускають такі файли. Щоб повторно імпортувати та доповнити або скоригувати дані, приберіть маркер з назви файлу в Google Drive.
 Для доступу до приватної intake-папки використовується `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`; якщо він не заданий глобально, backend бере JSON-ключ з активного розділу `Журнали` тієї ж філії. Для маркування файлів service account має мати доступ `Editor`, бо система перейменовує успішно оброблені файли.
 

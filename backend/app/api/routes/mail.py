@@ -91,6 +91,13 @@ def _imap_polling_disabled_payload() -> dict:
         "dispatch_mode": "disabled",
         "primary_channel": _mail_primary_channel(),
         "imap_fallback_enabled": settings.imap_fallback_enabled,
+        "disabled_reason": "primary_channel_google_apps_script",
+        "operator_hint": (
+            "IMAP fallback is intentionally disabled while Google Apps Script is primary. "
+            "Use IMAP_FALLBACK_ENABLED=true only for a controlled fallback window; "
+            "enable IMAP_AUTO_POLL_ENABLED=true only when IMAP should actively poll."
+        ),
+        "runbook": "docs/architecture/celery-worker-topology.md#mail-channel-and-imap-fallback",
         "result": {"processed": 0, "disabled": True},
     }
 

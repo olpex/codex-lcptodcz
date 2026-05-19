@@ -12,6 +12,7 @@ import type { AttentionSummary, KPI, StudentPlan, Workload } from "../types/api"
 
 const EMPTY_KPI: KPI = {
   active_groups: 0,
+  journal_count: 0,
   active_trainees: 0,
   training_plan_progress_pct: 0,
   student_plan_year: new Date().getFullYear(),
@@ -30,8 +31,8 @@ const EMPTY_ATTENTION: AttentionSummary = {
 
 const KPI_CARDS = [
   {
-    key: "active_groups",
-    title: "Активні групи",
+    key: "journal_count",
+    title: "Журнали",
     formatValue: (value: number) => String(value),
     deltaSuffix: ""
   },
@@ -106,6 +107,7 @@ export function DashboardPage() {
   const [attention, setAttention] = useState<AttentionSummary>(EMPTY_ATTENTION);
   const [workload, setWorkload] = useState<Workload[]>([]);
   const [history, setHistory] = useState<KPI[]>([]);
+  const [dashboardYear, setDashboardYear] = useState(String(EMPTY_KPI.student_plan_year));
   const [planYear, setPlanYear] = useState(String(EMPTY_KPI.student_plan_year));
   const [planTarget, setPlanTarget] = useState("");
   const [isPlanSaving, setIsPlanSaving] = useState(false);
@@ -120,6 +122,10 @@ export function DashboardPage() {
     () => user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false,
     [user]
   );
+  const effectiveDashboardYear = useMemo(() => {
+    const value = Number(dashboardYear);
+    return Number.isInteger(value) && value >= 2000 && value <= 2100 ? value : EMPTY_KPI.student_plan_year;
+  }, [dashboardYear]);
 
   const fetchKpi = async (isBackgroundRefresh = false) => {
     const requestId = latestKpiRequestRef.current + 1;
@@ -128,14 +134,18 @@ export function DashboardPage() {
       setIsLoading(true);
     }
     try {
+      const year = String(effectiveDashboardYear);
       const [data, attentionData, workloadData] = await Promise.all([
-        request<KPI>("/dashboard/kpi"),
-        request<AttentionSummary>("/dashboard/attention"),
-        request<Workload[]>("/teacher-workload")
+        request<KPI>(`/dashboard/kpi?year=${encodeURIComponent(year)}`),
+        canEditPlan ? request<AttentionSummary>("/dashboard/attention") : Promise.resolve(EMPTY_ATTENTION),
+        request<Workload[]>(
+          `/teacher-workload?date_from=${encodeURIComponent(`${year}-01-01`)}&date_to=${encodeURIComponent(`${year}-12-31`)}`
+        )
       ]);
       const nextKpi = {
         ...EMPTY_KPI,
         ...data,
+        journal_count: data.journal_count ?? data.active_groups ?? 0,
         student_plan_year: data.student_plan_year ?? EMPTY_KPI.student_plan_year,
         student_plan_target: data.student_plan_target ?? 0,
         student_plan_processed: data.student_plan_processed ?? data.active_trainees ?? 0
@@ -176,13 +186,19 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
+    setHistory([]);
+    planFormDirtyRef.current = false;
     fetchKpi();
-  }, []);
+  }, [dashboardYear]);
 
   usePageRefresh(() => fetchKpi(true), { intervalMs: 15_000 });
 
   const saveStudentPlan = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canEditPlan) {
+      showError("Редагування річного плану доступне лише адміністратору або методисту");
+      return;
+    }
     const year = Number(planYear);
     const target = Number(planTarget);
     if (!Number.isInteger(year) || year < 2000 || year > 2100) {
@@ -220,7 +236,7 @@ export function DashboardPage() {
   };
 
   const chartData = [
-    { name: "Групи", value: kpi.active_groups },
+    { name: "Журнали", value: kpi.journal_count },
     { name: "Слухачі", value: kpi.active_trainees },
     { name: "Випуск", value: kpi.forecast_graduation },
     { name: "Працевлашт.", value: kpi.forecast_employment }
@@ -228,7 +244,7 @@ export function DashboardPage() {
 
   const seriesByKey = useMemo<Record<CardKey, number[]>>(
     () => ({
-      active_groups: history.map((item) => item.active_groups),
+      journal_count: history.map((item) => item.journal_count ?? item.active_groups),
       active_trainees: history.map((item) => item.active_trainees),
       training_plan_progress_pct: history.map((item) => item.training_plan_progress_pct)
     }),
@@ -246,6 +262,23 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
+        <div>
+          <h2 className="text-lg font-semibold text-ink">Дашборд за рік</h2>
+          <p className="text-sm text-slate-600">KPI, план і педнавантаження рахуються для вибраного року.</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          Рік
+          <input
+            className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+            type="number"
+            min={2000}
+            max={2100}
+            value={dashboardYear}
+            onChange={(event) => setDashboardYear(event.target.value)}
+          />
+        </label>
+      </div>
       {loadError && (
         <InlineNotice tone="error" text={loadError} actionLabel="Оновити KPI" onAction={() => fetchKpi()} />
       )}
@@ -406,6 +439,14 @@ export function DashboardPage() {
         {isLoading && !hasLoadedOnce ? (
           <div className="flex h-24 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-600">
             Завантаження перевірок...
+          </div>
+        ) : !canEditPlan ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="font-semibold text-ink">Управлінські перевірки</p>
+            <p className="mt-1">
+              Цей блок доступний адміністратору або методисту. Для викладача головний екран показує KPI та
+              педнавантаження без службових перевірок імпорту, чернеток і реєстрів.
+            </p>
           </div>
         ) : attention.items.length === 0 ? (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">

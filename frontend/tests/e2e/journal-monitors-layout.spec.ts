@@ -13,6 +13,7 @@ const section = {
     trainees_only: 0,
     not_processed: 0,
     unknown_code: 0,
+    workload_only: 1,
     workload_and_trainees: 1,
     workload_trainees_schedule: 1
   },
@@ -132,6 +133,7 @@ const archiveSection = {
   ...section,
   id: 2,
   name: "Журнали 2025",
+  is_active: false,
   folder_url: "https://drive.google.com/drive/folders/archive",
   last_synced_at: "2026-05-03T09:00:00Z",
   stats: {
@@ -140,7 +142,10 @@ const archiveSection = {
     schedule_only: 20,
     trainees_only: 10,
     not_processed: 30,
-    unknown_code: 0
+    unknown_code: 0,
+    workload_only: 0,
+    workload_and_trainees: 0,
+    workload_trainees_schedule: 0
   },
   entries: []
 };
@@ -173,6 +178,32 @@ const noDataSection = {
   ]
 };
 
+const failedDriveSection = {
+  ...section,
+  last_sync_status: "failed",
+  last_sync_message: "GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON не налаштовано для приватної папки",
+  last_synced_at: null,
+  entries: []
+};
+
+const emptyDriveSection = {
+  ...section,
+  last_sync_status: "success",
+  last_sync_message: null,
+  stats: {
+    total: 0,
+    complete: 0,
+    schedule_only: 0,
+    trainees_only: 0,
+    not_processed: 0,
+    unknown_code: 0,
+    workload_only: 0,
+    workload_and_trainees: 0,
+    workload_trainees_schedule: 0
+  },
+  entries: []
+};
+
 async function loginAndMockJournals(
   page: Page,
   options: {
@@ -183,6 +214,7 @@ async function loginAndMockJournals(
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
     onSync?: (url: URL) => unknown | void;
+    onUpdateSection?: (url: URL, payload: unknown) => unknown | void;
   } = {}
 ) {
   await page.addInitScript(() => {
@@ -277,6 +309,16 @@ async function loginAndMockJournals(
       });
     }
 
+    if (path.endsWith("/journal-monitors/2") && method === "PATCH") {
+      const payload = request.postDataJSON();
+      const updatedSection = options.onUpdateSection?.(url, payload);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(updatedSection ?? { ...archiveSection, is_active: true, entries: [] })
+      });
+    }
+
     if (path.endsWith("/journal-monitors/1") && method === "GET") {
       return route.fulfill({
         status: 200,
@@ -339,6 +381,30 @@ test("journal monitor shows extracted hours when workload details are incomplete
   await expect(row.locator("td").nth(5)).toHaveText("30");
 });
 
+test("journal monitor explains Drive sync failures inline", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...failedDriveSection, entries: [] }],
+    detailSection: failedDriveSection
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByText("Немає доступу до Google Drive")).toBeVisible();
+  await expect(page.getByText("GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON не налаштовано для приватної папки")).toBeVisible();
+});
+
+test("journal monitor explains an empty Drive folder after sync", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [{ ...emptyDriveSection, entries: [] }],
+    detailSection: emptyDriveSection
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByText("Папка Google Drive порожня")).toBeVisible();
+  await expect(page.getByText("Перевірте, чи у вибраній папці є журнали груп, або оновіть моніторинг після додавання файлів.")).toBeVisible();
+});
+
 test("journal monitor workload status title lists teachers and course hours", async ({ page }) => {
   await loginAndMockJournals(page);
 
@@ -361,7 +427,8 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.getByText(/4 папок, оновлено:/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Опрацювання журналів" })).toBeVisible();
   await expect(page.getByText("25%").first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Розклад і слухачі" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Тільки педнавантаження" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Розклад і слухачі" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Тільки розклад" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Тільки слухачі" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Не опрацьовано" })).toBeVisible();
@@ -371,6 +438,33 @@ test("journal monitor uses a single wide detail block with section metadata and 
   await expect(page.locator("#journal-monitor-entries tbody tr").filter({ hasText: "10п-26" }).getByText("Опрацьовано")).toBeVisible();
   await expect(page.getByText("Тільки слухачі:").locator("b")).toHaveText("0");
   await expect(page.getByText("Пед.+слухачі:").locator("b")).toHaveText("1");
+});
+
+test("journal monitor shows section lifecycle and processing configuration", async ({ page }) => {
+  const processingSection = {
+    ...section,
+    has_service_account_credentials: true,
+    last_sync_status: "success",
+    workload_auto_enabled: true,
+    workload_auto_year: 2026
+  };
+  await loginAndMockJournals(page, {
+    sections: [{ ...processingSection, entries: [] }],
+    detailSection: processingSection
+  });
+
+  await page.goto("/journals");
+
+  const lifecycle = page.getByLabel("Життєвий цикл розділу журналів");
+  await expect(lifecycle).toBeVisible();
+  await expect(lifecycle.getByText("Стан секції")).toBeVisible();
+  await expect(lifecycle.getByText("Активна")).toBeVisible();
+  await expect(lifecycle.getByText("Google Drive")).toBeVisible();
+  await expect(lifecycle.getByText("Синхронізація успішна")).toBeVisible();
+  await expect(lifecycle.getByText("Service account")).toBeVisible();
+  await expect(lifecycle.getByText("Налаштовано")).toBeVisible();
+  await expect(lifecycle.getByText("Автоопрацювання")).toBeVisible();
+  await expect(lifecycle.getByText("Увімкнено, 2026")).toBeVisible();
 });
 
 test("journal monitor shows journals created and changed since 8 today", async ({ page }) => {
@@ -510,6 +604,42 @@ test("journal monitor opens the current-year section by default", async ({ page 
 
   await expect(page.getByRole("heading", { name: "Журнали 2026" })).toBeVisible();
   await expect(page.getByLabel("Розділ для перегляду")).toHaveValue("1");
+});
+
+test("journal monitor archived sections are read-only until reactivated", async ({ page }) => {
+  let patchPayload: unknown = null;
+  await loginAndMockJournals(page, {
+    sections: [{ ...section, entries: [] }, archiveSection],
+    onUpdateSection: (_url, payload) => {
+      patchPayload = payload;
+      return { ...archiveSection, is_active: true, entries: [] };
+    }
+  });
+
+  await page.goto("/journals");
+  await page.getByLabel("Розділ для перегляду").selectOption("2");
+  const journalPanel = page.locator("#main-content");
+
+  await expect(page.getByText("Архівовано", { exact: true })).toBeVisible();
+  await expect(page.getByText("Розділ вимкнено для автоматичного опрацювання.")).toBeVisible();
+  await expect(journalPanel.getByRole("button", { name: "Оновити" })).toBeDisabled();
+  await expect(journalPanel.getByRole("button", { name: "Почати опрацювання" })).toBeDisabled();
+
+  await journalPanel.getByRole("button", { name: "Активувати розділ" }).click();
+
+  await expect.poll(() => patchPayload).toEqual({ is_active: true });
+});
+
+test("journal monitor can prefill a copied section for the next year", async ({ page }) => {
+  await loginAndMockJournals(page, {
+    sections: [archiveSection, { ...section, entries: [] }]
+  });
+
+  await page.goto("/journals");
+  await page.getByRole("button", { name: "Копіювати на новий рік" }).click();
+
+  await expect(page.getByLabel("Назва розділу")).toHaveValue("Журнали 2027");
+  await expect(page.getByLabel("URL папки Google Drive")).toHaveValue(section.folder_url);
 });
 
 test("journal monitor section can be deleted from the project", async ({ page }) => {

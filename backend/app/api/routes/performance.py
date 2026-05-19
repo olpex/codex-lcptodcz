@@ -1,11 +1,32 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.models import Group, Performance, RoleName, Trainee
 from app.schemas.api import PerformanceCreate, PerformanceResponse, PerformanceUpdate
 from app.services.audit import write_audit
+from app.services.cache import cache_delete, cache_get_json, cache_set_json
 
 router = APIRouter()
+PERFORMANCE_LIST_CACHE_TTL_SECONDS = 60
+
+
+def _performance_list_cache_key(branch_id: str) -> str:
+    return f"performance:list:{branch_id}:v1"
+
+
+def _dashboard_kpi_cache_key(branch_id: str, year: int) -> str:
+    return f"dashboard:kpi:{branch_id}:{year}"
+
+
+def _current_plan_year() -> int:
+    return datetime.now(timezone.utc).year
+
+
+def _invalidate_performance_caches(branch_id: str) -> None:
+    cache_delete(_performance_list_cache_key(branch_id))
+    cache_delete(_dashboard_kpi_cache_key(branch_id, _current_plan_year()))
 
 
 @router.get("", response_model=list[PerformanceResponse])
@@ -15,6 +36,13 @@ def list_performance(
     group_id: int | None = Query(default=None),
     trainee_id: int | None = Query(default=None),
 ) -> list[PerformanceResponse]:
+    can_use_cache = group_id is None and trainee_id is None
+    cache_key = _performance_list_cache_key(current_user.branch_id)
+    if can_use_cache:
+        cached = cache_get_json(cache_key)
+        if isinstance(cached, list):
+            return [PerformanceResponse.model_validate(item) for item in cached]
+
     query = apply_branch_scope(db.query(Performance), Performance, current_user.branch_id)
 
     if group_id is not None:
@@ -32,7 +60,10 @@ def list_performance(
         query = query.filter(Performance.trainee_id == trainee_id)
 
     rows = query.order_by(Performance.updated_at.desc()).all()
-    return [PerformanceResponse.model_validate(item) for item in rows]
+    response = [PerformanceResponse.model_validate(item) for item in rows]
+    if can_use_cache:
+        cache_set_json(cache_key, [item.model_dump(mode="json") for item in response], PERFORMANCE_LIST_CACHE_TTL_SECONDS)
+    return response
 
 
 @router.post(
@@ -68,6 +99,7 @@ def create_performance(payload: PerformanceCreate, db: DbSession, current_user: 
     db.add(entity)
     db.commit()
     db.refresh(entity)
+    _invalidate_performance_caches(current_user.branch_id)
 
     write_audit(
         db,
@@ -100,6 +132,7 @@ def update_performance(
     db.add(entity)
     db.commit()
     db.refresh(entity)
+    _invalidate_performance_caches(current_user.branch_id)
 
     write_audit(
         db,
@@ -121,8 +154,10 @@ def delete_performance(performance_id: int, db: DbSession, current_user: Current
     if not entity:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запис успішності не знайдено")
     ensure_same_branch(current_user, entity, "Запис успішності")
+    branch_id = entity.branch_id
     db.delete(entity)
     db.commit()
+    _invalidate_performance_caches(branch_id)
     write_audit(
         db,
         actor_user_id=current_user.id,

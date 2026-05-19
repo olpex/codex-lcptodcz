@@ -1807,6 +1807,7 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
         "trainees_only": 0,
         "not_processed": 0,
         "unknown_code": 0,
+        "workload_only": 0,
         "workload_and_trainees": 0,
         "workload_trainees_schedule": 0,
     }
@@ -1819,6 +1820,9 @@ def collect_monitor_stats(entries: list[JournalMonitorEntry]) -> dict[str, int]:
             continue
         if has_workload and has_journal_trainees:
             stats["workload_and_trainees"] += 1
+            continue
+        if has_workload and not entry.has_schedule and not has_journal_trainees:
+            stats["workload_only"] += 1
             continue
         if not has_workload and effective_status in stats:
             stats[effective_status] += 1
