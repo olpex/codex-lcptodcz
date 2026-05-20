@@ -212,7 +212,7 @@ async function loginAndMockJournals(
     onExport?: (url: URL) => void;
     onProcessingStart?: (url: URL) => void;
     onReprocessAll?: (url: URL) => void;
-    onBackgroundTick?: (url: URL) => void;
+    onBackgroundTick?: (url: URL) => void | Promise<void>;
     onAutoPump?: (url: URL) => void;
     onSync?: (url: URL) => unknown | void;
     onEvents?: (url: URL) => unknown[] | void;
@@ -289,7 +289,7 @@ async function loginAndMockJournals(
     }
 
     if (path.endsWith("/journal-monitors/1/processing/background-tick") && method === "POST") {
-      options.onBackgroundTick?.(url);
+      await options.onBackgroundTick?.(url);
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -885,6 +885,54 @@ test("journal monitor update button processes a batch when auto-processing is en
   expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("20");
   expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("20");
   expect(syncUrl).toBeNull();
+});
+
+test("journal monitor update queues a batch when an automatic step is already running", async ({ page }) => {
+  const backgroundUrls: URL[] = [];
+  let releaseFirstStep: (() => void) | null = null;
+  const firstStepPending = new Promise<void>((resolve) => {
+    releaseFirstStep = resolve;
+  });
+  await loginAndMockJournals(page, {
+    detailSection: { ...section, workload_auto_enabled: true, workload_auto_year: 2026 },
+    onBackgroundTick: async (url) => {
+      backgroundUrls.push(url);
+      if (backgroundUrls.length === 1) {
+        await firstStepPending;
+      }
+    }
+  });
+
+  await page.goto("/journals");
+  await expect(page.getByTestId("journal-monitor-refresh")).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
+  await expect.poll(() => backgroundUrls.length).toBe(1);
+
+  await page.getByTestId("journal-monitor-refresh").click();
+  releaseFirstStep?.();
+
+  await expect.poll(() => backgroundUrls.length).toBe(2);
+  const queuedUrl = backgroundUrls[1];
+  expect(queuedUrl.searchParams.get("sync")).toBe("true");
+  expect(queuedUrl.searchParams.get("workload_limit")).toBe("20");
+  expect(queuedUrl.searchParams.get("trainees_limit")).toBe("20");
+});
+
+test("journal monitor auto processing starts the selected step immediately on open", async ({ page }) => {
+  let backgroundUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    detailSection: { ...section, workload_auto_enabled: true, workload_auto_year: 2026 },
+    onBackgroundTick: (url) => {
+      backgroundUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+
+  await expect.poll(() => backgroundUrl?.pathname, { timeout: 3_000 }).toContain("/journal-monitors/1/processing/background-tick");
+  expect(backgroundUrl?.searchParams.get("sync")).toBe("true");
+  expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("1");
+  expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("1");
 });
 
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {

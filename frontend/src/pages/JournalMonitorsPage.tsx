@@ -412,6 +412,8 @@ export function JournalMonitorsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
   const backgroundStepInFlightRef = useRef(false);
+  const queuedManualBackgroundStepRef = useRef<{ sectionId: number; year: number } | null>(null);
+  const immediateAutoStepKeyRef = useRef<string | null>(null);
   const driveEventsInFlightRef = useRef(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
@@ -588,6 +590,26 @@ export function JournalMonitorsPage() {
       workloadLimit: 1,
       traineesLimit: 1
     });
+    const queued = queuedManualBackgroundStepRef.current;
+    if (queued && queued.sectionId === sectionId) {
+      queuedManualBackgroundStepRef.current = null;
+      setIsSyncing(true);
+      try {
+        const result = await runBackgroundStep(queued.sectionId, queued.year, {
+          sync: true,
+          workloadLimit: 20,
+          traineesLimit: 20,
+          showErrorToast: true
+        });
+        if (result === "completed") {
+          showSuccess("Оновлено і запущено batch-опрацювання журналів");
+        } else if (result === "busy") {
+          queuedManualBackgroundStepRef.current = queued;
+        }
+      } finally {
+        setIsSyncing(false);
+      }
+    }
     await loadDriveEvents(sectionId);
   };
 
@@ -607,7 +629,8 @@ export function JournalMonitorsPage() {
         showErrorToast: true
       });
       if (result === "busy") {
-        showInfo("Опрацювання вже триває. Дочекайтеся завершення поточного кроку.");
+        queuedManualBackgroundStepRef.current = { sectionId, year: Number(workloadYear) };
+        showInfo("Поточний крок завершується. Оновлення запуститься автоматично одразу після нього.");
         return;
       }
       if (result === "failed") return;
@@ -645,6 +668,16 @@ export function JournalMonitorsPage() {
     if (!selectedId) return;
     loadDriveEvents(selectedId);
   }, [selectedId, driveEventDateFrom, driveEventDateTo, driveEventActionFilter, driveEventObjectFilter]);
+
+  useEffect(() => {
+    const sectionId = selectedId || selectedSection?.id;
+    if (!sectionId || !sectionActive || !detail?.workload_auto_enabled) return;
+    const year = Number(workloadYear);
+    const key = `${sectionId}:${year}`;
+    if (immediateAutoStepKeyRef.current === key) return;
+    immediateAutoStepKeyRef.current = key;
+    void processSelectedBackgroundStep();
+  }, [selectedId, selectedSection?.id, sectionActive, detail?.workload_auto_enabled, workloadYear]);
 
   usePageRefresh(processSelectedBackgroundStep, {
     enabled: Boolean(selectedId && sectionActive && detail?.workload_auto_enabled),
