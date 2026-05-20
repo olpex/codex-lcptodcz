@@ -516,6 +516,10 @@ class JournalMonitorEntryBulkDeleteResponse(BaseModel):
     hidden_group_count: int
 
 
+class JournalMonitorEntryProcessRequest(BaseModel):
+    entry_ids: list[int] = Field(min_length=1, max_length=200)
+
+
 class JournalWorkloadTeacherResponse(BaseModel):
     teacher_id: int
     teacher_name: str
@@ -605,6 +609,8 @@ class JournalMonitorSectionResponse(BaseModel):
     last_synced_at: datetime | None = None
     last_sync_status: str
     last_sync_message: str | None = None
+    last_processing_message: str | None = None
+    priority_queue_size: int = 0
     stats: JournalMonitorStats
     daily_activity: JournalDailyActivityResponse
 

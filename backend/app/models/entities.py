@@ -320,6 +320,9 @@ class JournalMonitorSection(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_status: Mapped[str] = mapped_column(String(50), default="never", nullable=False)
     last_sync_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_processing_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    priority_entry_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    priority_queue_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

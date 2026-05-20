@@ -312,6 +312,8 @@ export interface JournalMonitorSection {
   last_synced_at: string | null;
   last_sync_status: string;
   last_sync_message: string | null;
+  last_processing_message?: string | null;
+  priority_queue_size?: number;
   stats: JournalMonitorStats;
   daily_activity: JournalDailyActivity;
   entries?: JournalMonitorEntry[];

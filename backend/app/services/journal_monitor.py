@@ -50,6 +50,12 @@ GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS = 45
 SUBJECTLESS_WORKLOAD_SUBJECT_NAME = "Без назви предмета"
 JOURNAL_DAILY_ACTIVITY_ZONE = ZoneInfo("Europe/Kyiv")
 JOURNAL_DAILY_ACTIVITY_START_HOUR = 8
+AUTO_QUEUE_SIGNAL_MARKERS = (
+    "після змін у google drive",
+    "повторної обробки",
+    "ручного опрацювання",
+    "новий журнал у google drive",
+)
 _service_account_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0.0}
 
 
@@ -430,6 +436,52 @@ def _clip_monitor_message(value: str | None) -> str | None:
         return None
     text = _norm(value)
     return text[:JOURNAL_MONITOR_MESSAGE_LIMIT] if text else None
+
+
+def _unique_ints(values: list[int] | tuple[int, ...] | None) -> list[int]:
+    unique: list[int] = []
+    seen: set[int] = set()
+    for raw_value in values or []:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _section_priority_entry_ids(section: JournalMonitorSection) -> list[int]:
+    return _unique_ints(section.priority_entry_ids)
+
+
+def _set_section_priority_queue(
+    section: JournalMonitorSection,
+    entry_ids: list[int],
+    *,
+    queue_year: int | None,
+    message: str | None = None,
+) -> None:
+    section.priority_entry_ids = _unique_ints(entry_ids) or None
+    section.priority_queue_year = queue_year
+    if message is not None:
+        section.last_processing_message = _clip_monitor_message(message)
+
+
+def _clear_section_priority_queue(section: JournalMonitorSection, *, message: str | None = None) -> None:
+    section.priority_entry_ids = None
+    section.priority_queue_year = None
+    if message is not None:
+        section.last_processing_message = _clip_monitor_message(message)
+
+
+def _has_processing_signal(message: str | None) -> bool:
+    text = _norm(message).casefold()
+    if not text:
+        return False
+    return any(marker in text for marker in AUTO_QUEUE_SIGNAL_MARKERS)
 
 
 def _parse_hours(value: Any) -> float:
@@ -1745,6 +1797,38 @@ def requeue_journal_trainees_for_year(db: Session, section: JournalMonitorSectio
     return changed
 
 
+def requeue_selected_journal_entries(
+    db: Session,
+    section: JournalMonitorSection,
+    entry_ids: list[int],
+) -> tuple[int, int]:
+    requested_ids = set(_unique_ints(entry_ids))
+    workload_changed = 0
+    trainees_changed = 0
+    for entry in section.entries:
+        if entry.id is None or entry.id not in requested_ids:
+            continue
+        entry.workload_status = "pending"
+        entry.workload_message = "Поставлено в чергу ручного опрацювання"
+        entry.workload_processed_at = None
+        entry.workload_hours = 0.0
+        entry.workload_source_names = None
+        db.query(JournalWorkloadEntry).filter(JournalWorkloadEntry.journal_monitor_entry_id == entry.id).delete(
+            synchronize_session=False
+        )
+        db.add(entry)
+        workload_changed += 1
+        if entry.group_code:
+            entry.trainees_status = "pending"
+            entry.trainees_message = "Поставлено в чергу ручного опрацювання"
+            entry.trainees_processed_at = None
+            entry.trainees_source_names = None
+            db.add(entry)
+            trainees_changed += 1
+    db.flush()
+    return workload_changed, trainees_changed
+
+
 def process_journal_monitor_section_step(
     db: Session,
     section: JournalMonitorSection,
@@ -1793,7 +1877,7 @@ def process_journal_monitor_section_step(
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
     if message_parts:
-        section.last_sync_message = _clip_monitor_message("; ".join(message_parts))
+        section.last_processing_message = _clip_monitor_message("; ".join(message_parts))
     db.flush()
     db.refresh(section)
     return result
@@ -1886,6 +1970,8 @@ def section_to_response_payload(section: JournalMonitorSection, include_entries:
         "last_synced_at": section.last_synced_at,
         "last_sync_status": section.last_sync_status,
         "last_sync_message": section.last_sync_message,
+        "last_processing_message": section.last_processing_message,
+        "priority_queue_size": len(_section_priority_entry_ids(section)),
         "stats": collect_monitor_stats(entries),
         "daily_activity": collect_daily_journal_activity(section),
     }
@@ -2307,6 +2393,7 @@ def sync_journal_monitor_section(
                 actor_source=actor_source,
             )
             entry = entries_by_drive_id.get(workbook_id)
+            created_entry = False
             if not entry and legacy_folder_entry and len(workbook_files) == 1:
                 entry = legacy_folder_entry
                 entries_by_drive_id.pop(drive_id, None)
@@ -2321,6 +2408,7 @@ def sync_journal_monitor_section(
                 db.add(entry)
                 entries_by_drive_id[workbook_id] = entry
                 section_entries.append(entry)
+                created_entry = True
             entry.drive_file_id = workbook_id
             old_group_code = display_group_code(entry.group_code)
             next_group_code = display_group_code(group_code)
@@ -2349,6 +2437,10 @@ def sync_journal_monitor_section(
                 workbook_files=[workbook_file],
             )
             entry.last_seen_at = now
+            if created_entry:
+                entry.workload_message = "Новий журнал у Google Drive. Очікує опрацювання"
+                if entry.group_code:
+                    entry.trainees_message = "Новий журнал у Google Drive. Очікує опрацювання"
             if renamed_group or workbook_changed_after_workload or workbook_changed_after_trainees:
                 _requeue_entry_after_drive_change(
                     db,
@@ -2407,6 +2499,7 @@ def _workload_background_priority(
     target_year: int | None,
     *,
     retry_failed: bool = True,
+    manual_selected: bool = False,
 ) -> int | None:
     year = _infer_journal_year(entry, section)
     if target_year is not None:
@@ -2416,10 +2509,12 @@ def _workload_background_priority(
     if not eligible:
         return None
     if entry.workload_status in {"pending", "needs_regeneration"}:
+        if not manual_selected and section.workload_auto_enabled and not _has_processing_signal(entry.workload_message):
+            return None
         return 0
-    if retry_failed and entry.workload_status == "failed":
+    if manual_selected and retry_failed and entry.workload_status == "failed":
         return 1
-    if entry.workload_status == "no_data":
+    if manual_selected and entry.workload_status == "no_data":
         return 2
     return None
 
@@ -2431,6 +2526,7 @@ def _trainees_background_priority(
     target_year: int | None,
     *,
     retry_failed: bool = True,
+    manual_selected: bool = False,
 ) -> int | None:
     if not entry.group_code:
         return None
@@ -2438,8 +2534,10 @@ def _trainees_background_priority(
     if target_year is not None and entry_year is not None and entry_year != target_year:
         return None
     if entry.trainees_status == "pending":
+        if not manual_selected and section.workload_auto_enabled and not _has_processing_signal(entry.trainees_message):
+            return None
         return 0
-    if retry_failed and entry.trainees_status == "failed":
+    if manual_selected and retry_failed and entry.trainees_status == "failed":
         return 1
     if entry.trainees_status == "processed":
         active_count = _active_trainee_count_for_group(db, entry.branch_id, entry.group_code)
@@ -2452,14 +2550,33 @@ def _next_background_journal_entry(
     db: Session,
     section: JournalMonitorSection,
     target_year: int | None,
+    *,
+    entry_ids: set[int] | None = None,
+    retry_failed: bool = False,
 ) -> JournalMonitorEntry | None:
     candidates: list[tuple[int, int, str, str, JournalMonitorEntry]] = []
     for entry in section.entries:
+        if entry_ids is not None and entry.id not in entry_ids:
+            continue
+        manual_selected = bool(entry_ids is not None and entry.id in entry_ids)
         priorities = [
             priority
             for priority in (
-                _workload_background_priority(entry, section, target_year),
-                _trainees_background_priority(db, entry, section, target_year),
+                _workload_background_priority(
+                    entry,
+                    section,
+                    target_year,
+                    retry_failed=retry_failed,
+                    manual_selected=manual_selected,
+                ),
+                _trainees_background_priority(
+                    db,
+                    entry,
+                    section,
+                    target_year,
+                    retry_failed=retry_failed,
+                    manual_selected=manual_selected,
+                ),
             )
             if priority is not None
         ]
@@ -2514,17 +2631,36 @@ def process_journal_monitor_background_step(
             section.last_sync_message = _clip_monitor_message(sync_warning)
             db.add(section)
             db.flush()
-    effective_target_year = target_year if target_year is not None else section.workload_auto_year
-    entry_ids: set[int] | None = None
+    priority_entry_ids = set(_section_priority_entry_ids(section))
+    if priority_entry_ids:
+        valid_entry_ids = {entry.id for entry in section.entries if entry.id is not None}
+        filtered_entry_ids = sorted(entry_id for entry_id in priority_entry_ids if entry_id in valid_entry_ids)
+        if filtered_entry_ids != _section_priority_entry_ids(section):
+            _set_section_priority_queue(section, filtered_entry_ids, queue_year=section.priority_queue_year)
+            db.add(section)
+            db.flush()
+        priority_entry_ids = set(filtered_entry_ids)
+    effective_target_year = (
+        section.priority_queue_year
+        if priority_entry_ids
+        else (target_year if target_year is not None else section.workload_auto_year)
+    )
+    entry_ids: set[int] | None = priority_entry_ids or None
     if workload_limit == 1 and trainees_limit == 1:
-        target_entry = _next_background_journal_entry(db, section, effective_target_year)
+        target_entry = _next_background_journal_entry(
+            db,
+            section,
+            effective_target_year,
+            entry_ids=entry_ids,
+            retry_failed=bool(priority_entry_ids),
+        )
         entry_ids = {target_entry.id} if target_entry and target_entry.id is not None else set()
     workload_result = process_next_journal_workload(
         db,
         section,
         limit=workload_limit,
         target_year=effective_target_year,
-        retry_failed=True,
+        retry_failed=bool(priority_entry_ids),
         entry_ids=entry_ids,
     )
     db.flush()
@@ -2534,7 +2670,7 @@ def process_journal_monitor_background_step(
         section,
         limit=trainees_limit,
         target_year=effective_target_year,
-        retry_failed=True,
+        retry_failed=bool(priority_entry_ids),
         entry_ids=entry_ids,
     )
     db.flush()
@@ -2550,6 +2686,33 @@ def process_journal_monitor_background_step(
     section.last_sync_message = _clip_monitor_message(
         f"{sync_warning}; {processing_message}" if sync_warning else processing_message
     )
+    if priority_entry_ids:
+        entry_map = {entry.id: entry for entry in section.entries if entry.id is not None}
+        remaining_ids = [
+            entry_id
+            for entry_id in _section_priority_entry_ids(section)
+            if (entry := entry_map.get(entry_id)) is not None
+            and (
+                entry.workload_status in {"pending", "needs_regeneration"}
+                or (entry.group_code and entry.trainees_status == "pending")
+            )
+        ]
+        if remaining_ids:
+            _set_section_priority_queue(
+                section,
+                remaining_ids,
+                queue_year=section.priority_queue_year,
+                message=f"Пріоритетна черга: залишилось {len(remaining_ids)} журналів",
+            )
+        else:
+            _clear_section_priority_queue(
+                section,
+                message="Пріоритетну чергу завершено. Повернулись до відстеження змін у журналах.",
+            )
+    else:
+        section.last_processing_message = _clip_monitor_message(processing_message)
+    if sync_warning:
+        section.last_sync_message = _clip_monitor_message(sync_warning)
     db.add(section)
     db.flush()
     db.refresh(section)

@@ -212,6 +212,12 @@ function hasDailyActivity(section: JournalMonitorSection): boolean {
 function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "info" | "error"; text: string } | null {
   if (!section) return null;
   if (section.last_sync_status === "failed") {
+    if (section.last_sync_message && section.last_sync_message === section.last_processing_message) {
+      return {
+        tone: "error",
+        text: "Немає доступу до Google Drive. Перев?рте доступ до папки, service account або Google Drive API."
+      };
+    }
     return {
       tone: "error",
       text: `Немає доступу до Google Drive. ${
@@ -228,6 +234,14 @@ function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "in
   return null;
 }
 
+function getProcessingStateNotice(section: JournalMonitorSection | null): { tone: "info"; text: string } | null {
+  if (!section?.last_processing_message) return null;
+  return {
+    tone: "info",
+    text: section.last_processing_message
+  };
+}
+
 function formatSyncLifecycleStatus(status: string | null | undefined): string {
   if (status === "success") return "Синхронізація успішна";
   if (status === "failed") return "Помилка синхронізації";
@@ -237,6 +251,7 @@ function formatSyncLifecycleStatus(status: string | null | undefined): string {
 
 function formatProcessingLifecycleStatus(section: JournalMonitorSection): string {
   if (!section.workload_auto_enabled) return "Вимкнено";
+  if ((section.priority_queue_size || 0) > 0) return `Пріоритетна черга: ${section.priority_queue_size}`;
   return section.workload_auto_year ? `Увімкнено, ${section.workload_auto_year}` : "Увімкнено";
 }
 
@@ -391,6 +406,7 @@ export function JournalMonitorsPage() {
   const [selectedEntryIds, setSelectedEntryIds] = useState<Record<number, boolean>>({});
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [isBulkDeletingEntries, setIsBulkDeletingEntries] = useState(false);
+  const [isQueueingSelected, setIsQueueingSelected] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [driveEvents, setDriveEvents] = useState<JournalMonitorEvent[]>([]);
@@ -453,6 +469,7 @@ export function JournalMonitorsPage() {
   const selectedEntryCount = selectedEntries.length;
   const allVisibleEntriesSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedEntryIds[row.id]);
   const driveStateNotice = getDriveStateNotice(detail);
+  const processingStateNotice = getProcessingStateNotice(detail);
 
   const loadSections = async () => {
     const data = await request<JournalMonitorSection[]>("/journal-monitors");
@@ -953,6 +970,40 @@ export function JournalMonitorsPage() {
     }
   };
 
+  const queueSelectedEntriesForProcessing = async () => {
+    if (!selectedId || !selectedEntryCount || !sectionActive) return;
+    const year = Number(workloadYear);
+    if (!Number.isInteger(year) || year < 2025 || year > 2100) {
+      showError("Вкаж?ть р?к в?д 2025 до 2100");
+      return;
+    }
+    setIsQueueingSelected(true);
+    try {
+      const data = await request<JournalMonitorSection>(
+        `/journal-monitors/${selectedId}/processing/queue-selected?year=${year}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ entry_ids: selectedEntries.map((entry) => entry.id) })
+        }
+      );
+      setDetail(data);
+      await loadSections();
+      showSuccess(`Вибран? журнали поставлено у пр?оритетну чергу: ${selectedEntryCount}`);
+      const result = await runBackgroundStep(selectedId, year, {
+        sync: true,
+        workloadLimit: 20,
+        traineesLimit: 20
+      });
+      if (result === "busy") {
+        showInfo("Поточний крок завершується. Пріоритетна черга підхопиться автоматично одразу після нього.");
+      }
+    } catch (error) {
+      showError((error as Error).message);
+    } finally {
+      setIsQueueingSelected(false);
+    }
+  };
+
   const renderBoolean = (value: boolean) => (
     <span className={clsx("font-semibold", value ? "text-emerald-700" : "text-slate-400")}>{value ? "Так" : "Ні"}</span>
   );
@@ -1356,6 +1407,7 @@ export function JournalMonitorsPage() {
         )}
 
         {driveStateNotice && <InlineNotice className="mb-4" tone={driveStateNotice.tone} text={driveStateNotice.text} />}
+        {processingStateNotice && <InlineNotice className="mb-4" tone={processingStateNotice.tone} text={processingStateNotice.text} />}
 
         <h3 className="mb-3 font-heading text-lg font-semibold text-ink">Опрацювання журналів</h3>
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -1517,6 +1569,14 @@ export function JournalMonitorsPage() {
                   <span className="rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-700">
                     Вибрано: {selectedEntryCount}
                   </span>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-pine px-3 py-2 text-xs font-semibold text-pine hover:bg-mint/40 disabled:opacity-50"
+                    onClick={queueSelectedEntriesForProcessing}
+                    disabled={!selectedEntryCount || isQueueingSelected || !sectionActive}
+                  >
+                    {isQueueingSelected ? "Ставимо в чергу..." : "Опрацювати вибрані"}
+                  </button>
                   <button
                     type="button"
                     className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"

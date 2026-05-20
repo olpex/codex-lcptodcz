@@ -14,6 +14,7 @@ from app.models import JournalMonitorEntry, JournalMonitorEvent, JournalMonitorS
 from app.schemas.api import (
     JournalMonitorEntryBulkDeleteRequest,
     JournalMonitorEntryBulkDeleteResponse,
+    JournalMonitorEntryProcessRequest,
     JournalMonitorEventResponse,
     JournalMonitorDetailResponse,
     JournalMonitorSectionCreate,
@@ -30,6 +31,7 @@ from app.services.journal_monitor import (
     extract_drive_folder_id,
     hide_groups_for_deleted_journal_entries,
     list_drive_child_folders,
+    requeue_selected_journal_entries,
     requeue_journal_trainees_for_year,
     requeue_journal_workload_for_year,
     save_journal_monitor_export,
@@ -527,6 +529,15 @@ def _start_section_processing(
 ) -> JournalMonitorDetailResponse:
     section.workload_auto_enabled = True
     section.workload_auto_year = year
+    section.last_processing_message = "Автоопрацювання увімкнено. Відстежуємо лише нові або змінені журнали."
+    section.priority_entry_ids = None
+    section.priority_queue_year = None
+    db.add(section)
+    db.commit()
+
+    db.refresh(section)
+    _invalidate_journal_sections_cache(section.branch_id)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
     section.last_sync_message = "Опрацювання журналів запущено"
     db.add(section)
     requeue_journal_workload_for_year(db, section, year)
@@ -552,6 +563,11 @@ def _reprocess_section_all(
     try:
         workload_count = requeue_journal_workload_for_year(db, section, year, force=True)
         trainees_count = requeue_journal_trainees_for_year(db, section, year, force=True)
+        section.priority_entry_ids = None
+        section.priority_queue_year = None
+        section.last_processing_message = (
+            f"Повна переобробка {year}: у черзі педнавантаження {workload_count}, слухачі {trainees_count}"
+        )[:500]
         queue_message = f"Повна переобробка {year}: у черзі педнавантаження {workload_count}, слухачі {trainees_count}"
         section.last_sync_message = queue_message[:500]
         db.add(section)
@@ -620,6 +636,9 @@ def _start_section_workload_inline(
 
 def _stop_section_processing(section: JournalMonitorSection, db: DbSession) -> JournalMonitorDetailResponse:
     section.workload_auto_enabled = False
+    section.priority_entry_ids = None
+    section.priority_queue_year = None
+    section.last_processing_message = "Автоопрацювання журналів зупинено."
     db.add(section)
     db.commit()
     db.refresh(section)
@@ -720,6 +739,43 @@ def background_tick_section_processing(
         db.rollback()
         logger.exception("Journal background processing failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося виконати фонове опрацювання журналів: {exc}") from exc
+    db.refresh(section)
+    _invalidate_journal_sections_cache(current_user.branch_id)
+    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
+
+
+@router.post(
+    "/{section_id}/processing/queue-selected",
+    response_model=JournalMonitorDetailResponse,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def queue_selected_section_processing(
+    section_id: int,
+    payload: JournalMonitorEntryProcessRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+    year: int = Query(default=2026, ge=2025, le=2100),
+) -> JournalMonitorDetailResponse:
+    section = _get_section_or_404(db, current_user, section_id)
+    requested_ids = list(dict.fromkeys(payload.entry_ids))
+    available_ids = {entry.id for entry in section.entries if entry.id is not None}
+    queued_ids = [entry_id for entry_id in requested_ids if entry_id in available_ids]
+    if not queued_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Виберіть хоча б один журнал для опрацювання")
+    try:
+        section.workload_auto_enabled = True
+        section.workload_auto_year = year
+        section.priority_entry_ids = queued_ids
+        section.priority_queue_year = year
+        workload_count, trainees_count = requeue_selected_journal_entries(db, section, queued_ids)
+        section.last_processing_message = (
+            f"Пріоритетна черга: {len(queued_ids)} журналів, педнавантаження {workload_count}, слухачі {trainees_count}"
+        )[:500]
+        db.add(section)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося поставити журнали у пріоритетну чергу: {exc}") from exc
     db.refresh(section)
     _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
