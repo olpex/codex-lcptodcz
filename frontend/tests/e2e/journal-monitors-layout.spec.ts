@@ -599,7 +599,7 @@ test("journal monitor refreshes daily activity without workload auto-processing"
   await expect(page.getByText("50-26 Auto refreshed journal")).toBeVisible();
 });
 
-test("journal monitor audits Drive after a processing refresh", async ({ page }) => {
+test("journal monitor page refresh keeps backlog moving without re-syncing Drive", async ({ page }) => {
   let backgroundCalls = 0;
   let syncCalls = 0;
   const processingSection = {
@@ -652,8 +652,7 @@ test("journal monitor audits Drive after a processing refresh", async ({ page })
   await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
 
   await expect.poll(() => backgroundCalls).toBe(1);
-  await expect.poll(() => syncCalls).toBe(1);
-  await expect(page.getByText("51-26 Auto audited journal")).toBeVisible();
+  await expect.poll(() => syncCalls).toBe(0);
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {
@@ -844,7 +843,7 @@ test("journal monitor starts one combined processing action for trainees and wor
 
   await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
   expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
-  expect(backgroundUrl?.searchParams.get("sync")).toBe("true");
+  expect(backgroundUrl?.searchParams.get("sync")).toBeNull();
   expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("1");
   expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("1");
 });
@@ -930,24 +929,20 @@ test("journal monitor auto processing starts the selected step immediately on op
   await page.goto("/journals");
 
   await expect.poll(() => backgroundUrl?.pathname, { timeout: 3_000 }).toContain("/journal-monitors/1/processing/background-tick");
-  expect(backgroundUrl?.searchParams.get("sync")).toBe("true");
+  expect(backgroundUrl?.searchParams.get("sync")).toBeNull();
   expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("1");
   expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("1");
 });
 
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {
   let reprocessUrl: URL | null = null;
-  let backgroundUrl: URL | null = null;
-  let syncUrl: URL | null = null;
+  const backgroundUrls: URL[] = [];
   await loginAndMockJournals(page, {
     onReprocessAll: (url) => {
       reprocessUrl = url;
     },
     onBackgroundTick: (url) => {
-      backgroundUrl = url;
-    },
-    onSync: (url) => {
-      syncUrl = url;
+      backgroundUrls.push(url);
     }
   });
 
@@ -958,8 +953,9 @@ test("journal monitor can force full reprocessing for a year", async ({ page }) 
   await expect.poll(() => reprocessUrl?.pathname).toContain("/journal-monitors/1/processing/reprocess-all");
   expect(reprocessUrl?.searchParams.get("year")).toBe("2026");
   await expect(page.getByText("Повну переобробку журналів для 2026 року поставлено в чергу")).toBeVisible();
-  await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
-  expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
-  await expect.poll(() => syncUrl?.pathname).toContain("/journal-monitors/1/sync");
+  await expect.poll(() => backgroundUrls.some((url) => url.searchParams.get("sync") === "true")).toBe(true);
+  const reprocessTickUrl = backgroundUrls.find((url) => url.searchParams.get("sync") === "true");
+  expect(reprocessTickUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
+  expect(reprocessTickUrl?.searchParams.get("year")).toBe("2026");
   await expect(page.getByRole("button", { name: "Переобробити все" })).toBeDisabled();
 });

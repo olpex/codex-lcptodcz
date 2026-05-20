@@ -89,12 +89,25 @@ def _acquire_auto_pump_slot(branch_id: str) -> bool:
     return True
 
 
+def _section_has_processing_backlog(section: JournalMonitorSection, target_year: int | None) -> bool:
+    for entry in section.entries:
+        entry_year = entry.workload_year
+        if target_year is not None and entry_year is not None and entry_year != target_year:
+            continue
+        if entry.workload_status in {"pending", "failed", "needs_regeneration"}:
+            return True
+        if entry.group_code and entry.trainees_status in {"pending", "failed"}:
+            return True
+    return False
+
+
 def _process_journal_monitor_auto_sections(
     db: DbSession,
     branch_id: str | None = None,
     *,
     workload_limit: int | None = 1,
     trainees_limit: int | None = 1,
+    sync_before: bool = True,
 ) -> AutoTickPayload:
     query = db.query(JournalMonitorSection.id, JournalMonitorSection.branch_id).filter(JournalMonitorSection.is_active.is_(True))
     if branch_id is not None:
@@ -109,11 +122,13 @@ def _process_journal_monitor_auto_sections(
             if not section or not section.is_active:
                 continue
             target_year = section.workload_auto_year or datetime.now(timezone.utc).year
+            effective_sync_before = sync_before or not _section_has_processing_backlog(section, target_year)
             process_journal_monitor_background_step(
                 db,
                 section,
                 folder_lister=list_drive_child_folders,
                 target_year=target_year,
+                sync_before=effective_sync_before,
                 workload_limit=workload_limit,
                 trainees_limit=trainees_limit,
             )
@@ -223,6 +238,7 @@ def process_journal_monitor_auto_pump(
             current_user.branch_id,
             workload_limit=batch_size,
             trainees_limit=batch_size,
+            sync_before=False,
         )
     )
     result.update(_process_drive_intake_auto_file(db, current_user.branch_id))

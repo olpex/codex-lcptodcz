@@ -2618,6 +2618,7 @@ def test_journal_auto_pump_endpoint_uses_configured_batch_size(client, auth_head
         "branch_id": "main",
         "workload_limit": 7,
         "trainees_limit": 7,
+        "sync_before": False,
     }
 
 

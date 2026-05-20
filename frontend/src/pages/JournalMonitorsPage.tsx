@@ -606,7 +606,7 @@ export function JournalMonitorsPage() {
     const sectionId = selectedId || selectedSection?.id;
     if (!sectionId || !sectionActive) return;
     await runBackgroundStep(sectionId, Number(workloadYear), {
-      sync: true,
+      sync: false,
       workloadLimit: 1,
       traineesLimit: 1
     });
@@ -809,11 +809,14 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Опрацювання журналів для ${year} року поставлено в чергу: слухачі та години`);
-      void runBackgroundStep(selectedId, year, {
+      const result = await runBackgroundStep(selectedId, year, {
         sync: true,
         workloadLimit: 1,
         traineesLimit: 1
       });
+      if (result === "busy") {
+        queuedManualBackgroundStepRef.current = { sectionId: selectedId, year };
+      }
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -837,11 +840,14 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Повну переобробку журналів для ${year} року поставлено в чергу`);
-      void runBackgroundStep(selectedId, year, {
+      const result = await runBackgroundStep(selectedId, year, {
         sync: true,
         workloadLimit: 1,
         traineesLimit: 1
       });
+      if (result === "busy") {
+        queuedManualBackgroundStepRef.current = { sectionId: selectedId, year };
+      }
     } catch (error) {
       showError((error as Error).message);
     } finally {
