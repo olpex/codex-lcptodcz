@@ -1877,7 +1877,9 @@ def process_journal_monitor_section_step(
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
     if message_parts:
-        section.last_processing_message = _clip_monitor_message("; ".join(message_parts))
+        message = _clip_monitor_message("; ".join(message_parts))
+        section.last_processing_message = message
+        section.last_sync_message = message
     db.flush()
     db.refresh(section)
     return result
@@ -2509,10 +2511,8 @@ def _workload_background_priority(
     if not eligible:
         return None
     if entry.workload_status in {"pending", "needs_regeneration"}:
-        if not manual_selected and section.workload_auto_enabled and not _has_processing_signal(entry.workload_message):
-            return None
         return 0
-    if manual_selected and retry_failed and entry.workload_status == "failed":
+    if retry_failed and entry.workload_status == "failed":
         return 1
     if manual_selected and entry.workload_status == "no_data":
         return 2
@@ -2534,10 +2534,8 @@ def _trainees_background_priority(
     if target_year is not None and entry_year is not None and entry_year != target_year:
         return None
     if entry.trainees_status == "pending":
-        if not manual_selected and section.workload_auto_enabled and not _has_processing_signal(entry.trainees_message):
-            return None
         return 0
-    if manual_selected and retry_failed and entry.trainees_status == "failed":
+    if retry_failed and entry.trainees_status == "failed":
         return 1
     if entry.trainees_status == "processed":
         active_count = _active_trainee_count_for_group(db, entry.branch_id, entry.group_code)
@@ -2609,6 +2607,7 @@ def process_journal_monitor_background_step(
 ) -> dict[str, Any]:
     section_id = section.id
     sync_warning: str | None = None
+    retry_failed = False
     if sync_before:
         try:
             section = sync_journal_monitor_section(
@@ -2621,6 +2620,7 @@ def process_journal_monitor_background_step(
                 actor_name=actor_name,
                 actor_source=actor_source,
             )
+            retry_failed = True
         except Exception as exc:
             db.rollback()
             section = db.get(JournalMonitorSection, section_id)
@@ -2652,7 +2652,7 @@ def process_journal_monitor_background_step(
             section,
             effective_target_year,
             entry_ids=entry_ids,
-            retry_failed=bool(priority_entry_ids),
+            retry_failed=retry_failed or bool(priority_entry_ids),
         )
         entry_ids = {target_entry.id} if target_entry and target_entry.id is not None else set()
     workload_result = process_next_journal_workload(
@@ -2660,7 +2660,7 @@ def process_journal_monitor_background_step(
         section,
         limit=workload_limit,
         target_year=effective_target_year,
-        retry_failed=bool(priority_entry_ids),
+        retry_failed=retry_failed or bool(priority_entry_ids),
         entry_ids=entry_ids,
     )
     db.flush()
@@ -2670,7 +2670,7 @@ def process_journal_monitor_background_step(
         section,
         limit=trainees_limit,
         target_year=effective_target_year,
-        retry_failed=bool(priority_entry_ids),
+        retry_failed=retry_failed or bool(priority_entry_ids),
         entry_ids=entry_ids,
     )
     db.flush()

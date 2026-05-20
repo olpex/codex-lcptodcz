@@ -58,10 +58,6 @@ GOOGLE_DRIVE_LIST_CACHE_TTL_SECONDS = 45
 
 
 def resolve_drive_intake_service_account_json(db: Session, branch_id: str | None = None) -> str | None:
-    configured = settings.google_drive_service_account_json.strip()
-    if configured:
-        return configured
-
     query = db.query(JournalMonitorSection).filter(
         JournalMonitorSection.is_active.is_(True),
         JournalMonitorSection.service_account_json_encrypted.is_not(None),
@@ -74,6 +70,9 @@ def resolve_drive_intake_service_account_json(db: Session, branch_id: str | None
         decrypted = cipher.decrypt(section.service_account_json_encrypted)
         if decrypted and decrypted.strip():
             return decrypted
+    configured = settings.google_drive_service_account_json.strip()
+    if configured:
+        return configured
     return None
 
 

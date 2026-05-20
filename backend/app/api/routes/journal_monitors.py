@@ -532,12 +532,6 @@ def _start_section_processing(
     section.last_processing_message = "Автоопрацювання увімкнено. Відстежуємо лише нові або змінені журнали."
     section.priority_entry_ids = None
     section.priority_queue_year = None
-    db.add(section)
-    db.commit()
-
-    db.refresh(section)
-    _invalidate_journal_sections_cache(section.branch_id)
-    return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
     section.last_sync_message = "Опрацювання журналів запущено"
     db.add(section)
     requeue_journal_workload_for_year(db, section, year)
