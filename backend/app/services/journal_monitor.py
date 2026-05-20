@@ -2608,7 +2608,8 @@ def process_journal_monitor_background_step(
     section_id = section.id
     sync_warning: str | None = None
     retry_failed = False
-    if sync_before:
+    priority_entry_ids = set(_section_priority_entry_ids(section))
+    if sync_before and not priority_entry_ids:
         try:
             section = sync_journal_monitor_section(
                 db,
@@ -2631,7 +2632,6 @@ def process_journal_monitor_background_step(
             section.last_sync_message = _clip_monitor_message(sync_warning)
             db.add(section)
             db.flush()
-    priority_entry_ids = set(_section_priority_entry_ids(section))
     if priority_entry_ids:
         valid_entry_ids = {entry.id for entry in section.entries if entry.id is not None}
         filtered_entry_ids = sorted(entry_id for entry_id in priority_entry_ids if entry_id in valid_entry_ids)

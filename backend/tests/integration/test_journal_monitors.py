@@ -1875,6 +1875,111 @@ def test_background_tick_skips_drive_sync_by_default_for_existing_queue(
     assert entry["trainees_status"] == "processed"
 
 
+def test_priority_queue_background_tick_skips_drive_sync_while_draining_selected_journals(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    drive_sync_calls = 0
+
+    def forbidden_drive_sync(*args, **kwargs):
+        nonlocal drive_sync_calls
+        drive_sync_calls += 1
+        raise AssertionError("priority queue should drain selected journals without Drive sync")
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", forbidden_drive_sync)
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": f"{folder_id}.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Журнали 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+    db_session.add_all(
+        [
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-46-26",
+                drive_url="https://drive.google.com/drive/folders/drive-46-26",
+                journal_name="46-26 Журнал",
+                group_code="46-26",
+                workload_status="processed",
+                trainees_status="processed",
+                workload_year=2026,
+                workload_hours=8,
+                trainee_count=1,
+                has_trainees=True,
+            ),
+            journal_monitor.JournalMonitorEntry(
+                section_id=section_id,
+                branch_id="main",
+                drive_file_id="drive-47-26",
+                drive_url="https://drive.google.com/drive/folders/drive-47-26",
+                journal_name="47-26 Журнал",
+                group_code="47-26",
+                workload_status="processed",
+                trainees_status="processed",
+                workload_year=2026,
+                workload_hours=8,
+                trainee_count=1,
+                has_trainees=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    entry_ids = [entry.id for entry in db_session.query(journal_monitor.JournalMonitorEntry).filter_by(section_id=section_id).all()]
+
+    queue_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/queue-selected?year=2026",
+        json={"entry_ids": entry_ids},
+        headers=auth_headers,
+    )
+
+    assert queue_response.status_code == 200
+    assert queue_response.json()["priority_queue_size"] == 2
+
+    first_tick = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
+        headers=auth_headers,
+    )
+
+    assert first_tick.status_code == 200
+    assert drive_sync_calls == 0
+    first_entries = {entry["group_code"]: entry for entry in first_tick.json()["entries"]}
+    assert first_tick.json()["priority_queue_size"] == 1
+    assert first_entries["46-26"]["workload_status"] == "processed"
+    assert first_entries["46-26"]["trainees_status"] == "processed"
+    assert first_entries["47-26"]["workload_status"] == "pending"
+
+    second_tick = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true",
+        headers=auth_headers,
+    )
+
+    assert second_tick.status_code == 200
+    assert drive_sync_calls == 0
+    second_entries = {entry["group_code"]: entry for entry in second_tick.json()["entries"]}
+    assert second_tick.json()["priority_queue_size"] == 0
+    assert second_entries["47-26"]["workload_status"] == "processed"
+    assert second_entries["47-26"]["trainees_status"] == "processed"
+
+
 def test_background_tick_processes_only_first_pending_journal_by_default(
     client,
     auth_headers,

@@ -211,6 +211,9 @@ function hasDailyActivity(section: JournalMonitorSection): boolean {
 
 function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "info" | "error"; text: string } | null {
   if (!section) return null;
+  if ((section.priority_queue_size || 0) > 0 && section.last_processing_message) {
+    return null;
+  }
   if (section.last_sync_status === "failed") {
     if (section.last_sync_message && section.last_sync_message === section.last_processing_message) {
       return {
