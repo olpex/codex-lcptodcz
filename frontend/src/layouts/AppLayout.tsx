@@ -5,6 +5,8 @@ import { useToast } from "../context/ToastContext";
 import { PAGE_REFRESH_EVENT } from "../hooks/usePageRefresh";
 import { uiText } from "../i18n/uk";
 
+const JOURNAL_AUTO_PUMP_INTERVAL_MS = 5 * 60_000;
+
 const NAV_ITEMS = [
   { to: "/", label: uiText.menu.dashboard, roles: ["admin", "methodist", "teacher"] as const },
   { to: "/profile", label: uiText.menu.profile, roles: ["admin", "methodist", "teacher"] as const },
@@ -22,7 +24,7 @@ const NAV_ITEMS = [
 ];
 
 export function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, request } = useAuth();
   const { showInfo } = useToast();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -93,6 +95,41 @@ export function AppLayout() {
       mobileMenuCloseButtonRef.current?.focus();
     }
   }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    const canPumpJournals = userRoles.some((role) => role === "admin" || role === "methodist");
+    if (!canPumpJournals) return;
+
+    let inFlight = false;
+    const runPump = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await request("/journal-monitors/auto-pump", { method: "POST" });
+      } catch {
+        // Keep this heartbeat quiet; visible health diagnostics live in Job Center.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const initialTimerId = window.setTimeout(() => {
+      void runPump();
+    }, 10_000);
+    const intervalId = window.setInterval(() => {
+      void runPump();
+    }, JOURNAL_AUTO_PUMP_INTERVAL_MS);
+    const handleFocus = () => {
+      void runPump();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.clearTimeout(initialTimerId);
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [request, userRoles.join("|")]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">

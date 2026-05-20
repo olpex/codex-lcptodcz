@@ -59,6 +59,18 @@ def cache_set_json(key: str, payload: Any, ttl_seconds: int) -> None:
         _disable_temporarily()
 
 
+def cache_set_json_if_absent(key: str, payload: Any, ttl_seconds: int) -> bool | None:
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        return bool(client.set(key, raw, ex=ttl_seconds, nx=True))
+    except Exception:
+        _disable_temporarily()
+        return None
+
+
 def cache_delete(key: str) -> None:
     client = _get_redis_client()
     if client is None:

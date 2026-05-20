@@ -1,4 +1,5 @@
 import logging
+import time as monotonic_time
 from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -20,7 +21,7 @@ from app.schemas.api import (
     JournalMonitorSectionUpdate,
 )
 from app.services.audit import write_audit
-from app.services.cache import cache_delete, cache_get_json, cache_set_json
+from app.services.cache import cache_delete, cache_get_json, cache_set_json, cache_set_json_if_absent
 from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
@@ -43,6 +44,7 @@ from app.tasks.worker import process_import_job_task
 router = APIRouter()
 logger = logging.getLogger(__name__)
 JOURNAL_SECTIONS_CACHE_TTL_SECONDS = 15
+_AUTO_PUMP_FALLBACK_LOCKS: dict[str, float] = {}
 
 
 AutoTickPayload = dict[str, int | str | None]
@@ -58,6 +60,31 @@ def _invalidate_journal_sections_cache(branch_id: str) -> None:
 
 def _actor_display_name(current_user: CurrentUser) -> str:
     return (current_user.full_name or current_user.username or "").strip()
+
+
+def _auto_pump_interval_seconds() -> int:
+    raw_value = getattr(settings, "journal_browser_pump_interval_seconds", 300)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 300
+    return max(60, min(value, 3600))
+
+
+def _acquire_auto_pump_slot(branch_id: str) -> bool:
+    interval_seconds = _auto_pump_interval_seconds()
+    lock_key = f"journal-monitors:auto-pump:{branch_id}"
+    lock_payload = {"acquired_at": datetime.now(timezone.utc).isoformat()}
+    redis_result = cache_set_json_if_absent(lock_key, lock_payload, interval_seconds)
+    if redis_result is not None:
+        return redis_result
+
+    now = monotonic_time.monotonic()
+    next_allowed_at = _AUTO_PUMP_FALLBACK_LOCKS.get(branch_id, 0.0)
+    if now < next_allowed_at:
+        return False
+    _AUTO_PUMP_FALLBACK_LOCKS[branch_id] = now + interval_seconds
+    return True
 
 
 def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
@@ -162,6 +189,26 @@ def process_journal_monitor_auto_tick(
     _current_user: CurrentUser,
 ) -> AutoTickPayload:
     raise HTTPException(status_code=status.HTTP_410_GONE, detail="Journal intake is triggered by Celery beat")
+
+
+@router.post(
+    "/auto-pump",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_roles(RoleName.ADMIN, RoleName.METHODIST))],
+)
+def process_journal_monitor_auto_pump(
+    db: DbSession,
+    current_user: CurrentUser,
+) -> AutoTickPayload:
+    if not settings.journal_browser_pump_enabled:
+        return {"triggered": 0, "skipped": "disabled"}
+    if not _acquire_auto_pump_slot(current_user.branch_id):
+        return {"triggered": 0, "skipped": "rate_limited"}
+
+    result: AutoTickPayload = {"triggered": 1, "skipped": None}
+    result.update(_process_journal_monitor_auto_sections(db, current_user.branch_id))
+    result.update(_process_drive_intake_auto_file(db, current_user.branch_id))
+    return result
 
 
 def _get_section_or_404(db: DbSession, current_user: CurrentUser, section_id: int) -> JournalMonitorSection:

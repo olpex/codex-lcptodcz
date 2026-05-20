@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     google_drive_api_key: str = Field(default="")
     google_drive_service_account_json: str = Field(default="")
     journal_workload_auto_interval_seconds: int = Field(default=30)
+    journal_browser_pump_enabled: bool = Field(default=True)
+    journal_browser_pump_interval_seconds: int = Field(default=300)
     google_drive_intake_auto_enabled: bool = Field(default=True)
     google_drive_intake_folder_url: str = Field(default="https://drive.google.com/drive/folders/1TZZk4I8aZHjFr62Px_Bkn3_MdBKyjpmY")
     google_drive_intake_interval_seconds: int = Field(default=30)

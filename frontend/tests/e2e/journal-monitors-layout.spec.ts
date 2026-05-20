@@ -213,6 +213,7 @@ async function loginAndMockJournals(
     onProcessingStart?: (url: URL) => void;
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
+    onAutoPump?: (url: URL) => void;
     onSync?: (url: URL) => unknown | void;
     onEvents?: (url: URL) => unknown[] | void;
     onUpdateSection?: (url: URL, payload: unknown) => unknown | void;
@@ -248,6 +249,15 @@ async function loginAndMockJournals(
           branch_id: "main",
           roles: [{ id: 1, name: "admin" }]
         })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/auto-pump") && method === "POST") {
+      options.onAutoPump?.(url);
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ triggered: 1, skipped: null, processed_sections: 1, failed_sections: 0 })
       });
     }
 
@@ -834,6 +844,19 @@ test("journal monitor starts one combined processing action for trainees and wor
 
   await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
   expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+});
+
+test("app layout quietly pumps journal background sync for admins", async ({ page }) => {
+  let autoPumpUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    onAutoPump: (url) => {
+      autoPumpUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+
+  await expect.poll(() => autoPumpUrl?.pathname, { timeout: 15_000 }).toContain("/journal-monitors/auto-pump");
 });
 
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {

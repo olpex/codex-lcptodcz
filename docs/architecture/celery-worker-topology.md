@@ -53,6 +53,14 @@ curl -H "Authorization: Bearer $CRON_SECRET" \
 
 The fallback requires `CRON_SECRET`. Do not expose this endpoint without that header.
 
+When GitHub Actions or another scheduler is unavailable, authenticated admin/methodist browser sessions also trigger a guarded server-side pump:
+
+```http
+POST /api/v1/journal-monitors/auto-pump
+```
+
+The browser pump uses the normal user JWT, runs the same journal and Drive intake step as the cron endpoint, and is rate-limited server-side by `JOURNAL_BROWSER_PUMP_INTERVAL_SECONDS` with a Redis lock when Redis is available. It keeps data moving while the app is actively used, but it is not a substitute for a true always-on worker/beat when nobody has the app open.
+
 ## Required Environment
 
 The following values must be consistent across API, Celery worker, and Celery beat unless noted otherwise:
@@ -65,6 +73,8 @@ The following values must be consistent across API, Celery worker, and Celery be
 | `DATA_ENCRYPTION_KEY` | API, worker | Decrypts stored integration credentials |
 | `CRON_SECRET` | API, external cron only | Protects `/api/v1/journal-monitors/auto-cron` fallback |
 | `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` | API, worker | Optional global Drive service account; section credentials can override |
+| `JOURNAL_BROWSER_PUMP_ENABLED` | API | Enables authenticated browser sessions to trigger guarded journal/Drive processing |
+| `JOURNAL_BROWSER_PUMP_INTERVAL_SECONDS` | API | Minimum seconds between browser-triggered pump runs per branch; default `300` |
 | `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | worker, beat visibility | Recommended default is `5`; reduce to `1` for cautious rollout |
 | `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | beat | Drive intake schedule interval |
 | `MAIL_PRIMARY_CHANNEL` | API, worker | Current primary mail channel, usually `google_apps_script` |

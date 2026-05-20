@@ -2403,6 +2403,93 @@ def test_journal_auto_tick_reuses_section_drive_credentials_for_intake(client, a
     assert captured["service_account_json"] == "section-service-account-json"
 
 
+def test_journal_auto_pump_endpoint_processes_active_sections_for_authenticated_methodist(
+    client,
+    auth_headers,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.list_drive_child_folders",
+        lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-1-26",
+                "name": "1-26 Р–СѓСЂРЅР°Р»",
+                "url": "https://drive.google.com/drive/folders/drive-1-26",
+                "modified_time": "2026-03-02T10:00:00Z",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {"id": f"{folder_id}-xlsx", "name": "1-26 Р–СѓСЂРЅР°Р».xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "download_drive_file_bytes",
+        lambda file_id, mime_type=None, service_account_json=None: _journal_combined_workbook_bytes(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors._acquire_auto_pump_slot",
+        lambda branch_id: True,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors.process_next_drive_intake_file",
+        lambda db, **kwargs: {"processed": 0, "skipped_already_processed": 0, "skipped_unsupported": 0},
+        raising=False,
+    )
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Р–СѓСЂРЅР°Р»Рё 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=False,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    response = client.post("/api/v1/journal-monitors/auto-pump", headers=auth_headers)
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["triggered"] == 1
+    assert payload["skipped"] is None
+    assert payload["processed_sections"] == 1
+    db_session.expire_all()
+    entry = section.entries[0]
+    assert entry.workload_status == "processed"
+    assert entry.trainees_status == "processed"
+
+
+def test_journal_auto_pump_endpoint_rate_limits_repeated_browser_heartbeats(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    called = 0
+
+    def fake_process(*args, **kwargs):
+        nonlocal called
+        called += 1
+        return {"processed_sections": 1, "failed_sections": 0}
+
+    monkeypatch.setattr("app.api.routes.journal_monitors._acquire_auto_pump_slot", lambda branch_id: False)
+    monkeypatch.setattr("app.api.routes.journal_monitors._process_journal_monitor_auto_sections", fake_process)
+
+    response = client.post("/api/v1/journal-monitors/auto-pump", headers=auth_headers)
+
+    assert response.status_code == 202
+    assert response.json()["triggered"] == 0
+    assert response.json()["skipped"] == "rate_limited"
+    assert called == 0
+
+
 def test_journal_auto_worker_processes_pending_trainees_one_journal_per_tick(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {
