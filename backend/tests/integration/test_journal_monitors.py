@@ -2621,6 +2621,12 @@ def test_journal_auto_pump_endpoint_uses_configured_batch_size(client, auth_head
     }
 
 
+def test_journal_auto_pump_interval_honors_30_second_configuration(monkeypatch):
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.journal_browser_pump_interval_seconds", 30)
+
+    assert journal_monitor_routes._auto_pump_interval_seconds() == 30
+
+
 def test_journal_auto_worker_processes_pending_trainees_one_journal_per_tick(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {

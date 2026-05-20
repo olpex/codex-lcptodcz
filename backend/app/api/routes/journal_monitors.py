@@ -69,8 +69,8 @@ def _auto_pump_interval_seconds() -> int:
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
-        return 300
-    return max(60, min(value, 3600))
+        return 30
+    return max(30, min(value, 3600))
 
 
 def _acquire_auto_pump_slot(branch_id: str) -> bool:
