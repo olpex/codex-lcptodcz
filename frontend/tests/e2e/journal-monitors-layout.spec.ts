@@ -844,6 +844,9 @@ test("journal monitor starts one combined processing action for trainees and wor
 
   await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
   expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+  expect(backgroundUrl?.searchParams.get("sync")).toBe("true");
+  expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("1");
+  expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("1");
 });
 
 test("app layout quietly pumps journal background sync for admins", async ({ page }) => {

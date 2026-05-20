@@ -5,7 +5,7 @@ import { useToast } from "../context/ToastContext";
 import { PAGE_REFRESH_EVENT } from "../hooks/usePageRefresh";
 import { uiText } from "../i18n/uk";
 
-const JOURNAL_AUTO_PUMP_INTERVAL_MS = 5 * 60_000;
+const JOURNAL_AUTO_PUMP_INTERVAL_MS = 30_000;
 
 const NAV_ITEMS = [
   { to: "/", label: uiText.menu.dashboard, roles: ["admin", "methodist", "teacher"] as const },

@@ -544,9 +544,9 @@ export function JournalMonitorsPage() {
   const runBackgroundStep = async (
     sectionId: number,
     year: number,
-    options: { sync?: boolean; workloadLimit?: number; traineesLimit?: number } = {}
+    options: { sync?: boolean; workloadLimit?: number; traineesLimit?: number; showErrorToast?: boolean } = {}
   ) => {
-    if (backgroundStepInFlightRef.current) return;
+    if (backgroundStepInFlightRef.current) return "busy" as const;
     backgroundStepInFlightRef.current = true;
     const params = new URLSearchParams();
     if (Number.isInteger(year) && year >= 2025 && year <= 2100) {
@@ -569,8 +569,12 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       setErrorText(null);
+      return "completed" as const;
     } catch (error) {
-      setErrorText((error as Error).message);
+      const message = (error as Error).message;
+      setErrorText(message);
+      if (options.showErrorToast) showError(message);
+      return "failed" as const;
     } finally {
       backgroundStepInFlightRef.current = false;
     }
@@ -579,8 +583,12 @@ export function JournalMonitorsPage() {
   const processSelectedBackgroundStep = async () => {
     const sectionId = selectedId || selectedSection?.id;
     if (!sectionId || !sectionActive) return;
-    await runBackgroundStep(sectionId, Number(workloadYear));
-    await syncSelected(false);
+    await runBackgroundStep(sectionId, Number(workloadYear), {
+      sync: true,
+      workloadLimit: 1,
+      traineesLimit: 1
+    });
+    await loadDriveEvents(sectionId);
   };
 
   const refreshSelectedNow = async () => {
@@ -592,11 +600,17 @@ export function JournalMonitorsPage() {
     }
     setIsSyncing(true);
     try {
-      await runBackgroundStep(sectionId, Number(workloadYear), {
+      const result = await runBackgroundStep(sectionId, Number(workloadYear), {
         sync: true,
         workloadLimit: 20,
-        traineesLimit: 20
+        traineesLimit: 20,
+        showErrorToast: true
       });
+      if (result === "busy") {
+        showInfo("Опрацювання вже триває. Дочекайтеся завершення поточного кроку.");
+        return;
+      }
+      if (result === "failed") return;
       await loadDriveEvents(sectionId);
       setErrorText(null);
       showSuccess("Оновлено і запущено batch-опрацювання журналів");
@@ -742,7 +756,11 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Опрацювання журналів для ${year} року поставлено в чергу: слухачі та години`);
-      void runBackgroundStep(selectedId, year);
+      void runBackgroundStep(selectedId, year, {
+        sync: true,
+        workloadLimit: 1,
+        traineesLimit: 1
+      });
     } catch (error) {
       showError((error as Error).message);
     } finally {
@@ -766,7 +784,11 @@ export function JournalMonitorsPage() {
       setDetail(data);
       await loadSections();
       showSuccess(`Повну переобробку журналів для ${year} року поставлено в чергу`);
-      void runBackgroundStep(selectedId, year).then(() => syncSelected(false));
+      void runBackgroundStep(selectedId, year, {
+        sync: true,
+        workloadLimit: 1,
+        traineesLimit: 1
+      });
     } catch (error) {
       showError((error as Error).message);
     } finally {
