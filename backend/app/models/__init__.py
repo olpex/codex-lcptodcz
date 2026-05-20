@@ -9,6 +9,7 @@ from app.models.entities import (
     GroupStatus,
     ImportJob,
     JournalMonitorEntry,
+    JournalMonitorEvent,
     JournalMonitorSection,
     JournalWorkloadEntry,
     JobStatus,

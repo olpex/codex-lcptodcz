@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import FileResponse
@@ -9,10 +9,11 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUser, DbSession, apply_branch_scope, ensure_same_branch, require_roles
 from app.core.config import settings
 from app.core.crypto import cipher
-from app.models import JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, RoleName
+from app.models import JournalMonitorEntry, JournalMonitorEvent, JournalMonitorSection, JournalWorkloadEntry, RoleName
 from app.schemas.api import (
     JournalMonitorEntryBulkDeleteRequest,
     JournalMonitorEntryBulkDeleteResponse,
+    JournalMonitorEventResponse,
     JournalMonitorDetailResponse,
     JournalMonitorSectionCreate,
     JournalMonitorSectionResponse,
@@ -53,6 +54,10 @@ def _journal_sections_cache_key(branch_id: str) -> str:
 
 def _invalidate_journal_sections_cache(branch_id: str) -> None:
     cache_delete(_journal_sections_cache_key(branch_id))
+
+
+def _actor_display_name(current_user: CurrentUser) -> str:
+    return (current_user.full_name or current_user.username or "").strip()
 
 
 def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
@@ -245,6 +250,31 @@ def get_section(section_id: int, db: DbSession, current_user: CurrentUser) -> Jo
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))
 
 
+@router.get("/{section_id}/events", response_model=list[JournalMonitorEventResponse])
+def list_section_events(
+    section_id: int,
+    db: DbSession,
+    current_user: CurrentUser,
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    action: str | None = Query(default=None, pattern="^(created|changed|deleted)$"),
+    object_type: str | None = Query(default=None, pattern="^(folder|workbook)$"),
+    limit: int = Query(default=300, ge=1, le=1000),
+) -> list[JournalMonitorEventResponse]:
+    section = _get_section_or_404(db, current_user, section_id)
+    query = db.query(JournalMonitorEvent).filter(JournalMonitorEvent.section_id == section.id)
+    if date_from is not None:
+        query = query.filter(JournalMonitorEvent.occurred_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to is not None:
+        query = query.filter(JournalMonitorEvent.occurred_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
+    if action:
+        query = query.filter(JournalMonitorEvent.action == action)
+    if object_type:
+        query = query.filter(JournalMonitorEvent.object_type == object_type)
+    events = query.order_by(JournalMonitorEvent.occurred_at.desc(), JournalMonitorEvent.id.desc()).limit(limit).all()
+    return [JournalMonitorEventResponse.model_validate(event, from_attributes=True) for event in events]
+
+
 @router.patch(
     "/{section_id}",
     response_model=JournalMonitorSectionResponse,
@@ -406,6 +436,9 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
             folder_lister=list_drive_child_folders,
             process_workload=False,
             process_trainees=False,
+            actor_user_id=current_user.id,
+            actor_name=_actor_display_name(current_user),
+            actor_source="manual",
         )
         db.commit()
     except Exception as exc:
@@ -493,6 +526,8 @@ def _start_section_workload_inline(
     year: int,
     *,
     error_prefix: str,
+    actor_user_id: int | None = None,
+    actor_name: str | None = None,
 ) -> JournalMonitorDetailResponse:
     section.workload_auto_enabled = True
     section.workload_auto_year = year
@@ -505,6 +540,9 @@ def _start_section_workload_inline(
             folder_lister=list_drive_child_folders,
             process_workload=False,
             process_trainees=False,
+            actor_user_id=actor_user_id,
+            actor_name=actor_name,
+            actor_source="manual" if actor_user_id is not None else "auto",
         )
         requeue_journal_workload_for_year(db, section, year)
         process_next_journal_workload(db, section, limit=1, target_year=year, retry_failed=True)
@@ -610,6 +648,9 @@ def background_tick_section_processing(
             sync_before=sync,
             workload_limit=workload_limit,
             trainees_limit=trainees_limit,
+            actor_user_id=current_user.id,
+            actor_name=_actor_display_name(current_user),
+            actor_source="manual",
         )
         db.commit()
     except Exception as exc:
@@ -633,7 +674,14 @@ def start_section_workload_auto(
     year: int = Query(default=2026, ge=2025, le=2100),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    return _start_section_workload_inline(section, db, year, error_prefix="Не вдалося запустити обробку педнавантаження")
+    return _start_section_workload_inline(
+        section,
+        db,
+        year,
+        error_prefix="Не вдалося запустити обробку педнавантаження",
+        actor_user_id=current_user.id,
+        actor_name=_actor_display_name(current_user),
+    )
 
 
 @router.post(

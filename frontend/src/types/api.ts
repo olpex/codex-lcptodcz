@@ -245,6 +245,26 @@ export interface JournalDailyActivity {
   changed: JournalDailyActivityItem[];
 }
 
+export interface JournalMonitorEvent {
+  id: number;
+  section_id: number;
+  object_type: "folder" | "workbook";
+  action: "created" | "changed" | "deleted";
+  drive_file_id: string;
+  drive_folder_id?: string | null;
+  drive_mime_type?: string | null;
+  drive_url: string | null;
+  journal_name: string;
+  group_code: string | null;
+  actor_user_id: number | null;
+  actor_name: string | null;
+  source: string;
+  drive_created_at: string | null;
+  drive_modified_at: string | null;
+  occurred_at: string;
+  detected_at: string;
+}
+
 export interface JournalMonitorEntry {
   id: number;
   drive_file_id: string;

@@ -542,6 +542,26 @@ class JournalDailyActivityResponse(BaseModel):
     changed: list[JournalDailyActivityItem] = Field(default_factory=list)
 
 
+class JournalMonitorEventResponse(BaseModel):
+    id: int
+    section_id: int
+    object_type: str
+    action: str
+    drive_file_id: str
+    drive_folder_id: str | None = None
+    drive_mime_type: str | None = None
+    drive_url: str | None = None
+    journal_name: str
+    group_code: str | None = None
+    actor_user_id: int | None = None
+    actor_name: str | None = None
+    source: str
+    drive_created_at: datetime | None = None
+    drive_modified_at: datetime | None = None
+    occurred_at: datetime
+    detected_at: datetime
+
+
 class JournalMonitorEntryResponse(BaseModel):
     id: int
     drive_file_id: str

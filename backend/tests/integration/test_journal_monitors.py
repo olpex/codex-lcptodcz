@@ -4269,6 +4269,134 @@ def test_journal_daily_activity_lists_created_and_changed_since_8_kyiv(db_sessio
     assert activity["changed"][0]["modified_at"] == datetime(2026, 5, 13, 8, 45, tzinfo=timezone.utc)
 
 
+def test_journal_drive_events_log_folder_and_workbook_lifecycle(client, auth_headers, monkeypatch):
+    folders = [
+        {
+            "id": "drive-46-26",
+            "name": "46-26 Journal",
+            "url": "https://drive.google.com/drive/folders/drive-46-26",
+            "created_time": "2026-05-13T05:10:00Z",
+            "modified_time": "2026-05-13T05:20:00Z",
+        }
+    ]
+    workbook_files = [
+        {
+            "id": "sheet-46-26",
+            "name": "46-26 Journal.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/sheet-46-26/view",
+            "createdTime": "2026-05-13T05:12:00Z",
+            "modifiedTime": "2026-05-13T05:25:00Z",
+        }
+    ]
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.list_drive_child_folders", lambda _folder_id, service_account_json=None: folders)
+    monkeypatch.setattr(journal_monitor, "list_drive_journal_workbook_files", lambda folder_id, service_account_json=None: workbook_files, raising=False)
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Journals 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    section_id = create_response.json()["id"]
+
+    first_sync = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert first_sync.status_code == 200
+
+    folders[0] = {
+        **folders[0],
+        "name": "46-26 Journal Renamed",
+        "modified_time": "2026-05-14T06:30:00Z",
+    }
+    workbook_files[0] = {
+        **workbook_files[0],
+        "name": "46-26 Journal Renamed.xlsx",
+        "modifiedTime": "2026-05-14T06:35:00Z",
+    }
+    second_sync = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert second_sync.status_code == 200
+
+    folders.clear()
+    third_sync = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+    assert third_sync.status_code == 200
+
+    events_response = client.get(
+        f"/api/v1/journal-monitors/{section_id}/events?date_from=2026-05-13&date_to=2026-05-20",
+        headers=auth_headers,
+    )
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert [(event["object_type"], event["action"]) for event in events] == [
+        ("workbook", "deleted"),
+        ("folder", "deleted"),
+        ("workbook", "changed"),
+        ("folder", "changed"),
+        ("workbook", "created"),
+        ("folder", "created"),
+    ]
+    workbook_created = next(event for event in events if event["object_type"] == "workbook" and event["action"] == "created")
+    assert workbook_created["drive_file_id"] == "sheet-46-26"
+    assert workbook_created["drive_folder_id"] == "drive-46-26"
+    assert workbook_created["actor_user_id"] is not None
+    assert workbook_created["actor_name"]
+    assert workbook_created["source"] == "manual"
+
+
+def test_journal_drive_events_endpoint_filters_by_date_action_and_type(client, auth_headers, db_session):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.flush()
+    db_session.add_all(
+        [
+            journal_monitor.JournalMonitorEvent(
+                section_id=section.id,
+                branch_id="main",
+                object_type="folder",
+                action="created",
+                drive_file_id="folder-old",
+                journal_name="45-26 Old",
+                occurred_at=datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc),
+                detected_at=datetime(2026, 5, 12, 10, 1, tzinfo=timezone.utc),
+            ),
+            journal_monitor.JournalMonitorEvent(
+                section_id=section.id,
+                branch_id="main",
+                object_type="workbook",
+                action="changed",
+                drive_file_id="sheet-match",
+                drive_folder_id="folder-match",
+                journal_name="46-26 Match",
+                occurred_at=datetime(2026, 5, 14, 6, 35, tzinfo=timezone.utc),
+                detected_at=datetime(2026, 5, 14, 6, 36, tzinfo=timezone.utc),
+            ),
+            journal_monitor.JournalMonitorEvent(
+                section_id=section.id,
+                branch_id="main",
+                object_type="folder",
+                action="changed",
+                drive_file_id="folder-other-type",
+                journal_name="47-26 Other Type",
+                occurred_at=datetime(2026, 5, 14, 7, 0, tzinfo=timezone.utc),
+                detected_at=datetime(2026, 5, 14, 7, 1, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/journal-monitors/{section.id}/events?date_from=2026-05-14&date_to=2026-05-14&action=changed&object_type=workbook",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [event["drive_file_id"] for event in payload] == ["sheet-match"]
+
+
 def test_journal_sync_tracks_drive_created_time_and_daily_change_start(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",

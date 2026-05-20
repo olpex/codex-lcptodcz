@@ -214,6 +214,7 @@ async function loginAndMockJournals(
     onReprocessAll?: (url: URL) => void;
     onBackgroundTick?: (url: URL) => void;
     onSync?: (url: URL) => unknown | void;
+    onEvents?: (url: URL) => unknown[] | void;
     onUpdateSection?: (url: URL, payload: unknown) => unknown | void;
   } = {}
 ) {
@@ -306,6 +307,15 @@ async function loginAndMockJournals(
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(syncPayload ?? { ...section, workload_auto_enabled: true, workload_auto_year: 2026 })
+      });
+    }
+
+    if (path.endsWith("/journal-monitors/1/events") && method === "GET") {
+      const eventsPayload = options.onEvents?.(url);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(eventsPayload ?? [])
       });
     }
 
@@ -484,6 +494,47 @@ test("journal monitor shows journals created and changed since 8 today", async (
   await expect(page.getByRole("link", { name: "47-26 Змінений журнал" })).toHaveAttribute("href", "https://drive.google.com/drive/folders/drive-changed");
   await expect(page.getByText("Початок змін: 09:10")).toBeVisible();
   await expect(page.getByText("Остання зміна: 11:45")).toBeVisible();
+});
+
+test("journal monitor shows filterable Drive event history", async ({ page }) => {
+  let eventsUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    onEvents: (url) => {
+      eventsUrl = url;
+      return [
+        {
+          id: 10,
+          section_id: 1,
+          object_type: "workbook",
+          action: "changed",
+          drive_file_id: "sheet-46-26",
+          drive_folder_id: "drive-46-26",
+          drive_mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          drive_url: "https://drive.google.com/file/d/sheet-46-26/view",
+          journal_name: "46-26 Журнал.xlsx",
+          group_code: "46-26",
+          actor_user_id: 1,
+          actor_name: "Системний адміністратор",
+          source: "manual",
+          drive_created_at: "2026-05-13T05:12:00Z",
+          drive_modified_at: "2026-05-14T06:35:00Z",
+          occurred_at: "2026-05-14T06:35:00Z",
+          detected_at: "2026-05-14T06:36:00Z"
+        }
+      ];
+    }
+  });
+
+  await page.goto("/journals");
+
+  await expect(page.getByRole("heading", { name: "Історія змін Drive" })).toBeVisible();
+  await expect(page.getByText("46-26 Журнал.xlsx")).toBeVisible();
+  await expect(page.getByText("Журнал", { exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Змінено" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Системний адміністратор" })).toBeVisible();
+
+  await page.getByLabel("Дія").selectOption("deleted");
+  await expect.poll(() => eventsUrl?.searchParams.get("action")).toBe("deleted");
 });
 
 test("journal monitor refreshes daily activity without workload auto-processing", async ({ page }) => {

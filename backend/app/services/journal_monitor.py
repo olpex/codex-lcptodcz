@@ -21,7 +21,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
+from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorEvent, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
 from app.services.cache import cache_get_json, cache_set_json, hashed_cache_part
 from app.services.import_export import save_report_file, try_import_trainees
 
@@ -2014,6 +2014,146 @@ def _refresh_entry_project_state(
     entry.processing_status = _status(entry.has_schedule, entry.has_trainees, entry.group_code)
 
 
+def _journal_event_actor_name(actor_name: str | None, actor_source: str) -> str:
+    name = (actor_name or "").strip()
+    if name:
+        return name[:255]
+    return "Автооновлення" if actor_source == "auto" else "Система"
+
+
+def _latest_journal_drive_events(db: Session, section_id: int) -> dict[tuple[str, str], JournalMonitorEvent]:
+    events = (
+        db.query(JournalMonitorEvent)
+        .filter(JournalMonitorEvent.section_id == section_id)
+        .order_by(JournalMonitorEvent.detected_at.asc(), JournalMonitorEvent.id.asc())
+        .all()
+    )
+    return {(event.object_type, event.drive_file_id): event for event in events}
+
+
+def _journal_event_changed(
+    latest: JournalMonitorEvent,
+    *,
+    journal_name: str,
+    drive_url: str | None,
+    drive_mime_type: str | None,
+    group_code: str | None,
+    drive_modified_at: datetime | None,
+) -> bool:
+    latest_modified_at = _as_aware_utc(latest.drive_modified_at)
+    next_modified_at = _as_aware_utc(drive_modified_at)
+    if latest.action == "deleted":
+        return True
+    if latest_modified_at is not None and next_modified_at is not None and next_modified_at > latest_modified_at:
+        return True
+    return (
+        latest.journal_name != journal_name
+        or (latest.drive_url or None) != (drive_url or None)
+        or (latest.drive_mime_type or None) != (drive_mime_type or None)
+        or display_group_code(latest.group_code) != display_group_code(group_code)
+    )
+
+
+def _record_journal_drive_seen_event(
+    db: Session,
+    *,
+    section: JournalMonitorSection,
+    event_state: dict[tuple[str, str], JournalMonitorEvent],
+    seen_event_keys: set[tuple[str, str]],
+    object_type: str,
+    drive_file_id: str,
+    drive_folder_id: str | None,
+    journal_name: str,
+    group_code: str | None,
+    drive_url: str | None,
+    drive_mime_type: str | None,
+    drive_created_at: datetime | None,
+    drive_modified_at: datetime | None,
+    detected_at: datetime,
+    actor_user_id: int | None,
+    actor_name: str | None,
+    actor_source: str,
+) -> None:
+    key = (object_type, drive_file_id)
+    seen_event_keys.add(key)
+    latest = event_state.get(key)
+    next_created_at = _as_aware_utc(drive_created_at)
+    next_modified_at = _as_aware_utc(drive_modified_at)
+    if latest is None or latest.action == "deleted":
+        action = "created"
+        occurred_at = next_created_at or next_modified_at or detected_at
+    elif _journal_event_changed(
+        latest,
+        journal_name=journal_name,
+        drive_url=drive_url,
+        drive_mime_type=drive_mime_type,
+        group_code=group_code,
+        drive_modified_at=next_modified_at,
+    ):
+        action = "changed"
+        occurred_at = next_modified_at or detected_at
+    else:
+        return
+    event = JournalMonitorEvent(
+        section_id=section.id,
+        branch_id=section.branch_id,
+        object_type=object_type,
+        action=action,
+        drive_file_id=drive_file_id,
+        drive_folder_id=drive_folder_id,
+        drive_mime_type=drive_mime_type,
+        drive_url=drive_url,
+        journal_name=journal_name,
+        group_code=group_code,
+        actor_user_id=actor_user_id,
+        actor_name=_journal_event_actor_name(actor_name, actor_source),
+        source=actor_source,
+        drive_created_at=next_created_at,
+        drive_modified_at=next_modified_at,
+        occurred_at=occurred_at,
+        detected_at=detected_at,
+    )
+    db.add(event)
+    event_state[key] = event
+
+
+def _record_deleted_journal_drive_events(
+    db: Session,
+    *,
+    section: JournalMonitorSection,
+    event_state: dict[tuple[str, str], JournalMonitorEvent],
+    seen_event_keys: set[tuple[str, str]],
+    detected_at: datetime,
+    actor_user_id: int | None,
+    actor_name: str | None,
+    actor_source: str,
+) -> None:
+    for key, latest in list(event_state.items()):
+        if latest.section_id != section.id or latest.action == "deleted" or key in seen_event_keys:
+            continue
+        event = JournalMonitorEvent(
+            section_id=section.id,
+            branch_id=section.branch_id,
+            object_type=latest.object_type,
+            action="deleted",
+            drive_file_id=latest.drive_file_id,
+            drive_folder_id=latest.drive_folder_id,
+            drive_mime_type=latest.drive_mime_type,
+            drive_url=latest.drive_url,
+            journal_name=latest.journal_name,
+            group_code=latest.group_code,
+            actor_user_id=actor_user_id,
+            actor_name=_journal_event_actor_name(actor_name, actor_source),
+            source=actor_source,
+            drive_created_at=_as_aware_utc(latest.drive_created_at),
+            drive_modified_at=_as_aware_utc(latest.drive_modified_at),
+            occurred_at=detected_at,
+            detected_at=detected_at,
+        )
+        db.add(event)
+        event_state[key] = event
+
+
 def sync_journal_monitor_section(
     db: Session,
     section: JournalMonitorSection,
@@ -2021,6 +2161,9 @@ def sync_journal_monitor_section(
     workbook_lister=None,
     process_workload: bool = True,
     process_trainees: bool = True,
+    actor_user_id: int | None = None,
+    actor_name: str | None = None,
+    actor_source: str = "auto",
 ) -> JournalMonitorSection:
     now = datetime.now(timezone.utc)
     from app.core.crypto import cipher
@@ -2042,6 +2185,8 @@ def sync_journal_monitor_section(
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     seen_drive_ids: set[str] = set()
     daily_cutoff_at = _journal_daily_cutoff(now)
+    event_state = _latest_journal_drive_events(db, section.id)
+    seen_event_keys: set[tuple[str, str]] = set()
     section_entries = (
         db.query(JournalMonitorEntry)
         .filter(JournalMonitorEntry.section_id == section.id)
@@ -2054,6 +2199,28 @@ def sync_journal_monitor_section(
         name = str(folder.get("name") or "").strip() or drive_id
         if not drive_id:
             continue
+        folder_group_code = extract_group_code(name)
+        folder_created_at = _as_aware_utc(_parse_datetime(str(folder.get("created_time") or "")))
+        folder_modified_at = _as_aware_utc(_parse_datetime(str(folder.get("modified_time") or "")))
+        _record_journal_drive_seen_event(
+            db,
+            section=section,
+            event_state=event_state,
+            seen_event_keys=seen_event_keys,
+            object_type="folder",
+            drive_file_id=drive_id,
+            drive_folder_id=None,
+            journal_name=name,
+            group_code=folder_group_code,
+            drive_url=str(folder.get("url") or f"https://drive.google.com/drive/folders/{drive_id}"),
+            drive_mime_type=GOOGLE_DRIVE_FOLDER_MIME,
+            drive_created_at=folder_created_at,
+            drive_modified_at=folder_modified_at,
+            detected_at=now,
+            actor_user_id=actor_user_id,
+            actor_name=actor_name,
+            actor_source=actor_source,
+        )
         try:
             workbook_files = workbook_lister(drive_id, service_account_json=section_service_account_json)
         except Exception:
@@ -2088,7 +2255,6 @@ def sync_journal_monitor_section(
                 db.add(entry)
                 entries_by_drive_id[drive_id] = entry
                 section_entries.append(entry)
-            folder_group_code = extract_group_code(name)
             entry.drive_file_id = drive_id
             entry.drive_folder_id = drive_id
             entry.drive_mime_type = GOOGLE_DRIVE_FOLDER_MIME
@@ -2104,13 +2270,12 @@ def sync_journal_monitor_section(
             entry.trainees_message = "У теці Google Drive не знайдено файлу журналу"
             entry.trainees_processed_at = entry.trainees_processed_at or now
             entry.trainees_source_names = []
-            entry.drive_created_at = _as_aware_utc(_parse_datetime(str(folder.get("created_time") or "")))
-            entry.drive_modified_at = _as_aware_utc(_parse_datetime(str(folder.get("modified_time") or "")))
+            entry.drive_created_at = folder_created_at
+            entry.drive_modified_at = folder_modified_at
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
             entry.last_seen_at = now
             continue
         legacy_folder_entry = entries_by_drive_id.get(drive_id)
-        folder_group_code = extract_group_code(name)
         for workbook_file in workbook_files:
             workbook_id = str(workbook_file.get("id") or "").strip()
             if not workbook_id:
@@ -2122,6 +2287,25 @@ def sync_journal_monitor_section(
                 _parse_datetime(folder.get("created_time"))
             )
             next_modified_at = _drive_activity_modified_at(folder, [workbook_file])
+            _record_journal_drive_seen_event(
+                db,
+                section=section,
+                event_state=event_state,
+                seen_event_keys=seen_event_keys,
+                object_type="workbook",
+                drive_file_id=workbook_id,
+                drive_folder_id=drive_id,
+                journal_name=workbook_name,
+                group_code=group_code,
+                drive_url=str(workbook_file.get("webViewLink") or f"https://drive.google.com/file/d/{workbook_id}/view"),
+                drive_mime_type=str(workbook_file.get("mimeType") or ""),
+                drive_created_at=next_created_at,
+                drive_modified_at=next_modified_at,
+                detected_at=now,
+                actor_user_id=actor_user_id,
+                actor_name=actor_name,
+                actor_source=actor_source,
+            )
             entry = entries_by_drive_id.get(workbook_id)
             if not entry and legacy_folder_entry and len(workbook_files) == 1:
                 entry = legacy_folder_entry
@@ -2186,6 +2370,16 @@ def sync_journal_monitor_section(
         db.query(JournalMonitorEntry)
         .filter(JournalMonitorEntry.section_id == section.id)
         .all()
+    )
+    _record_deleted_journal_drive_events(
+        db,
+        section=section,
+        event_state=event_state,
+        seen_event_keys=seen_event_keys,
+        detected_at=now,
+        actor_user_id=actor_user_id,
+        actor_name=actor_name,
+        actor_source=actor_source,
     )
     removed_entries = [entry for entry in current_entries if entry.drive_file_id not in seen_drive_ids]
     if removed_entries:
@@ -2292,6 +2486,9 @@ def process_journal_monitor_background_step(
     sync_before: bool = True,
     workload_limit: int | None = 1,
     trainees_limit: int | None = 1,
+    actor_user_id: int | None = None,
+    actor_name: str | None = None,
+    actor_source: str = "auto",
 ) -> dict[str, Any]:
     section_id = section.id
     sync_warning: str | None = None
@@ -2303,6 +2500,9 @@ def process_journal_monitor_background_step(
                 folder_lister=folder_lister,
                 process_workload=False,
                 process_trainees=False,
+                actor_user_id=actor_user_id,
+                actor_name=actor_name,
+                actor_source=actor_source,
             )
         except Exception as exc:
             db.rollback()

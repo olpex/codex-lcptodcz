@@ -7,7 +7,7 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { usePageRefresh } from "../hooks/usePageRefresh";
-import type { JournalDailyActivityItem, JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, JournalMonitorSection } from "../types/api";
+import type { JournalDailyActivityItem, JournalMonitorEntry, JournalMonitorEntryBulkDeleteResponse, JournalMonitorEvent, JournalMonitorSection } from "../types/api";
 
 const EXPORT_FORMATS = ["xlsx", "pdf", "docx", "csv"] as const;
 
@@ -26,6 +26,18 @@ const PROCESSING_STATUS_FILTERS = new Set(["complete", "schedule_only", "trainee
 const WORKLOAD_STATUS_FILTERS = new Set(["workload_only", "with_workload", "without_workload"]);
 const JOURNAL_PROCESSING_REFRESH_INTERVAL_MS = 30_000;
 const JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS = 45_000;
+const JOURNAL_EVENT_REFRESH_INTERVAL_MS = 45_000;
+
+const JOURNAL_EVENT_ACTION_LABELS: Record<JournalMonitorEvent["action"], string> = {
+  created: "Створено",
+  changed: "Змінено",
+  deleted: "Видалено"
+};
+
+const JOURNAL_EVENT_OBJECT_LABELS: Record<JournalMonitorEvent["object_type"], string> = {
+  folder: "Папка",
+  workbook: "Журнал"
+};
 
 const STATUS_CLASSES: Record<string, string> = {
   complete: "bg-emerald-100 text-emerald-800",
@@ -135,6 +147,19 @@ function formatDateTime(value: string | null): string {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit"
+  });
+}
+
+function formatDateInput(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function formatEventDay(value: string): string {
+  return new Date(value).toLocaleDateString("uk-UA", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/Kyiv"
   });
 }
 
@@ -368,6 +393,17 @@ export function JournalMonitorsPage() {
   const [isBulkDeletingEntries, setIsBulkDeletingEntries] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
+  const [driveEvents, setDriveEvents] = useState<JournalMonitorEvent[]>([]);
+  const [isDriveEventsLoading, setIsDriveEventsLoading] = useState(false);
+  const [driveEventsError, setDriveEventsError] = useState<string | null>(null);
+  const [driveEventActionFilter, setDriveEventActionFilter] = useState("");
+  const [driveEventObjectFilter, setDriveEventObjectFilter] = useState("");
+  const [driveEventDateFrom, setDriveEventDateFrom] = useState(() => {
+    const value = new Date();
+    value.setDate(value.getDate() - 14);
+    return formatDateInput(value);
+  });
+  const [driveEventDateTo, setDriveEventDateTo] = useState(() => formatDateInput(new Date()));
   const [journalSearch, setJournalSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [scheduleFilter, setScheduleFilter] = useState("");
@@ -376,6 +412,7 @@ export function JournalMonitorsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [errorText, setErrorText] = useState<string | null>(null);
   const backgroundStepInFlightRef = useRef(false);
+  const driveEventsInFlightRef = useRef(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const selectedSection = useMemo(
@@ -441,6 +478,28 @@ export function JournalMonitorsPage() {
       return data;
   };
 
+  const loadDriveEvents = async (sectionId = selectedId || selectedSection?.id) => {
+    if (!sectionId || driveEventsInFlightRef.current) return;
+    driveEventsInFlightRef.current = true;
+    setIsDriveEventsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (driveEventDateFrom) params.set("date_from", driveEventDateFrom);
+      if (driveEventDateTo) params.set("date_to", driveEventDateTo);
+      if (driveEventActionFilter) params.set("action", driveEventActionFilter);
+      if (driveEventObjectFilter) params.set("object_type", driveEventObjectFilter);
+      const query = params.toString();
+      const data = await request<JournalMonitorEvent[]>(`/journal-monitors/${sectionId}/events${query ? `?${query}` : ""}`);
+      setDriveEvents(data);
+      setDriveEventsError(null);
+    } catch (error) {
+      setDriveEventsError((error as Error).message);
+    } finally {
+      driveEventsInFlightRef.current = false;
+      setIsDriveEventsLoading(false);
+    }
+  };
+
   const load = async () => {
     setIsLoading(true);
     try {
@@ -469,6 +528,7 @@ export function JournalMonitorsPage() {
       if (hasDailyActivity(data)) {
         setActivityExpanded(true);
       }
+      await loadDriveEvents(sectionId);
       await loadSections();
       setErrorText(null);
       if (showToast) showSuccess("Моніторинг журналів оновлено");
@@ -524,6 +584,11 @@ export function JournalMonitorsPage() {
     });
   }, [selectedId]);
 
+  useEffect(() => {
+    if (!selectedId) return;
+    loadDriveEvents(selectedId);
+  }, [selectedId, driveEventDateFrom, driveEventDateTo, driveEventActionFilter, driveEventObjectFilter]);
+
   usePageRefresh(processSelectedBackgroundStep, {
     enabled: Boolean(selectedId && sectionActive && detail?.workload_auto_enabled),
     intervalMs: JOURNAL_PROCESSING_REFRESH_INTERVAL_MS,
@@ -533,6 +598,12 @@ export function JournalMonitorsPage() {
   usePageRefresh(refreshSelectedActivity, {
     enabled: Boolean(selectedId && detail && sectionActive && !detail.workload_auto_enabled),
     intervalMs: JOURNAL_ACTIVITY_REFRESH_INTERVAL_MS,
+    refreshOnFocus: true
+  });
+
+  usePageRefresh(() => loadDriveEvents(), {
+    enabled: Boolean(selectedId && detail && sectionActive),
+    intervalMs: JOURNAL_EVENT_REFRESH_INTERVAL_MS,
     refreshOnFocus: true
   });
 
@@ -861,6 +932,32 @@ export function JournalMonitorsPage() {
     );
   };
 
+  const groupedDriveEvents = useMemo(() => {
+    const groups = new Map<string, JournalMonitorEvent[]>();
+    for (const event of driveEvents) {
+      const day = formatEventDay(event.occurred_at);
+      groups.set(day, [...(groups.get(day) || []), event]);
+    }
+    return Array.from(groups.entries());
+  }, [driveEvents]);
+
+  const renderDriveEventName = (event: JournalMonitorEvent) => {
+    const className = clsx(
+      "font-semibold",
+      event.drive_url && event.action !== "deleted"
+        ? "text-pine underline decoration-pine/40 underline-offset-2 hover:text-ink"
+        : "text-ink"
+    );
+    if (event.drive_url && event.action !== "deleted") {
+      return (
+        <a className={className} href={event.drive_url} target="_blank" rel="noreferrer">
+          {event.journal_name}
+        </a>
+      );
+    }
+    return <span className={className}>{event.journal_name}</span>;
+  };
+
   const changeSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
@@ -1033,6 +1130,123 @@ export function JournalMonitorsPage() {
               </div>
             )}
           </div>
+        )}
+
+        {detail && (
+          <section className="mb-4 border-b border-slate-200 pb-4" aria-label="Історія змін Drive">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h3 className="font-heading text-lg font-semibold text-ink">Історія змін Drive</h3>
+                <p className="text-xs text-slate-500">Папки та журнали, які sync зафіксував у Google Drive</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-pine hover:text-pine"
+                onClick={() => loadDriveEvents()}
+                disabled={isDriveEventsLoading}
+              >
+                {isDriveEventsLoading ? "Оновлення..." : "Оновити"}
+              </button>
+            </div>
+            <div className="mb-3 grid gap-2 md:grid-cols-4">
+              <label className="text-xs font-semibold text-slate-600">
+                З дати
+                <input
+                  type="date"
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+                  value={driveEventDateFrom}
+                  onChange={(event) => setDriveEventDateFrom(event.target.value)}
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                По дату
+                <input
+                  type="date"
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+                  value={driveEventDateTo}
+                  onChange={(event) => setDriveEventDateTo(event.target.value)}
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Дія
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+                  value={driveEventActionFilter}
+                  onChange={(event) => setDriveEventActionFilter(event.target.value)}
+                >
+                  <option value="">Усі дії</option>
+                  <option value="created">Створено</option>
+                  <option value="changed">Змінено</option>
+                  <option value="deleted">Видалено</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Тип
+                <select
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm font-normal text-ink"
+                  value={driveEventObjectFilter}
+                  onChange={(event) => setDriveEventObjectFilter(event.target.value)}
+                >
+                  <option value="">Усі типи</option>
+                  <option value="folder">Папки</option>
+                  <option value="workbook">Журнали</option>
+                </select>
+              </label>
+            </div>
+            {driveEventsError && <InlineNotice className="mb-3" tone="error" text={driveEventsError} actionLabel="Повторити" onAction={() => loadDriveEvents()} />}
+            {!driveEventsError && groupedDriveEvents.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                За вибраними фільтрами змін Drive ще немає.
+              </p>
+            ) : (
+              <div className="max-h-96 overflow-auto rounded-lg border border-slate-200">
+                {groupedDriveEvents.map(([day, events]) => (
+                  <div key={day} className="border-t border-slate-200 first:border-t-0">
+                    <div className="sticky top-0 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500">{day}</div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead className="bg-white text-xs uppercase text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Час</th>
+                            <th className="px-3 py-2 text-left">Дія</th>
+                            <th className="px-3 py-2 text-left">Тип</th>
+                            <th className="px-3 py-2 text-left">Назва</th>
+                            <th className="px-3 py-2 text-left">Група</th>
+                            <th className="px-3 py-2 text-left">Користувач</th>
+                            <th className="px-3 py-2 text-left">Зафіксовано</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {events.map((event) => (
+                            <tr key={event.id}>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-600">{formatKyivTime(event.occurred_at)}</td>
+                              <td className="whitespace-nowrap px-3 py-2">
+                                <span
+                                  className={clsx(
+                                    "rounded-full px-2 py-1 text-xs font-semibold",
+                                    event.action === "created" && "bg-emerald-100 text-emerald-800",
+                                    event.action === "changed" && "bg-amber-100 text-amber-800",
+                                    event.action === "deleted" && "bg-rose-100 text-rose-800"
+                                  )}
+                                >
+                                  {JOURNAL_EVENT_ACTION_LABELS[event.action]}
+                                </span>
+                              </td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-700">{JOURNAL_EVENT_OBJECT_LABELS[event.object_type]}</td>
+                              <td className="min-w-52 px-3 py-2">{renderDriveEventName(event)}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-600">{event.group_code || "-"}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-600">{event.actor_name || (event.source === "auto" ? "Автооновлення" : "Система")}</td>
+                              <td className="whitespace-nowrap px-3 py-2 text-slate-500">{formatDateTime(event.detected_at)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         )}
 
         {detail && !sectionActive && (

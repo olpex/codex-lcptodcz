@@ -374,6 +374,32 @@ class JournalMonitorEntry(Base):
     )
 
 
+class JournalMonitorEvent(Base):
+    __tablename__ = "journal_monitor_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("journal_monitor_sections.id"), nullable=False, index=True)
+    branch_id: Mapped[str] = mapped_column(String(50), default="main", nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    drive_file_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    drive_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    drive_mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    drive_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    journal_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    group_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(50), default="auto", nullable=False, index=True)
+    drive_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    drive_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+    section: Mapped[JournalMonitorSection] = relationship()
+    actor: Mapped["User | None"] = relationship()
+
+
 class JournalWorkloadEntry(Base):
     __tablename__ = "journal_workload_entries"
     __table_args__ = (
