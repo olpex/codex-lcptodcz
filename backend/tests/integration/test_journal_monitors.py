@@ -5,7 +5,7 @@ import pytest
 from openpyxl import Workbook
 from sqlalchemy import event
 
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
 from app.core.crypto import cipher
 from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.api.routes import journal_monitors as journal_monitor_routes
@@ -4001,6 +4001,69 @@ def test_drive_sync_creates_separate_entries_for_multiple_workbooks_in_one_group
         "https://drive.google.com/file/d/sheet-16p-26-practice/view",
         "https://drive.google.com/file/d/sheet-16p-26-theory/view",
     }
+
+
+def test_drive_sync_uses_fresh_entries_when_section_relationship_is_stale(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+    )
+    db_session.add(section)
+    db_session.commit()
+    assert section.entries == []
+
+    other_session = SessionLocal()
+    try:
+        other_session.add(
+            journal_monitor.JournalMonitorEntry(
+                section_id=section.id,
+                branch_id="main",
+                drive_file_id="sheet-46-26",
+                drive_folder_id="drive-46-26",
+                journal_name="46-26 Journal",
+                group_code="46-26",
+            )
+        )
+        other_session.commit()
+    finally:
+        other_session.close()
+
+    monkeypatch.setattr(
+        journal_monitor,
+        "list_drive_journal_workbook_files",
+        lambda folder_id, service_account_json=None: [
+            {
+                "id": "sheet-46-26",
+                "name": "46-26 Journal.xlsx",
+                "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "webViewLink": "https://drive.google.com/file/d/sheet-46-26/view",
+                "modifiedTime": "2026-05-13T13:02:00Z",
+            }
+        ],
+        raising=False,
+    )
+
+    journal_monitor.sync_journal_monitor_section(
+        db_session,
+        section,
+        folder_lister=lambda _folder_id, service_account_json=None: [
+            {
+                "id": "drive-46-26",
+                "name": "46-26 Journal",
+                "url": "https://drive.google.com/drive/folders/drive-46-26",
+                "modified_time": "2026-05-13T13:02:00Z",
+            }
+        ],
+        process_workload=False,
+        process_trainees=False,
+    )
+    db_session.commit()
+
+    entries = db_session.query(journal_monitor.JournalMonitorEntry).filter_by(section_id=section.id).all()
+    assert len(entries) == 1
+    assert entries[0].drive_file_id == "sheet-46-26"
 
 
 def test_journal_workload_is_processed_separately_for_each_workbook_in_same_group_folder(db_session, monkeypatch):

@@ -2029,13 +2029,26 @@ def sync_journal_monitor_section(
         folder_lister = list_drive_child_folders
     if workbook_lister is None:
         workbook_lister = list_drive_journal_workbook_files
+    locked_section = (
+        db.query(JournalMonitorSection)
+        .filter(JournalMonitorSection.id == section.id)
+        .with_for_update()
+        .first()
+    )
+    if locked_section is not None:
+        section = locked_section
     section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
     folders = folder_lister(section.folder_id, service_account_json=section_service_account_json)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     seen_drive_ids: set[str] = set()
     daily_cutoff_at = _journal_daily_cutoff(now)
+    section_entries = (
+        db.query(JournalMonitorEntry)
+        .filter(JournalMonitorEntry.section_id == section.id)
+        .all()
+    )
 
-    entries_by_drive_id = {entry.drive_file_id: entry for entry in section.entries}
+    entries_by_drive_id = {entry.drive_file_id: entry for entry in section_entries}
     for folder in folders:
         drive_id = str(folder.get("id") or "").strip()
         name = str(folder.get("name") or "").strip() or drive_id
@@ -2044,15 +2057,27 @@ def sync_journal_monitor_section(
         try:
             workbook_files = workbook_lister(drive_id, service_account_json=section_service_account_json)
         except Exception:
-            for existing_entry in section.entries:
+            for existing_entry in section_entries:
                 if existing_entry.drive_folder_id == drive_id or (
                     existing_entry.drive_folder_id is None and existing_entry.drive_file_id == drive_id
                 ):
                     seen_drive_ids.add(existing_entry.drive_file_id)
             continue
         if not workbook_files:
-            seen_drive_ids.add(drive_id)
             entry = entries_by_drive_id.get(drive_id)
+            has_imported_journal_data = bool(
+                entry
+                and entry.drive_folder_id is None
+                and (
+                    entry.workload_status == "processed"
+                    or entry.trainees_status == "processed"
+                    or entry.workload_hours > 0
+                    or entry.trainee_count > 0
+                )
+            )
+            if has_imported_journal_data:
+                continue
+            seen_drive_ids.add(drive_id)
             if not entry:
                 entry = JournalMonitorEntry(
                     section_id=section.id,
@@ -2062,6 +2087,7 @@ def sync_journal_monitor_section(
                 )
                 db.add(entry)
                 entries_by_drive_id[drive_id] = entry
+                section_entries.append(entry)
             folder_group_code = extract_group_code(name)
             entry.drive_file_id = drive_id
             entry.drive_folder_id = drive_id
@@ -2110,6 +2136,7 @@ def sync_journal_monitor_section(
                 )
                 db.add(entry)
                 entries_by_drive_id[workbook_id] = entry
+                section_entries.append(entry)
             entry.drive_file_id = workbook_id
             old_group_code = display_group_code(entry.group_code)
             next_group_code = display_group_code(group_code)
@@ -2147,6 +2174,7 @@ def sync_journal_monitor_section(
                 )
 
     db.flush()
+    db.expire(section, ["entries"])
     db.refresh(section)
     created_groups = ensure_groups_for_journal_entries(db, section)
     if created_groups:
@@ -2154,7 +2182,12 @@ def sync_journal_monitor_section(
         for entry in section.entries:
             _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
 
-    removed_entries = [entry for entry in section.entries if entry.drive_file_id not in seen_drive_ids]
+    current_entries = (
+        db.query(JournalMonitorEntry)
+        .filter(JournalMonitorEntry.section_id == section.id)
+        .all()
+    )
+    removed_entries = [entry for entry in current_entries if entry.drive_file_id not in seen_drive_ids]
     if removed_entries:
         remove_journal_entries_from_project(db, removed_entries)
 
