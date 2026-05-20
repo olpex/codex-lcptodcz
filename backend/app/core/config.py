@@ -1,5 +1,8 @@
+import os
+import socket
 from functools import lru_cache
 from typing import List
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -107,6 +110,31 @@ class Settings(BaseSettings):
     @property
     def mail_primary_channel_normalized(self) -> str:
         return self.mail_primary_channel.strip().lower()
+
+    @property
+    def resolved_redis_url(self) -> str:
+        raw_url = self.redis_url.strip()
+        if os.name != "nt" or not raw_url:
+            return raw_url
+        try:
+            parsed = urlparse(raw_url)
+        except Exception:
+            return raw_url
+        if parsed.scheme not in {"redis", "rediss"} or parsed.hostname != "redis":
+            return raw_url
+        try:
+            socket.getaddrinfo(parsed.hostname, parsed.port or 6379)
+            return raw_url
+        except OSError:
+            auth = ""
+            if parsed.username:
+                auth = parsed.username
+                if parsed.password:
+                    auth = f"{auth}:{parsed.password}"
+                auth = f"{auth}@"
+            host = "127.0.0.1"
+            port = f":{parsed.port}" if parsed.port else ""
+            return urlunparse(parsed._replace(netloc=f"{auth}{host}{port}"))
 
 
 @lru_cache
