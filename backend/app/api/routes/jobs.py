@@ -452,6 +452,7 @@ def get_worker_health(db: DbSession, current_user: CurrentUser) -> dict:
             "journal_auto_interval_seconds": settings.journal_workload_auto_interval_seconds,
             "journal_browser_pump_enabled": settings.journal_browser_pump_enabled,
             "journal_browser_pump_interval_seconds": settings.journal_browser_pump_interval_seconds,
+            "journal_browser_pump_batch_size": settings.journal_browser_pump_batch_size,
             "imap_fallback_enabled": settings.imap_fallback_enabled,
             "imap_auto_poll_enabled": settings.imap_auto_poll_enabled,
             "mail_primary_channel": settings.mail_primary_channel,

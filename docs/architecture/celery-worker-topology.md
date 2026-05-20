@@ -75,6 +75,7 @@ The following values must be consistent across API, Celery worker, and Celery be
 | `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` | API, worker | Optional global Drive service account; section credentials can override |
 | `JOURNAL_BROWSER_PUMP_ENABLED` | API | Enables authenticated browser sessions to trigger guarded journal/Drive processing |
 | `JOURNAL_BROWSER_PUMP_INTERVAL_SECONDS` | API | Minimum seconds between browser-triggered pump runs per branch; default `300` |
+| `JOURNAL_BROWSER_PUMP_BATCH_SIZE` | API | Number of journal workload and trainees items the browser pump processes per heartbeat; default `5`, maximum `20` |
 | `GOOGLE_DRIVE_INTAKE_BATCH_SIZE` | worker, beat visibility | Recommended default is `5`; reduce to `1` for cautious rollout |
 | `GOOGLE_DRIVE_INTAKE_INTERVAL_SECONDS` | beat | Drive intake schedule interval |
 | `MAIL_PRIMARY_CHANNEL` | API, worker | Current primary mail channel, usually `google_apps_script` |

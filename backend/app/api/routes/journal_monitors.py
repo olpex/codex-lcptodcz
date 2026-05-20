@@ -87,7 +87,13 @@ def _acquire_auto_pump_slot(branch_id: str) -> bool:
     return True
 
 
-def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None = None) -> AutoTickPayload:
+def _process_journal_monitor_auto_sections(
+    db: DbSession,
+    branch_id: str | None = None,
+    *,
+    workload_limit: int | None = 1,
+    trainees_limit: int | None = 1,
+) -> AutoTickPayload:
     query = db.query(JournalMonitorSection.id, JournalMonitorSection.branch_id).filter(JournalMonitorSection.is_active.is_(True))
     if branch_id is not None:
         query = query.filter(JournalMonitorSection.branch_id == branch_id)
@@ -106,6 +112,8 @@ def _process_journal_monitor_auto_sections(db: DbSession, branch_id: str | None 
                 section,
                 folder_lister=list_drive_child_folders,
                 target_year=target_year,
+                workload_limit=workload_limit,
+                trainees_limit=trainees_limit,
             )
             db.commit()
             _invalidate_journal_sections_cache(section_branch_id)
@@ -205,8 +213,16 @@ def process_journal_monitor_auto_pump(
     if not _acquire_auto_pump_slot(current_user.branch_id):
         return {"triggered": 0, "skipped": "rate_limited"}
 
+    batch_size = max(1, min(int(settings.journal_browser_pump_batch_size or 5), 20))
     result: AutoTickPayload = {"triggered": 1, "skipped": None}
-    result.update(_process_journal_monitor_auto_sections(db, current_user.branch_id))
+    result.update(
+        _process_journal_monitor_auto_sections(
+            db,
+            current_user.branch_id,
+            workload_limit=batch_size,
+            trainees_limit=batch_size,
+        )
+    )
     result.update(_process_drive_intake_auto_file(db, current_user.branch_id))
     return result
 

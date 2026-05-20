@@ -541,10 +541,27 @@ export function JournalMonitorsPage() {
     }
   };
 
-  const runBackgroundStep = async (sectionId: number, year: number) => {
+  const runBackgroundStep = async (
+    sectionId: number,
+    year: number,
+    options: { sync?: boolean; workloadLimit?: number; traineesLimit?: number } = {}
+  ) => {
     if (backgroundStepInFlightRef.current) return;
     backgroundStepInFlightRef.current = true;
-    const query = Number.isInteger(year) && year >= 2025 && year <= 2100 ? `?year=${year}` : "";
+    const params = new URLSearchParams();
+    if (Number.isInteger(year) && year >= 2025 && year <= 2100) {
+      params.set("year", String(year));
+    }
+    if (options.sync) {
+      params.set("sync", "true");
+    }
+    if (options.workloadLimit) {
+      params.set("workload_limit", String(options.workloadLimit));
+    }
+    if (options.traineesLimit) {
+      params.set("trainees_limit", String(options.traineesLimit));
+    }
+    const query = params.toString() ? `?${params.toString()}` : "";
     try {
       const data = await request<JournalMonitorSection>(`/journal-monitors/${sectionId}/processing/background-tick${query}`, {
         method: "POST"
@@ -564,6 +581,32 @@ export function JournalMonitorsPage() {
     if (!sectionId || !sectionActive) return;
     await runBackgroundStep(sectionId, Number(workloadYear));
     await syncSelected(false);
+  };
+
+  const refreshSelectedNow = async () => {
+    const sectionId = selectedId || selectedSection?.id;
+    if (!sectionId || !sectionActive || isSyncing) return;
+    if (!detail?.workload_auto_enabled) {
+      await syncSelected();
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      await runBackgroundStep(sectionId, Number(workloadYear), {
+        sync: true,
+        workloadLimit: 20,
+        traineesLimit: 20
+      });
+      await loadDriveEvents(sectionId);
+      setErrorText(null);
+      showSuccess("Оновлено і запущено batch-опрацювання журналів");
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorText(message);
+      showError(message);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const refreshSelectedActivity = async () => {
@@ -1332,8 +1375,9 @@ export function JournalMonitorsPage() {
             </button>
             <button
               type="button"
+              data-testid="journal-monitor-refresh"
               className="rounded-lg border border-pine px-3 py-2 text-sm font-semibold text-pine disabled:opacity-50"
-              onClick={() => syncSelected()}
+              onClick={refreshSelectedNow}
               disabled={!selectedId || !sectionActive || isSyncing}
             >
               {isSyncing ? "Оновлюємо..." : "Оновити"}

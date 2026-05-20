@@ -2490,6 +2490,32 @@ def test_journal_auto_pump_endpoint_rate_limits_repeated_browser_heartbeats(
     assert called == 0
 
 
+def test_journal_auto_pump_endpoint_uses_configured_batch_size(client, auth_headers, monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_process(db, branch_id=None, **kwargs):
+        captured["branch_id"] = branch_id
+        captured.update(kwargs)
+        return {"processed_sections": 1, "failed_sections": 0}
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.journal_browser_pump_batch_size", 7)
+    monkeypatch.setattr("app.api.routes.journal_monitors._acquire_auto_pump_slot", lambda branch_id: True)
+    monkeypatch.setattr("app.api.routes.journal_monitors._process_journal_monitor_auto_sections", fake_process)
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors._process_drive_intake_auto_file",
+        lambda db, branch_id: {"drive_intake_processed": 0},
+    )
+
+    response = client.post("/api/v1/journal-monitors/auto-pump", headers=auth_headers)
+
+    assert response.status_code == 202
+    assert captured == {
+        "branch_id": "main",
+        "workload_limit": 7,
+        "trainees_limit": 7,
+    }
+
+
 def test_journal_auto_worker_processes_pending_trainees_one_journal_per_tick(db_session, monkeypatch):
     drive_folders = lambda _folder_id, service_account_json=None: [
         {

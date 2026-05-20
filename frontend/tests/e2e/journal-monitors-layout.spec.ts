@@ -859,6 +859,31 @@ test("app layout quietly pumps journal background sync for admins", async ({ pag
   await expect.poll(() => autoPumpUrl?.pathname, { timeout: 15_000 }).toContain("/journal-monitors/auto-pump");
 });
 
+test("journal monitor update button processes a batch when auto-processing is enabled", async ({ page }) => {
+  let backgroundUrl: URL | null = null;
+  let syncUrl: URL | null = null;
+  await loginAndMockJournals(page, {
+    detailSection: { ...section, workload_auto_enabled: true, workload_auto_year: 2026 },
+    onBackgroundTick: (url) => {
+      backgroundUrl = url;
+    },
+    onSync: (url) => {
+      syncUrl = url;
+    }
+  });
+
+  await page.goto("/journals");
+  await expect(page.getByRole("button", { name: "Зупинити опрацювання" })).toBeVisible();
+  await page.getByTestId("journal-monitor-refresh").click();
+
+  await expect.poll(() => backgroundUrl?.pathname).toContain("/journal-monitors/1/processing/background-tick");
+  expect(backgroundUrl?.searchParams.get("year")).toBe("2026");
+  expect(backgroundUrl?.searchParams.get("sync")).toBe("true");
+  expect(backgroundUrl?.searchParams.get("workload_limit")).toBe("20");
+  expect(backgroundUrl?.searchParams.get("trainees_limit")).toBe("20");
+  expect(syncUrl).toBeNull();
+});
+
 test("journal monitor can force full reprocessing for a year", async ({ page }) => {
   let reprocessUrl: URL | null = null;
   let backgroundUrl: URL | null = null;
