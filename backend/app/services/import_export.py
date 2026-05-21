@@ -810,7 +810,16 @@ def try_import_trainees(
     default_group_name = _normalize_text_value(parsed.get("default_group_name"))
 
     group_cache: dict[str, Group] = {}
-    membership_cache: set[tuple[int, int]] = set()
+    membership_cache: set[tuple[int, int]] = {
+        (int(group_id), int(trainee_id))
+        for group_id, trainee_id in (
+            db.query(GroupMembership.group_id, GroupMembership.trainee_id)
+            .join(Group, Group.id == GroupMembership.group_id)
+            .filter(Group.branch_id == branch_id)
+            .all()
+        )
+        if group_id is not None and trainee_id is not None
+    }
     for row in parsed.get("data", []):
         payload = _extract_trainee_payload(row, default_group_code, default_group_name)
         if not payload:

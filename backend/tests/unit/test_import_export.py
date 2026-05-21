@@ -923,6 +923,54 @@ def test_deduplicate_trainees_keeps_memberships_attached_to_keeper(db_session):
     assert remaining.contract_number == "1826"
 
 
+def test_import_overwrite_reuses_existing_group_membership(db_session):
+    group = Group(branch_id="main", code="90-26", name="Журнал 90-26", status="active")
+    trainee = Trainee(
+        branch_id="main",
+        first_name="Ольга Юріївна",
+        last_name="Врублевська",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    db_session.add_all([group, trainee])
+    db_session.flush()
+    db_session.add(
+        GroupMembership(
+            group_id=group.id,
+            trainee_id=trainee.id,
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    parsed = {
+        "rows": 1,
+        "headers": ["Прізвище", "Ім'я", "По батькові", "Дата народження"],
+        "sheet_name": "ЗВ",
+        "default_group_code": "90-26",
+        "default_group_name": "Журнал 90-26",
+        "data": [
+            {
+                "Прізвище": "Врублевська",
+                "Ім'я": "Ольга",
+                "По батькові": "Юріївна",
+                "Дата народження": "04.05.1988",
+            }
+        ],
+    }
+
+    result = try_import_trainees(db_session, parsed, "main", update_existing_mode="overwrite")
+
+    assert result["inserted"] == 0
+    assert result["updated_existing"] == 0
+    assert result["skipped_existing"] == 1
+    memberships = db_session.query(GroupMembership).filter(GroupMembership.group_id == group.id).all()
+    assert len(memberships) == 1
+    assert memberships[0].trainee_id == trainee.id
+
+
 def test_import_skip_existing_mode_does_not_update_duplicate(tmp_path: Path, db_session):
     db_session.add(
         Trainee(
