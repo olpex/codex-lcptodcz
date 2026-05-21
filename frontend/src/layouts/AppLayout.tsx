@@ -1,5 +1,5 @@
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { PAGE_REFRESH_EVENT } from "../hooks/usePageRefresh";
@@ -25,6 +25,7 @@ const NAV_ITEMS = [
 
 export function AppLayout() {
   const { user, logout, request } = useAuth();
+  const location = useLocation();
   const { showInfo } = useToast();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -98,7 +99,7 @@ export function AppLayout() {
 
   useEffect(() => {
     const canPumpJournals = userRoles.some((role) => role === "admin" || role === "methodist");
-    if (!canPumpJournals) return;
+    if (!canPumpJournals || location.pathname.startsWith("/journals")) return;
 
     let inFlight = false;
     const runPump = async () => {
@@ -129,7 +130,7 @@ export function AppLayout() {
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [request, userRoles.join("|")]);
+  }, [location.pathname, request, userRoles.join("|")]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8ecf2_0%,#f2f7f5_45%,#ffffff_100%)] text-ink">
