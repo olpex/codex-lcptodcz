@@ -193,6 +193,8 @@ def _process_drive_intake_auto_file(db: DbSession, branch_id: str | None = None)
 def process_journal_monitor_auto_cron(
     db: DbSession,
     authorization: str | None = Header(default=None),
+    workload_limit: int = Query(default=1, ge=1, le=20),
+    trainees_limit: int = Query(default=1, ge=1, le=20),
 ) -> AutoTickPayload:
     expected_secret = settings.cron_secret.strip()
     if not expected_secret:
@@ -201,7 +203,11 @@ def process_journal_monitor_auto_cron(
     if authorization != expected_header:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некоректний cron-токен")
 
-    result = _process_journal_monitor_auto_sections(db)
+    result = _process_journal_monitor_auto_sections(
+        db,
+        workload_limit=workload_limit,
+        trainees_limit=trainees_limit,
+    )
     result.update(_process_drive_intake_auto_file(db))
     return result
 

@@ -2704,6 +2704,33 @@ def test_journal_auto_tick_endpoint_processes_one_drive_intake_file(client, auth
     assert captured["import_job_runner"] is not None
 
 
+def test_journal_auto_cron_endpoint_forwards_limit_query_params(client, auth_headers, monkeypatch):
+    captured: dict[str, int] = {}
+
+    def fake_process_sections(db, branch_id=None, **kwargs):
+        captured["workload_limit"] = kwargs["workload_limit"]
+        captured["trainees_limit"] = kwargs["trainees_limit"]
+        return {"processed_sections": 0, "failed_sections": 0}
+
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors._process_journal_monitor_auto_sections",
+        fake_process_sections,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.journal_monitors._process_drive_intake_auto_file",
+        lambda db, branch_id=None: {"drive_intake_processed": 0, "drive_intake_failed": 0},
+    )
+
+    monkeypatch.setattr("app.api.routes.journal_monitors.settings.cron_secret", "cron-secret")
+    response = client.post(
+        "/api/v1/journal-monitors/auto-cron?workload_limit=7&trainees_limit=9",
+        headers={"Authorization": "Bearer cron-secret"},
+    )
+
+    assert response.status_code == 202
+    assert captured == {"workload_limit": 7, "trainees_limit": 9}
+
+
 def test_journal_auto_tick_reports_drive_intake_error_message(client, auth_headers, monkeypatch):
     def fail_drive_intake(db, **kwargs):
         raise RuntimeError("Не вдалося отримати доступ до папки Google Drive")

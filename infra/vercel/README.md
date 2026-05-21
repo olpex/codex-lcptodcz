@@ -41,6 +41,26 @@ Workflow `.github/workflows/deploy-workers.yml` автоматично запу�
 docker compose -f infra/vercel/docker-compose.workers.yml up -d --build redis worker beat
 ```
 
+## 30-second runner without Docker
+
+Якщо потрібен інтервал близько `30` секунд без `worker/beat`, запускайте локальний runner на постійному Windows/Linux хості:
+
+```bash
+python scripts/journal_auto_cron_runner.py \
+  --base-url https://codex-lcptodcz.vercel.app \
+  --cron-secret "$CRON_SECRET" \
+  --interval 30 \
+  --workload-limit 1 \
+  --trainees-limit 1
+```
+
+Runner послідовно викликає `POST /api/api/v1/journal-monitors/auto-cron` і підтримує `workload_limit` та `trainees_limit` у межах `1..20`.
+
+Практично:
+- true `30s` неможливі лише на Vercel + GitHub schedule, бо GitHub cron має мінімум `5` хвилин;
+- для стабільних `30s` потрібен постійно увімкнений хост: VPS, окремий сервер або Windows-машина з Task Scheduler / NSSM / systemd;
+- workflow `.github/workflows/journal-auto-cron.yml` лишається fallback, а не основним 30-секундним scheduler.
+
 ## Опційний моніторинг Flower
 
 ```bash
