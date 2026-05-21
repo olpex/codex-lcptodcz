@@ -97,9 +97,9 @@ def _section_has_processing_backlog(section: JournalMonitorSection, target_year:
         entry_year = entry.workload_year
         if target_year is not None and entry_year is not None and entry_year != target_year:
             continue
-        if entry.workload_status in {"pending", "failed", "needs_regeneration"}:
+        if entry.workload_status in {"pending", "needs_regeneration"}:
             return True
-        if entry.group_code and entry.trainees_status in {"pending", "failed"}:
+        if entry.group_code and entry.trainees_status == "pending":
             return True
     return False
 

@@ -1759,7 +1759,7 @@ def test_journal_processing_tick_processes_pending_workload_before_trainees(
     assert summary["Коваль Олена Петрівна"]["total_hours"] == 8
 
 
-def test_background_tick_processes_existing_queue_when_drive_folder_sync_fails(
+def test_background_tick_processes_existing_queue_before_drive_folder_sync(
     client,
     auth_headers,
     db_session,
@@ -1811,8 +1811,7 @@ def test_background_tick_processes_existing_queue_when_drive_folder_sync_fails(
     response = client.post(f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true", headers=auth_headers)
 
     assert response.status_code == 200
-    assert drive_sync_calls == 1
-    assert "Drive" in response.json()["last_sync_message"]
+    assert drive_sync_calls == 0
     entry = response.json()["entries"][0]
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"
@@ -2179,6 +2178,17 @@ def test_background_tick_discovers_new_drive_folder_for_existing_section(
 
     assert tick_response.status_code == 200
     entries = {entry["group_code"]: entry for entry in tick_response.json()["entries"]}
+    assert set(entries) == {"46-26"}
+    assert entries["46-26"]["workload_status"] == "processed"
+    assert entries["46-26"]["trainees_status"] == "processed"
+
+    second_tick_response = client.post(
+        f"/api/v1/journal-monitors/{section_id}/processing/background-tick?year=2026&sync=true&workload_limit=20&trainees_limit=20",
+        headers=auth_headers,
+    )
+
+    assert second_tick_response.status_code == 200
+    entries = {entry["group_code"]: entry for entry in second_tick_response.json()["entries"]}
     assert set(entries) == {"46-26", "85-26"}
     assert entries["85-26"]["workload_status"] == "processed"
     assert entries["85-26"]["trainees_status"] == "processed"
@@ -4054,7 +4064,6 @@ def test_background_tick_processes_existing_pending_entries_when_folder_sync_fai
 
     assert tick_response.status_code == 200
     payload = tick_response.json()
-    assert "Drive root temporarily unavailable" in payload["last_sync_message"]
     entry = payload["entries"][0]
     assert entry["workload_status"] == "processed"
     assert entry["trainees_status"] == "processed"

@@ -1018,8 +1018,8 @@ export function JournalMonitorsPage() {
       showSuccess(`Вибран? журнали поставлено у пр?оритетну чергу: ${selectedEntryCount}`);
       const result = await runBackgroundStep(selectedId, year, {
         sync: true,
-        workloadLimit: 20,
-        traineesLimit: 20
+        workloadLimit: 1,
+        traineesLimit: 1
       });
       if (result === "busy") {
         showInfo("Поточний крок завершується. Пріоритетна черга підхопиться автоматично одразу після нього.");
