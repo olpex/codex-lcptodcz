@@ -2283,6 +2283,90 @@ def test_journal_auto_worker_processes_active_sections_without_manual_auto_toggl
     assert entry.trainee_count == 1
 
 
+def test_background_step_locks_section_before_processing(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    lock_calls: list[int] = []
+    original_lock = journal_monitor.lock_journal_monitor_section
+
+    def tracked_lock(db, target):
+        section_id = target if isinstance(target, int) else target.id
+        lock_calls.append(section_id)
+        return original_lock(db, target)
+
+    monkeypatch.setattr(journal_monitor, "lock_journal_monitor_section", tracked_lock)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: {"processed": 0, "failed": 0, "skipped_year": 0},
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: {"processed": 0, "no_data": 0, "failed": 0},
+    )
+
+    result = journal_monitor.process_journal_monitor_background_step(
+        db_session,
+        section,
+        sync_before=False,
+        workload_limit=1,
+        trainees_limit=1,
+    )
+
+    assert result["workload"] == {"processed": 0, "failed": 0, "skipped_year": 0}
+    assert result["trainees"] == {"processed": 0, "no_data": 0, "failed": 0}
+    assert lock_calls == [section.id]
+
+
+def test_section_step_locks_section_before_processing(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    lock_calls: list[int] = []
+    original_lock = journal_monitor.lock_journal_monitor_section
+
+    def tracked_lock(db, target):
+        section_id = target if isinstance(target, int) else target.id
+        lock_calls.append(section_id)
+        return original_lock(db, target)
+
+    monkeypatch.setattr(journal_monitor, "lock_journal_monitor_section", tracked_lock)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: {"processed": 0, "failed": 0, "skipped_year": 0},
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: {"processed": 0, "no_data": 0, "failed": 0},
+    )
+
+    result = journal_monitor.process_journal_monitor_section_step(db_session, section)
+
+    assert result["workload"] == {"processed": 0, "failed": 0, "skipped_year": 0}
+    assert result["trainees"] == {"processed": 0, "no_data": 0, "failed": 0}
+    assert lock_calls == [section.id]
+
+
 def test_journal_auto_cron_endpoint_processes_active_sections(client, auth_headers, db_session, monkeypatch):
     monkeypatch.setattr(journal_monitor.settings, "cron_secret", "cron-secret")
     captured: dict[str, object] = {}

@@ -30,6 +30,7 @@ from app.services.journal_monitor import (
     delete_workload_for_journal_entries,
     extract_drive_folder_id,
     hide_groups_for_deleted_journal_entries,
+    lock_journal_monitor_section,
     list_drive_child_folders,
     requeue_selected_journal_entries,
     requeue_journal_trainees_for_year,
@@ -401,6 +402,9 @@ def update_section(
 )
 def delete_section(section_id: int, db: DbSession, current_user: CurrentUser) -> None:
     section = _get_section_or_404(db, current_user, section_id)
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     branch_id = section.branch_id
     db.delete(section)
     db.commit()
@@ -419,6 +423,9 @@ def bulk_delete_entries(
     current_user: CurrentUser,
 ) -> JournalMonitorEntryBulkDeleteResponse:
     section = _get_section_or_404(db, current_user, section_id)
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     requested_ids = list(dict.fromkeys(payload.entry_ids))
     entries = (
         db.query(JournalMonitorEntry)
@@ -478,6 +485,9 @@ def bulk_delete_entries(
 )
 def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: CurrentUser) -> None:
     section = _get_section_or_404(db, current_user, section_id)
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     entry = db.get(JournalMonitorEntry, entry_id)
     if not entry or entry.section_id != section.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Журнал не знайдено")
@@ -543,6 +553,9 @@ def _start_section_processing(
     *,
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     section.workload_auto_enabled = True
     section.workload_auto_year = year
     section.last_processing_message = "Автоопрацювання увімкнено. Відстежуємо лише нові або змінені журнали."
@@ -566,6 +579,9 @@ def _reprocess_section_all(
     *,
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     section.workload_auto_enabled = True
     section.workload_auto_year = year
     db.add(section)
@@ -597,6 +613,9 @@ def _process_section_once(
     error_prefix: str,
 ) -> JournalMonitorDetailResponse:
     section_id = section.id
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     try:
         process_journal_monitor_section_step(db, section, process_workload=True, process_trainees=True)
         db.commit()
@@ -618,6 +637,9 @@ def _start_section_workload_inline(
     actor_user_id: int | None = None,
     actor_name: str | None = None,
 ) -> JournalMonitorDetailResponse:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     section.workload_auto_enabled = True
     section.workload_auto_year = year
     db.add(section)
@@ -645,6 +667,9 @@ def _start_section_workload_inline(
 
 
 def _stop_section_processing(section: JournalMonitorSection, db: DbSession) -> JournalMonitorDetailResponse:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     section.workload_auto_enabled = False
     section.priority_entry_ids = None
     section.priority_queue_year = None
@@ -767,6 +792,9 @@ def queue_selected_section_processing(
     year: int = Query(default=2026, ge=2025, le=2100),
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     requested_ids = list(dict.fromkeys(payload.entry_ids))
     available_ids = {entry.id for entry in section.entries if entry.id is not None}
     queued_ids = [entry_id for entry_id in requested_ids if entry_id in available_ids]

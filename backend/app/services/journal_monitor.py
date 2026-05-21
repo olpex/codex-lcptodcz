@@ -1829,6 +1829,21 @@ def requeue_selected_journal_entries(
     return workload_changed, trainees_changed
 
 
+def lock_journal_monitor_section(
+    db: Session,
+    section: JournalMonitorSection | int,
+) -> JournalMonitorSection | None:
+    section_id = section if isinstance(section, int) else section.id
+    if section_id is None:
+        return section if isinstance(section, JournalMonitorSection) else None
+    return (
+        db.query(JournalMonitorSection)
+        .filter(JournalMonitorSection.id == section_id)
+        .with_for_update()
+        .first()
+    )
+
+
 def process_journal_monitor_section_step(
     db: Session,
     section: JournalMonitorSection,
@@ -1836,6 +1851,9 @@ def process_journal_monitor_section_step(
     process_workload: bool = True,
     process_trainees: bool = True,
 ) -> dict[str, Any]:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     message_parts: list[str] = []
     result: dict[str, Any] = {
         "workload": {"processed": 0, "failed": 0, "skipped_year": 0},
@@ -2260,12 +2278,7 @@ def sync_journal_monitor_section(
         folder_lister = list_drive_child_folders
     if workbook_lister is None:
         workbook_lister = list_drive_journal_workbook_files
-    locked_section = (
-        db.query(JournalMonitorSection)
-        .filter(JournalMonitorSection.id == section.id)
-        .with_for_update()
-        .first()
-    )
+    locked_section = lock_journal_monitor_section(db, section)
     if locked_section is not None:
         section = locked_section
     section_service_account_json = cipher.decrypt(section.service_account_json_encrypted)
@@ -2605,6 +2618,9 @@ def process_journal_monitor_background_step(
     actor_name: str | None = None,
     actor_source: str = "auto",
 ) -> dict[str, Any]:
+    locked_section = lock_journal_monitor_section(db, section)
+    if locked_section is not None:
+        section = locked_section
     section_id = section.id
     sync_warning: str | None = None
     retry_failed = False
