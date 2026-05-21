@@ -4,6 +4,7 @@ from io import BytesIO
 import pytest
 from openpyxl import Workbook
 from sqlalchemy import event
+from sqlalchemy.exc import OperationalError
 
 from app.db.session import SessionLocal, engine
 from app.core.crypto import cipher
@@ -2328,6 +2329,61 @@ def test_background_step_locks_section_before_processing(db_session, monkeypatch
     assert lock_calls == [section.id]
 
 
+def test_background_step_retries_transient_postgres_deadlock_during_drive_sync(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Р–СѓСЂРЅР°Р»Рё 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+    attempts = 0
+
+    class DeadlockOrig:
+        pgcode = "40P01"
+
+    def flaky_sync(db, target_section, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError(
+                "UPDATE journal_monitor_entries SET drive_created_at=%s, last_seen_at=%s WHERE journal_monitor_entries.id = %s",
+                {},
+                DeadlockOrig(),
+            )
+        target_section.last_sync_status = "success"
+        target_section.last_sync_message = "Оновлено журналів: 0"
+        db.add(target_section)
+        return target_section
+
+    monkeypatch.setattr(journal_monitor, "sync_journal_monitor_section", flaky_sync)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: {"processed": 0, "failed": 0, "skipped_year": 0},
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: {"processed": 0, "no_data": 0, "failed": 0},
+    )
+
+    result = journal_monitor.process_journal_monitor_background_step(
+        db_session,
+        section,
+        sync_before=True,
+        workload_limit=1,
+        trainees_limit=1,
+    )
+
+    assert attempts == 2
+    assert "sync_warning" not in result
+    assert section.last_sync_status == "success"
+
+
 def test_section_step_locks_section_before_processing(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
@@ -3271,6 +3327,43 @@ def test_journal_monitor_sync_compares_drive_folders_with_project_data(client, a
     assert entries["167-25"]["processing_status"] == "schedule_only"
     assert entries["162-25"]["processing_status"] == "trainees_only"
     assert entries["999-25"]["processing_status"] == "not_processed"
+
+
+def test_journal_monitor_sync_retries_transient_postgres_deadlock(client, auth_headers, db_session, monkeypatch):
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Р–СѓСЂРЅР°Р»Рё 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+    section_id = create_response.json()["id"]
+    attempts = 0
+
+    class DeadlockOrig:
+        pgcode = "40P01"
+
+    def flaky_sync(db, section, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OperationalError(
+                "UPDATE journal_monitor_entries SET drive_created_at=%s, last_seen_at=%s WHERE journal_monitor_entries.id = %s",
+                {},
+                DeadlockOrig(),
+            )
+        section.last_sync_status = "success"
+        section.last_sync_message = "Оновлено журналів: 0"
+        db.add(section)
+        return section
+
+    monkeypatch.setattr(journal_monitor_routes, "sync_journal_monitor_section", flaky_sync)
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    assert attempts == 2
+    assert sync_response.json()["last_sync_status"] == "success"
+    assert "DeadlockDetected" not in (sync_response.json()["last_sync_message"] or "")
 
 
 def test_journal_monitor_exports_csv(client, auth_headers, db_session, monkeypatch):

@@ -26,6 +26,7 @@ from app.services.cache import cache_delete, cache_get_json, cache_set_json, cac
 from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
+    _is_transient_postgres_lock_error,
     archive_trainees_for_deleted_journal_entries,
     delete_workload_for_journal_entries,
     extract_drive_folder_id,
@@ -520,27 +521,32 @@ def delete_entry(section_id: int, entry_id: int, db: DbSession, current_user: Cu
 )
 def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
-    try:
-        section = sync_journal_monitor_section(
-            db,
-            section,
-            folder_lister=list_drive_child_folders,
-            process_workload=False,
-            process_trainees=False,
-            actor_user_id=current_user.id,
-            actor_name=_actor_display_name(current_user),
-            actor_source="manual",
-        )
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        section = _get_section_or_404(db, current_user, section_id)
-        section.last_sync_status = "failed"
-        section.last_sync_message = str(exc)[:500]
-        db.add(section)
-        db.commit()
-        _invalidate_journal_sections_cache(current_user.branch_id)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося оновити Google Drive: {exc}") from exc
+    for attempt in range(2):
+        try:
+            section = sync_journal_monitor_section(
+                db,
+                section,
+                folder_lister=list_drive_child_folders,
+                process_workload=False,
+                process_trainees=False,
+                actor_user_id=current_user.id,
+                actor_name=_actor_display_name(current_user),
+                actor_source="manual",
+            )
+            db.commit()
+            break
+        except Exception as exc:
+            db.rollback()
+            if attempt == 0 and _is_transient_postgres_lock_error(exc):
+                section = _get_section_or_404(db, current_user, section_id)
+                continue
+            section = _get_section_or_404(db, current_user, section_id)
+            section.last_sync_status = "failed"
+            section.last_sync_message = str(exc)[:500]
+            db.add(section)
+            db.commit()
+            _invalidate_journal_sections_cache(current_user.branch_id)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося оновити Google Drive: {exc}") from exc
     db.refresh(section)
     _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))

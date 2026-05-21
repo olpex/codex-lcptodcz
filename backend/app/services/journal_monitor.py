@@ -18,6 +18,7 @@ from docx import Document as DocxDocument
 from jose import jwt
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import func
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -33,6 +34,7 @@ GOOGLE_DRIVE_XLS_MIME = "application/vnd.ms-excel"
 GOOGLE_DRIVE_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+_POSTGRES_TRANSIENT_LOCK_ERROR_CODES = {"40P01", "40001", "55P03"}
 SERVICE_ACCOUNT_SETUP_MESSAGE = (
     "Для приватної Google Drive папки надайте доступ Editor для email service account "
     "suptc-drive-journal-monitor@gen-lang-client-0242013668.iam.gserviceaccount.com "
@@ -371,6 +373,17 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _is_transient_postgres_lock_error(exc: BaseException) -> bool:
+    if not isinstance(exc, DBAPIError):
+        return False
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+    if code in _POSTGRES_TRANSIENT_LOCK_ERROR_CODES:
+        return True
+    message = f"{orig or ''} {exc}".casefold()
+    return "deadlock detected" in message or "could not serialize access" in message or "lock not available" in message
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -2626,28 +2639,33 @@ def process_journal_monitor_background_step(
     retry_failed = False
     priority_entry_ids = set(_section_priority_entry_ids(section))
     if sync_before and not priority_entry_ids:
-        try:
-            section = sync_journal_monitor_section(
-                db,
-                section,
-                folder_lister=folder_lister,
-                process_workload=False,
-                process_trainees=False,
-                actor_user_id=actor_user_id,
-                actor_name=actor_name,
-                actor_source=actor_source,
-            )
-            retry_failed = True
-        except Exception as exc:
-            db.rollback()
-            section = db.get(JournalMonitorSection, section_id)
-            if section is None:
-                raise
-            sync_warning = f"Синхронізацію Drive пропущено: {exc}"
-            section.last_sync_status = "failed"
-            section.last_sync_message = _clip_monitor_message(sync_warning)
-            db.add(section)
-            db.flush()
+        for attempt in range(2):
+            try:
+                section = sync_journal_monitor_section(
+                    db,
+                    section,
+                    folder_lister=folder_lister,
+                    process_workload=False,
+                    process_trainees=False,
+                    actor_user_id=actor_user_id,
+                    actor_name=actor_name,
+                    actor_source=actor_source,
+                )
+                retry_failed = True
+                break
+            except Exception as exc:
+                db.rollback()
+                section = db.get(JournalMonitorSection, section_id)
+                if section is None:
+                    raise
+                if attempt == 0 and _is_transient_postgres_lock_error(exc):
+                    continue
+                sync_warning = f"Синхронізацію Drive пропущено: {exc}"
+                section.last_sync_status = "failed"
+                section.last_sync_message = _clip_monitor_message(sync_warning)
+                db.add(section)
+                db.flush()
+                break
     if priority_entry_ids:
         valid_entry_ids = {entry.id for entry in section.entries if entry.id is not None}
         filtered_entry_ids = sorted(entry_id for entry_id in priority_entry_ids if entry_id in valid_entry_ids)
