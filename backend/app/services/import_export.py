@@ -13,7 +13,10 @@ from fpdf.fonts import FontFace
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pypdf import PdfReader
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 import xlrd
 from xlrd.xldate import xldate_as_datetime
@@ -538,14 +541,50 @@ def _ensure_group_for_trainee(
         membership_cache.add(membership_key)
         return 0, trainee_group_changed
 
-    db.add(
-        GroupMembership(
-            group_id=group.id,
-            trainee_id=trainee.id,
-            status=MembershipStatus.ACTIVE,
+    values = {
+        "group_id": group.id,
+        "trainee_id": trainee.id,
+        "status": MembershipStatus.ACTIVE,
+    }
+    dialect_name = db.get_bind().dialect.name
+
+    if dialect_name == "postgresql":
+        stmt = (
+            postgresql_insert(GroupMembership)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["group_id", "trainee_id"])
         )
-    )
+        result = db.execute(stmt)
+    elif dialect_name == "sqlite":
+        stmt = (
+            sqlite_insert(GroupMembership)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["group_id", "trainee_id"])
+        )
+        result = db.execute(stmt)
+    else:
+        try:
+            db.add(GroupMembership(**values))
+            db.flush()
+        except IntegrityError:
+            membership_exists = (
+                db.query(GroupMembership)
+                .filter(
+                    GroupMembership.group_id == group.id,
+                    GroupMembership.trainee_id == trainee.id,
+                )
+                .first()
+            )
+            if not membership_exists:
+                raise
+            membership_cache.add(membership_key)
+            return 0, trainee_group_changed
+        membership_cache.add(membership_key)
+        return 1, True
+
     membership_cache.add(membership_key)
+    if result.rowcount == 0:
+        return 0, trainee_group_changed
     return 1, True
 
 

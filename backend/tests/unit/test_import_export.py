@@ -7,6 +7,7 @@ from app.core.crypto import cipher
 from app.models import Group, GroupMembership, JournalMonitorEntry, JournalMonitorSection, JournalWorkloadEntry, Room, ScheduleSlot, Subject, Teacher, Trainee
 from app.models import DocumentType
 from app.services.import_export import (
+    _ensure_group_for_trainee,
     analyze_trainee_import_duplicates,
     collect_report_rows,
     collect_group_export_rows,
@@ -967,6 +968,62 @@ def test_import_overwrite_reuses_existing_group_membership(db_session):
     assert result["updated_existing"] == 0
     assert result["skipped_existing"] == 1
     memberships = db_session.query(GroupMembership).filter(GroupMembership.group_id == group.id).all()
+    assert len(memberships) == 1
+    assert memberships[0].trainee_id == trainee.id
+
+
+def test_ensure_group_for_trainee_ignores_conflicting_membership_insert(db_session, monkeypatch):
+    group = Group(branch_id="main", code="90-26", name="Журнал 90-26", status="active")
+    trainee = Trainee(
+        branch_id="main",
+        first_name="Ольга Юріївна",
+        last_name="Врублевська",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    db_session.add_all([group, trainee])
+    db_session.flush()
+    db_session.add(
+        GroupMembership(
+            group_id=group.id,
+            trainee_id=trainee.id,
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    real_query = db_session.query
+
+    class _FakeMembershipQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    def fake_query(*entities, **kwargs):
+        if len(entities) == 1 and entities[0] is GroupMembership:
+            return _FakeMembershipQuery()
+        return real_query(*entities, **kwargs)
+
+    monkeypatch.setattr(db_session, "query", fake_query)
+
+    memberships_added, group_changed = _ensure_group_for_trainee(
+        db_session,
+        trainee,
+        "main",
+        {"90-26": group},
+        set(),
+        "90-26",
+        "Журнал 90-26",
+        overwrite_group=True,
+    )
+
+    assert memberships_added == 0
+    assert group_changed is False
+    memberships = real_query(GroupMembership).filter(GroupMembership.group_id == group.id).all()
     assert len(memberships) == 1
     assert memberships[0].trainee_id == trainee.id
 
