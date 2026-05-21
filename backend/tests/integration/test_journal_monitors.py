@@ -2296,13 +2296,13 @@ def test_background_step_locks_section_before_processing(db_session, monkeypatch
     db_session.add(section)
     db_session.commit()
 
-    lock_calls: list[int] = []
+    lock_calls: list[tuple[int, bool]] = []
     original_lock = journal_monitor.lock_journal_monitor_section
 
-    def tracked_lock(db, target):
+    def tracked_lock(db, target, *, skip_locked=False):
         section_id = target if isinstance(target, int) else target.id
-        lock_calls.append(section_id)
-        return original_lock(db, target)
+        lock_calls.append((section_id, skip_locked))
+        return original_lock(db, target, skip_locked=skip_locked)
 
     monkeypatch.setattr(journal_monitor, "lock_journal_monitor_section", tracked_lock)
     monkeypatch.setattr(
@@ -2326,7 +2326,54 @@ def test_background_step_locks_section_before_processing(db_session, monkeypatch
 
     assert result["workload"] == {"processed": 0, "failed": 0, "skipped_year": 0}
     assert result["trainees"] == {"processed": 0, "no_data": 0, "failed": 0}
-    assert lock_calls == [section.id]
+    assert lock_calls == [(section.id, True)]
+
+
+def test_background_step_skips_when_section_is_already_locked(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Р–СѓСЂРЅР°Р»Рё 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.commit()
+
+    lock_calls: list[tuple[int, bool]] = []
+
+    def locked_elsewhere(db, target, *, skip_locked=False):
+        section_id = target if isinstance(target, int) else target.id
+        lock_calls.append((section_id, skip_locked))
+        return None
+
+    monkeypatch.setattr(journal_monitor, "lock_journal_monitor_section", locked_elsewhere)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("locked section must not process workload")),
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("locked section must not process trainees")),
+    )
+
+    result = journal_monitor.process_journal_monitor_background_step(
+        db_session,
+        section,
+        sync_before=False,
+        workload_limit=1,
+        trainees_limit=1,
+    )
+
+    assert result == {
+        "workload": {"processed": 0, "failed": 0, "skipped_year": 0},
+        "trainees": {"processed": 0, "no_data": 0, "failed": 0},
+        "skipped": "locked",
+    }
+    assert lock_calls == [(section.id, True)]
 
 
 def test_background_step_retries_transient_postgres_deadlock_during_drive_sync(db_session, monkeypatch):
@@ -2452,10 +2499,10 @@ def test_section_step_locks_section_before_processing(db_session, monkeypatch):
     lock_calls: list[int] = []
     original_lock = journal_monitor.lock_journal_monitor_section
 
-    def tracked_lock(db, target):
+    def tracked_lock(db, target, *, skip_locked=False):
         section_id = target if isinstance(target, int) else target.id
         lock_calls.append(section_id)
-        return original_lock(db, target)
+        return original_lock(db, target, skip_locked=skip_locked)
 
     monkeypatch.setattr(journal_monitor, "lock_journal_monitor_section", tracked_lock)
     monkeypatch.setattr(

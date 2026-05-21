@@ -1851,16 +1851,17 @@ def requeue_selected_journal_entries(
 def lock_journal_monitor_section(
     db: Session,
     section: JournalMonitorSection | int,
+    *,
+    skip_locked: bool = False,
 ) -> JournalMonitorSection | None:
     section_id = section if isinstance(section, int) else section.id
     if section_id is None:
         return section if isinstance(section, JournalMonitorSection) else None
-    return (
+    query = (
         db.query(JournalMonitorSection)
         .filter(JournalMonitorSection.id == section_id)
-        .with_for_update()
-        .first()
     )
+    return query.with_for_update(skip_locked=skip_locked).first()
 
 
 def process_journal_monitor_section_step(
@@ -2637,7 +2638,13 @@ def process_journal_monitor_background_step(
     actor_name: str | None = None,
     actor_source: str = "auto",
 ) -> dict[str, Any]:
-    locked_section = lock_journal_monitor_section(db, section)
+    locked_section = lock_journal_monitor_section(db, section, skip_locked=True)
+    if locked_section is None and getattr(section, "id", None) is not None:
+        return {
+            "workload": {"processed": 0, "failed": 0, "skipped_year": 0},
+            "trainees": {"processed": 0, "no_data": 0, "failed": 0},
+            "skipped": "locked",
+        }
     if locked_section is not None:
         section = locked_section
     section_id = section.id
