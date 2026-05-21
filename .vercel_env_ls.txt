@@ -1,0 +1,49 @@
+Retrieving project…
+> Environment Variables found for olegs-projects-5ffe30a8/codex-lcptodcz [516ms]
+
+ name                                       value               environments                        created    
+ CRON_SECRET                                Encrypted           Production                          5d ago     
+ GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON          Encrypted           Preview, Production                 18d ago    
+ MAIL_WEBHOOK_SECRET                        Encrypted           Preview, Production                 26d ago    
+ IMAP_ALLOWED_SENDERS                       Encrypted           Preview, Production                 26d ago    
+ IMAP_CONTRACT_SENDER_NAME                  Encrypted           Preview, Production                 26d ago    
+ IMAP_CONTRACT_SENDER_EMAIL                 Encrypted           Preview, Production                 26d ago    
+ IMAP_CONTRACT_ATTACHMENT_PREFIX            Encrypted           Preview, Production                 26d ago    
+ IMAP_CONTRACT_UPDATE_MODE                  Encrypted           Preview, Production                 26d ago    
+ IMAP_BRANCH_ID                             Encrypted           Preview, Production                 27d ago    
+ IMAP_POLL_INTERVAL_SECONDS                 Encrypted           Preview, Production                 27d ago    
+ SMTP_HOST                                  Encrypted           Preview, Production                 27d ago    
+ SMTP_PORT                                  Encrypted           Preview, Production                 27d ago    
+ SMTP_USER                                  Encrypted           Preview, Production                 27d ago    
+ SMTP_PASSWORD                              Encrypted           Preview, Production                 27d ago    
+ OCR_LANGUAGE                               Encrypted           Preview, Production                 27d ago    
+ TESSERACT_CMD                              Encrypted           Preview, Production                 27d ago    
+ OPENAI_API_KEY                             Encrypted           Preview, Production                 27d ago    
+ OPENAI_MODEL                               Encrypted           Preview, Production                 27d ago    
+ OPENAI_OCR_ENABLED                         Encrypted           Preview, Production                 27d ago    
+ REDIS_URL                                  Encrypted           Preview, Production                 27d ago    
+ SECRET_KEY                                 Encrypted           Preview, Production                 27d ago    
+ DATA_ENCRYPTION_KEY                        Encrypted           Preview, Production                 27d ago    
+ ACCESS_TOKEN_EXPIRE_MINUTES                Encrypted           Preview, Production                 27d ago    
+ REFRESH_TOKEN_EXPIRE_MINUTES               Encrypted           Preview, Production                 27d ago    
+ JWT_ALGORITHM                              Encrypted           Preview, Production                 27d ago    
+ CORS_ORIGINS                               Encrypted           Preview, Production                 27d ago    
+ INITIAL_ADMIN_USERNAME                     Encrypted           Preview, Production                 27d ago    
+ INITIAL_ADMIN_PASSWORD                     Encrypted           Production, Preview                 27d ago    
+ INITIAL_ADMIN_FULL_NAME                    Encrypted           Preview, Production                 27d ago    
+ IMAP_HOST                                  Encrypted           Preview, Production                 27d ago    
+ IMAP_PORT                                  Encrypted           Preview, Production                 27d ago    
+ IMAP_USER                                  Encrypted           Preview, Production                 27d ago    
+ IMAP_PASSWORD                              Encrypted           Preview, Production                 27d ago    
+ IMAP_MAILBOX                               Encrypted           Preview, Production                 27d ago    
+ APP_NAME                                   Encrypted           Preview, Production                 27d ago    
+ ADMIN_PASSWORD_RESET_TOKEN                 Encrypted           Production, Preview                 27d ago    
+ API_V1_PREFIX                              Encrypted           Production, Preview                 27d ago    
+ FILE_STORAGE_PATH                          Encrypted           Preview, Production                 27d ago    
+ DATABASE_URL                               Encrypted           Production, Preview                 27d ago    
+ VITE_API_URL                               Encrypted           Production, Preview, Development    28d ago    
+
+Common next commands:
+- `vercel env add`
+- `vercel env rm`
+- `vercel env pull`
