@@ -166,7 +166,11 @@ def _merge_duplicate_group(db: Session, rows: list[Trainee]) -> tuple[int, int]:
             merged += 1
         _transfer_memberships(db, keeper, duplicate)
         _transfer_performance(db, keeper, duplicate)
-        db.delete(duplicate)
+        # Delete the duplicate row with a bulk query after related rows have been
+        # reassigned. ORM-level delete may try to null child FKs on loaded
+        # relationships before the flush, which breaks the NOT NULL membership FK.
+        db.flush()
+        db.query(Trainee).filter(Trainee.id == duplicate.id).delete(synchronize_session=False)
         removed += 1
     db.add(keeper)
     return removed, merged

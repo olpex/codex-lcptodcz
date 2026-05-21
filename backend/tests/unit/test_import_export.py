@@ -880,6 +880,49 @@ def test_deduplicate_trainees_keeps_most_complete_group_record_and_removes_spars
     assert cipher.decrypt(remaining.passport_number_encrypted) == "937755"
 
 
+def test_deduplicate_trainees_keeps_memberships_attached_to_keeper(db_session):
+    keeper = Trainee(
+        branch_id="main",
+        first_name="Ольга Юріївна",
+        last_name="Врублевська",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        status="active",
+    )
+    duplicate = Trainee(
+        branch_id="main",
+        first_name="Ольга Юріївна",
+        last_name="Врублевська",
+        birth_date=datetime(1988, 5, 4).date(),
+        group_code="90-26",
+        tax_id_encrypted=cipher.encrypt("3226619663"),
+        contract_number="1826",
+        status="active",
+    )
+    group = Group(branch_id="main", code="90-26", name="Журнал 90-26", status="active")
+    db_session.add_all([keeper, duplicate, group])
+    db_session.flush()
+    db_session.add(
+        GroupMembership(
+            group_id=group.id,
+            trainee_id=duplicate.id,
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    result = deduplicate_trainees(db_session, "main", commit=True)
+
+    assert result["duplicate_groups"] == 1
+    assert result["removed_count"] == 1
+    remaining = db_session.query(Trainee).filter(Trainee.is_deleted.is_(False)).one()
+    memberships = db_session.query(GroupMembership).all()
+    assert len(memberships) == 1
+    assert memberships[0].trainee_id == remaining.id
+    assert remaining.contract_number == "1826"
+
+
 def test_import_skip_existing_mode_does_not_update_duplicate(tmp_path: Path, db_session):
     db_session.add(
         Trainee(
