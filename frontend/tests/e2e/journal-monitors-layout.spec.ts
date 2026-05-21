@@ -599,9 +599,9 @@ test("journal monitor refreshes daily activity without workload auto-processing"
   await expect(page.getByText("50-26 Auto refreshed journal")).toBeVisible();
 });
 
-test("journal monitor page refresh keeps backlog moving without re-syncing Drive", async ({ page }) => {
+test("journal monitor page refresh keeps backlog and Drive activity moving", async ({ page }) => {
   let backgroundCalls = 0;
-  let syncCalls = 0;
+  let backgroundTickUrl: URL | null = null;
   const processingSection = {
     ...section,
     workload_auto_enabled: true,
@@ -614,35 +614,12 @@ test("journal monitor page refresh keeps backlog moving without re-syncing Drive
       changed: []
     }
   };
-  const auditedSection = {
-    ...processingSection,
-    daily_activity: {
-      ...processingSection.daily_activity,
-      changed_count: 1,
-      changed: [
-        {
-          id: 51,
-          drive_file_id: "drive-auto-changed",
-          drive_url: "https://drive.google.com/drive/folders/drive-auto-changed",
-          journal_name: "51-26 Auto audited journal",
-          group_code: "51-26",
-          created_at: "2026-05-12T09:01:00Z",
-          change_started_at: "2026-05-13T09:15:00Z",
-          modified_at: "2026-05-13T09:20:00Z"
-        }
-      ]
-    }
-  };
-
   await loginAndMockJournals(page, {
     sections: [{ ...processingSection, entries: [] }],
     detailSection: processingSection,
-    onBackgroundTick: () => {
+    onBackgroundTick: (url) => {
       backgroundCalls += 1;
-    },
-    onSync: () => {
-      syncCalls += 1;
-      return auditedSection;
+      backgroundTickUrl = url;
     }
   });
 
@@ -652,7 +629,7 @@ test("journal monitor page refresh keeps backlog moving without re-syncing Drive
   await page.evaluate(() => window.dispatchEvent(new Event("suptc:page-refresh")));
 
   await expect.poll(() => backgroundCalls).toBe(1);
-  await expect.poll(() => syncCalls).toBe(0);
+  await expect.poll(() => backgroundTickUrl?.searchParams.get("sync")).toBe("true");
 });
 
 test("journal monitor opens the current-year section by default", async ({ page }) => {

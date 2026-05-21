@@ -624,7 +624,7 @@ export function JournalMonitorsPage() {
     const sectionId = selectedId || selectedSection?.id;
     if (!sectionId || !sectionActive) return;
     await runBackgroundStep(sectionId, Number(workloadYear), {
-      sync: false,
+      sync: true,
       workloadLimit: 1,
       traineesLimit: 1
     });
@@ -635,8 +635,8 @@ export function JournalMonitorsPage() {
       try {
         const result = await runBackgroundStep(queued.sectionId, queued.year, {
           sync: true,
-          workloadLimit: 20,
-          traineesLimit: 20,
+          workloadLimit: 1,
+          traineesLimit: 1,
           showErrorToast: true
         });
         if (result === "completed") {
@@ -662,8 +662,8 @@ export function JournalMonitorsPage() {
     try {
       const result = await runBackgroundStep(sectionId, Number(workloadYear), {
         sync: true,
-        workloadLimit: 20,
-        traineesLimit: 20,
+        workloadLimit: 1,
+        traineesLimit: 1,
         showErrorToast: true
       });
       if (result === "busy") {
