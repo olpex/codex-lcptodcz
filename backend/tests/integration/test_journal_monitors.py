@@ -2384,6 +2384,59 @@ def test_background_step_retries_transient_postgres_deadlock_during_drive_sync(d
     assert section.last_sync_status == "success"
 
 
+def test_background_step_marks_sync_busy_after_repeated_postgres_deadlock(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Р–СѓСЂРЅР°Р»Рё 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+        last_sync_status="failed",
+        last_sync_message="old deadlock detected",
+    )
+    db_session.add(section)
+    db_session.commit()
+    attempts = 0
+
+    class DeadlockOrig:
+        pgcode = "40P01"
+
+    def always_deadlocked_sync(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise OperationalError(
+            "UPDATE journal_monitor_entries SET drive_created_at=%s, last_seen_at=%s WHERE journal_monitor_entries.id = %s",
+            {},
+            DeadlockOrig(),
+        )
+
+    monkeypatch.setattr(journal_monitor, "sync_journal_monitor_section", always_deadlocked_sync)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: {"processed": 0, "failed": 0, "skipped_year": 0},
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: {"processed": 0, "no_data": 0, "failed": 0},
+    )
+
+    result = journal_monitor.process_journal_monitor_background_step(
+        db_session,
+        section,
+        sync_before=True,
+        workload_limit=1,
+        trainees_limit=1,
+    )
+
+    assert attempts == 2
+    assert "sync_warning" not in result
+    assert section.last_sync_status == "busy"
+    assert "база даних зайнята" in (section.last_sync_message or "")
+
+
 def test_section_step_locks_section_before_processing(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",
@@ -3364,6 +3417,38 @@ def test_journal_monitor_sync_retries_transient_postgres_deadlock(client, auth_h
     assert attempts == 2
     assert sync_response.json()["last_sync_status"] == "success"
     assert "DeadlockDetected" not in (sync_response.json()["last_sync_message"] or "")
+
+
+def test_journal_monitor_sync_marks_busy_after_repeated_postgres_deadlock(client, auth_headers, db_session, monkeypatch):
+    create_response = client.post(
+        "/api/v1/journal-monitors",
+        json={"name": "Р–СѓСЂРЅР°Р»Рё 2026", "folder_url": "https://drive.google.com/drive/folders/root-folder"},
+        headers=auth_headers,
+    )
+    assert create_response.status_code == 201
+    section_id = create_response.json()["id"]
+    attempts = 0
+
+    class DeadlockOrig:
+        pgcode = "40P01"
+
+    def always_deadlocked_sync(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise OperationalError(
+            "UPDATE journal_monitor_entries SET drive_created_at=%s, last_seen_at=%s WHERE journal_monitor_entries.id = %s",
+            {},
+            DeadlockOrig(),
+        )
+
+    monkeypatch.setattr(journal_monitor_routes, "sync_journal_monitor_section", always_deadlocked_sync)
+
+    sync_response = client.post(f"/api/v1/journal-monitors/{section_id}/sync", headers=auth_headers)
+
+    assert sync_response.status_code == 200
+    assert attempts == 2
+    assert sync_response.json()["last_sync_status"] == "busy"
+    assert "база даних зайнята" in (sync_response.json()["last_sync_message"] or "")
 
 
 def test_journal_monitor_exports_csv(client, auth_headers, db_session, monkeypatch):

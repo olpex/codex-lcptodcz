@@ -35,6 +35,7 @@ GOOGLE_DRIVE_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordproc
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 _POSTGRES_TRANSIENT_LOCK_ERROR_CODES = {"40P01", "40001", "55P03"}
+TRANSIENT_SYNC_LOCK_MESSAGE = "Синхронізацію Drive тимчасово відкладено: база даних зайнята. Спробуйте оновити ще раз за хвилину."
 SERVICE_ACCOUNT_SETUP_MESSAGE = (
     "Для приватної Google Drive папки надайте доступ Editor для email service account "
     "suptc-drive-journal-monitor@gen-lang-client-0242013668.iam.gserviceaccount.com "
@@ -384,6 +385,11 @@ def _is_transient_postgres_lock_error(exc: BaseException) -> bool:
         return True
     message = f"{orig or ''} {exc}".casefold()
     return "deadlock detected" in message or "could not serialize access" in message or "lock not available" in message
+
+
+def _mark_sync_temporarily_busy(section: JournalMonitorSection) -> None:
+    section.last_sync_status = "busy"
+    section.last_sync_message = _clip_monitor_message(TRANSIENT_SYNC_LOCK_MESSAGE)
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -2636,6 +2642,7 @@ def process_journal_monitor_background_step(
         section = locked_section
     section_id = section.id
     sync_warning: str | None = None
+    sync_deferred = False
     retry_failed = False
     priority_entry_ids = set(_section_priority_entry_ids(section))
     if sync_before and not priority_entry_ids:
@@ -2660,6 +2667,12 @@ def process_journal_monitor_background_step(
                     raise
                 if attempt == 0 and _is_transient_postgres_lock_error(exc):
                     continue
+                if _is_transient_postgres_lock_error(exc):
+                    _mark_sync_temporarily_busy(section)
+                    sync_deferred = True
+                    db.add(section)
+                    db.flush()
+                    break
                 sync_warning = f"Синхронізацію Drive пропущено: {exc}"
                 section.last_sync_status = "failed"
                 section.last_sync_message = _clip_monitor_message(sync_warning)
@@ -2717,9 +2730,10 @@ def process_journal_monitor_background_step(
         f"педнавантаження {workload_result['processed']}/{workload_result['failed']}, "
         f"слухачі {trainees_result['processed']}/{trainees_result['no_data']}/{trainees_result['failed']}"
     )
-    section.last_sync_message = _clip_monitor_message(
-        f"{sync_warning}; {processing_message}" if sync_warning else processing_message
-    )
+    if not sync_deferred:
+        section.last_sync_message = _clip_monitor_message(
+            f"{sync_warning}; {processing_message}" if sync_warning else processing_message
+        )
     if priority_entry_ids:
         entry_map = {entry.id: entry for entry in section.entries if entry.id is not None}
         remaining_ids = [

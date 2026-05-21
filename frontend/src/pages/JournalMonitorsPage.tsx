@@ -209,10 +209,27 @@ function hasDailyActivity(section: JournalMonitorSection): boolean {
   return Boolean(activity && (activity.created_count > 0 || activity.changed_count > 0));
 }
 
+function isTransientDatabaseSyncMessage(message: string | null | undefined): boolean {
+  const normalized = (message || "").toLowerCase();
+  return (
+    normalized.includes("deadlock detected") ||
+    normalized.includes("deadlockdetected") ||
+    normalized.includes("could not serialize access") ||
+    normalized.includes("lock not available") ||
+    normalized.includes("база даних зайнята")
+  );
+}
+
 function getDriveStateNotice(section: JournalMonitorSection | null): { tone: "info" | "error"; text: string } | null {
   if (!section) return null;
   if ((section.priority_queue_size || 0) > 0 && section.last_processing_message) {
     return null;
+  }
+  if (section.last_sync_status === "busy" || isTransientDatabaseSyncMessage(section.last_sync_message)) {
+    return {
+      tone: "info",
+      text: "Синхронізацію Drive тимчасово відкладено: база даних зайнята. Оновіть ще раз за хвилину."
+    };
   }
   if (section.last_sync_status === "failed") {
     if (section.last_sync_message && section.last_sync_message === section.last_processing_message) {
@@ -248,6 +265,7 @@ function getProcessingStateNotice(section: JournalMonitorSection | null): { tone
 function formatSyncLifecycleStatus(status: string | null | undefined): string {
   if (status === "success") return "Синхронізація успішна";
   if (status === "failed") return "Помилка синхронізації";
+  if (status === "busy") return "Синхронізацію відкладено";
   if (status === "never") return "Ще не синхронізовано";
   return "Стан невідомий";
 }

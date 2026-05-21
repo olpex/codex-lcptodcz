@@ -27,6 +27,7 @@ from app.services.drive_intake import process_next_drive_intake_file, resolve_dr
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     _is_transient_postgres_lock_error,
+    _mark_sync_temporarily_busy,
     archive_trainees_for_deleted_journal_entries,
     delete_workload_for_journal_entries,
     extract_drive_folder_id,
@@ -540,6 +541,12 @@ def sync_section(section_id: int, db: DbSession, current_user: CurrentUser) -> J
             if attempt == 0 and _is_transient_postgres_lock_error(exc):
                 section = _get_section_or_404(db, current_user, section_id)
                 continue
+            if _is_transient_postgres_lock_error(exc):
+                section = _get_section_or_404(db, current_user, section_id)
+                _mark_sync_temporarily_busy(section)
+                db.add(section)
+                db.commit()
+                break
             section = _get_section_or_404(db, current_user, section_id)
             section.last_sync_status = "failed"
             section.last_sync_message = str(exc)[:500]
