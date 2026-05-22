@@ -429,6 +429,7 @@ export function JournalMonitorsPage() {
   const [isBulkDeletingEntries, setIsBulkDeletingEntries] = useState(false);
   const [isQueueingSelected, setIsQueueingSelected] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
+  const [driveHistoryExpanded, setDriveHistoryExpanded] = useState(true);
   const [entriesExpanded, setEntriesExpanded] = useState(false);
   const [driveEvents, setDriveEvents] = useState<JournalMonitorEvent[]>([]);
   const [isDriveEventsLoading, setIsDriveEventsLoading] = useState(false);
@@ -1310,20 +1311,34 @@ export function JournalMonitorsPage() {
 
         {detail && (
           <section className="mb-4 border-b border-slate-200 pb-4" aria-label="Історія змін Drive">
-            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-              <div>
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
                 <h3 className="font-heading text-lg font-semibold text-ink">Історія змін Drive</h3>
                 <p className="text-xs text-slate-500">Папки та журнали, які sync зафіксував у Google Drive</p>
               </div>
-              <button
-                type="button"
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-pine hover:text-pine"
-                onClick={() => loadDriveEvents()}
-                disabled={isDriveEventsLoading}
-              >
-                {isDriveEventsLoading ? "Оновлення..." : "Оновити"}
-              </button>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-pine hover:text-pine disabled:opacity-50"
+                  onClick={() => loadDriveEvents()}
+                  disabled={isDriveEventsLoading}
+                >
+                  {isDriveEventsLoading ? "Оновлення..." : "Оновити"}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pine text-lg font-bold leading-none text-white hover:bg-pine/90"
+                  onClick={() => setDriveHistoryExpanded((value) => !value)}
+                  aria-expanded={driveHistoryExpanded}
+                  aria-controls="journal-monitor-drive-history"
+                  aria-label={driveHistoryExpanded ? "Згорнути історію змін Drive" : "Розгорнути історію змін Drive"}
+                >
+                  {driveHistoryExpanded ? "−" : "+"}
+                </button>
+              </div>
             </div>
+            {driveHistoryExpanded && (
+              <div id="journal-monitor-drive-history">
             <div className="mb-3 grid gap-2 md:grid-cols-4">
               <label className="text-xs font-semibold text-slate-600">
                 З дати
@@ -1420,6 +1435,8 @@ export function JournalMonitorsPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
               </div>
             )}
           </section>
