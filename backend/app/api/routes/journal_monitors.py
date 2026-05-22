@@ -24,6 +24,7 @@ from app.schemas.api import (
 from app.services.audit import write_audit
 from app.services.cache import cache_delete, cache_get_json, cache_set_json, cache_set_json_if_absent
 from app.services.drive_intake import process_next_drive_intake_file, resolve_drive_intake_service_account_json
+from app.services.group_cache import invalidate_group_list_cache
 from app.services.journal_monitor import (
     EXPORT_FORMATS,
     _is_transient_postgres_lock_error,
@@ -44,6 +45,7 @@ from app.services.journal_monitor import (
     process_next_journal_workload,
     sync_journal_monitor_section,
 )
+from app.services.schedule_cache import invalidate_schedule_list_cache
 from app.tasks.worker import process_import_job_task
 
 router = APIRouter()
@@ -126,7 +128,7 @@ def _process_journal_monitor_auto_sections(
                 continue
             target_year = section.workload_auto_year or datetime.now(timezone.utc).year
             effective_sync_before = sync_before or not _section_has_processing_backlog(section, target_year)
-            process_journal_monitor_background_step(
+            result = process_journal_monitor_background_step(
                 db,
                 section,
                 folder_lister=list_drive_child_folders,
@@ -137,6 +139,10 @@ def _process_journal_monitor_auto_sections(
             )
             db.commit()
             _invalidate_journal_sections_cache(section_branch_id)
+            repair_report = result.get("repair") if isinstance(result, dict) else {}
+            if int(repair_report.get("deleted_stale_schedule_slots") or 0) > 0:
+                invalidate_schedule_list_cache(section_branch_id)
+                invalidate_group_list_cache(section_branch_id)
             processed_sections += 1
         except Exception as exc:
             db.rollback()
@@ -776,7 +782,7 @@ def background_tick_section_processing(
 ) -> JournalMonitorDetailResponse:
     section = _get_section_or_404(db, current_user, section_id)
     try:
-        process_journal_monitor_background_step(
+        result = process_journal_monitor_background_step(
             db,
             section,
             folder_lister=list_drive_child_folders,
@@ -793,6 +799,10 @@ def background_tick_section_processing(
         db.rollback()
         logger.exception("Journal background processing failed for section %s", section_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Не вдалося виконати фонове опрацювання журналів: {exc}") from exc
+    repair_report = result.get("repair") if isinstance(result, dict) else {}
+    if int(repair_report.get("deleted_stale_schedule_slots") or 0) > 0:
+        invalidate_schedule_list_cache(current_user.branch_id)
+        invalidate_group_list_cache(current_user.branch_id)
     db.refresh(section)
     _invalidate_journal_sections_cache(current_user.branch_id)
     return JournalMonitorDetailResponse(**section_to_response_payload(section, include_entries=True))

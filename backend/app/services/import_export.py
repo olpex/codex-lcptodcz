@@ -1211,6 +1211,71 @@ def collect_teacher_workload_summary(
     return rows
 
 
+def _repair_stale_schedule_slots_from_processed_journals(db: Session, branch_id: str) -> dict[str, Any]:
+    groups_by_code = {
+        _normalize_group_code_key(group.code): group
+        for group in db.query(Group).filter(Group.branch_id == branch_id).all()
+    }
+    processed_group_teachers: dict[int, set[int]] = defaultdict(set)
+
+    processed_rows = (
+        db.query(JournalWorkloadEntry, JournalMonitorEntry)
+        .join(JournalMonitorEntry, JournalMonitorEntry.id == JournalWorkloadEntry.journal_monitor_entry_id)
+        .filter(
+            JournalWorkloadEntry.branch_id == branch_id,
+            JournalMonitorEntry.workload_status == "processed",
+        )
+        .all()
+    )
+    for workload_row, journal_entry in processed_rows:
+        group_id = journal_entry.matched_group_id
+        if group_id is None:
+            group = groups_by_code.get(_normalize_group_code_key(journal_entry.group_code))
+            group_id = group.id if group else None
+        if group_id is None:
+            continue
+        processed_group_teachers[group_id].add(workload_row.teacher_id)
+
+    if not processed_group_teachers:
+        return {
+            "deleted_stale_schedule_slots": 0,
+            "deleted_stale_schedule_hours": 0.0,
+            "affected_schedule_groups": 0,
+        }
+
+    deleted_slots = 0
+    deleted_hours = 0.0
+    affected_groups: set[int] = set()
+
+    slots = (
+        db.query(ScheduleSlot)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .filter(
+            Group.branch_id == branch_id,
+            ScheduleSlot.group_id.in_(processed_group_teachers.keys()),
+        )
+        .all()
+    )
+    for slot in slots:
+        valid_teacher_ids = processed_group_teachers.get(slot.group_id)
+        if not valid_teacher_ids or slot.teacher_id in valid_teacher_ids:
+            continue
+        deleted_slots += 1
+        deleted_hours += float(
+            slot.academic_hours
+            if slot.academic_hours is not None
+            else max(0.0, (slot.ends_at - slot.starts_at).total_seconds() / 3600)
+        )
+        affected_groups.add(slot.group_id)
+        db.delete(slot)
+
+    return {
+        "deleted_stale_schedule_slots": deleted_slots,
+        "deleted_stale_schedule_hours": round(deleted_hours, 2),
+        "affected_schedule_groups": len(affected_groups),
+    }
+
+
 def reconcile_teacher_workload_sources(db: Session, branch_id: str) -> dict:
     entries = db.query(JournalMonitorEntry).filter(JournalMonitorEntry.branch_id == branch_id).all()
     entries_by_id = {entry.id: entry for entry in entries}
@@ -1244,11 +1309,13 @@ def reconcile_teacher_workload_sources(db: Session, branch_id: str) -> dict:
             db.add(entry)
             reset_entries += 1
 
+    schedule_repair = _repair_stale_schedule_slots_from_processed_journals(db, branch_id)
     db.flush()
     return {
         "deleted_stale_workload_rows": deleted_rows,
         "corrected_processed_entries": corrected_entries,
         "reset_unprocessed_entries": reset_entries,
+        **schedule_repair,
     }
 
 

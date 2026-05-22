@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Group, GroupStatus, JournalMonitorEntry, JournalMonitorEvent, JournalMonitorSection, JournalWorkloadEntry, ScheduleSlot, Teacher, Trainee
 from app.services.cache import cache_get_json, cache_set_json, hashed_cache_part
-from app.services.import_export import save_report_file, try_import_trainees
+from app.services.import_export import reconcile_teacher_workload_sources, save_report_file, try_import_trainees
 
 GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 GOOGLE_DRIVE_SHEETS_MIME = "application/vnd.google-apps.spreadsheet"
@@ -2744,6 +2744,9 @@ def process_journal_monitor_background_step(
     )
     db.flush()
     db.refresh(section)
+    repair_report = reconcile_teacher_workload_sources(db, section.branch_id)
+    db.flush()
+    db.refresh(section)
     groups_by_code, schedule_counts, trainee_counts = _group_maps(db, section.branch_id)
     for entry in section.entries:
         _refresh_entry_project_state(db, entry, groups_by_code, schedule_counts, trainee_counts)
@@ -2786,7 +2789,7 @@ def process_journal_monitor_background_step(
     db.add(section)
     db.flush()
     db.refresh(section)
-    return {"workload": workload_result, "trainees": trainees_result}
+    return {"workload": workload_result, "trainees": trainees_result, "repair": repair_report}
 
 
 def collect_export_rows(

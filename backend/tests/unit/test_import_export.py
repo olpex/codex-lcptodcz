@@ -517,6 +517,9 @@ def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entr
         "deleted_stale_workload_rows": 1,
         "corrected_processed_entries": 1,
         "reset_unprocessed_entries": 1,
+        "deleted_stale_schedule_slots": 0,
+        "deleted_stale_schedule_hours": 0.0,
+        "affected_schedule_groups": 0,
     }
     db_session.refresh(processed)
     db_session.refresh(pending)
@@ -528,6 +531,80 @@ def test_reconcile_teacher_workload_sources_removes_stale_rows_and_corrects_entr
     rows = collect_teacher_workload_summary(db_session, "main")
     assert rows[0]["total_hours"] == 14
     assert rows[0]["remaining_hours"] == 86
+
+
+def test_reconcile_teacher_workload_sources_deletes_stale_schedule_slots_for_processed_journal_group(db_session):
+    stale_teacher = Teacher(branch_id="main", first_name="Олег Леонідович", last_name="Паращук", annual_load_hours=100, is_active=True)
+    current_teacher = Teacher(branch_id="main", first_name="Світлана Зіновіївна", last_name="Паращук", annual_load_hours=100, is_active=True)
+    group = Group(branch_id="main", code="94-26", name="Група 94-26", status="active")
+    subject = Subject(branch_id="main", name="Предмет 94-26", hours_total=30)
+    room = Room(branch_id="main", name="Аудиторія 94-26", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([stale_teacher, current_teacher, group, subject, room, section])
+    db_session.flush()
+
+    entry = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-94-26",
+        journal_name="94-26 Журнал",
+        group_code="94-26",
+        matched_group_id=group.id,
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=30,
+    )
+    db_session.add(entry)
+    db_session.flush()
+
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=stale_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(minutes=95),
+                academic_hours=30.0,
+                pair_number=1,
+            ),
+            ScheduleSlot(
+                group_id=group.id,
+                teacher_id=current_teacher.id,
+                subject_id=subject.id,
+                room_id=room.id,
+                starts_at=starts_at + timedelta(days=1),
+                ends_at=starts_at + timedelta(days=1, minutes=95),
+                academic_hours=30.0,
+                pair_number=1,
+            ),
+            JournalWorkloadEntry(
+                journal_monitor_entry_id=entry.id,
+                branch_id="main",
+                teacher_id=current_teacher.id,
+                subject_name="Предмет 94-26",
+                hours=30,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    report = reconcile_teacher_workload_sources(db_session, "main")
+    db_session.commit()
+
+    assert report["deleted_stale_schedule_slots"] == 1
+    assert report["deleted_stale_schedule_hours"] == 30.0
+    assert report["affected_schedule_groups"] == 1
+    slots = db_session.query(ScheduleSlot).filter(ScheduleSlot.group_id == group.id).all()
+    assert len(slots) == 1
+    assert slots[0].teacher_id == current_teacher.id
 
 
 def test_group_export_rows_include_existing_groups_and_teacher_hours(db_session):

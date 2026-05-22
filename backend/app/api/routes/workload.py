@@ -12,7 +12,9 @@ from app.api.deps import CurrentUser, DbSession, require_roles
 from app.models import JournalWorkloadEntry, RoleName, ScheduleSlot, Teacher
 from app.schemas.api import TeacherMergeRequest, TeacherMergeResponse, WorkloadResponse
 from app.services.audit import write_audit
+from app.services.group_cache import invalidate_group_list_cache
 from app.services.import_export import collect_teacher_workload_summary, reconcile_teacher_workload_sources
+from app.services.schedule_cache import invalidate_schedule_list_cache
 
 router = APIRouter()
 
@@ -58,6 +60,9 @@ def reconcile_workload(
 ) -> dict:
     report = reconcile_teacher_workload_sources(db, current_user.branch_id)
     db.commit()
+    if int(report.get("deleted_stale_schedule_slots") or 0) > 0:
+        invalidate_schedule_list_cache(current_user.branch_id)
+        invalidate_group_list_cache(current_user.branch_id)
     rows = collect_teacher_workload_summary(db, current_user.branch_id, date_from=date_from, date_to=date_to)
     total_hours = round(sum(float(row["total_hours"] or 0) for row in rows), 2)
     annual_load_hours = round(sum(float(row["annual_load_hours"] or 0) for row in rows), 2)
