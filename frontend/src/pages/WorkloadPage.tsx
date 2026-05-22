@@ -10,6 +10,7 @@ import type { Workload, Job, TeacherMergeResult } from "../types/api";
 import { usePageRefresh } from "../hooks/usePageRefresh";
 
 const STATS_HISTORY_LIMIT = 12;
+const WORKLOAD_AUTO_REFRESH_STORAGE_KEY = "suptc:workload:auto-refresh";
 
 type WorkloadSnapshot = {
   teachers: number;
@@ -60,6 +61,7 @@ export function WorkloadPage() {
   const [isReconciling, setIsReconciling] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statsHistory, setStatsHistory] = useState<WorkloadSnapshot[]>([]);
+  const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem(WORKLOAD_AUTO_REFRESH_STORAGE_KEY) !== "false");
   const canEditAnnualLoad =
     user?.roles.some((role) => role.name === "admin" || role.name === "methodist") ?? false;
 
@@ -162,8 +164,12 @@ export function WorkloadPage() {
     load();
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem(WORKLOAD_AUTO_REFRESH_STORAGE_KEY, autoRefresh ? "true" : "false");
+  }, [autoRefresh]);
+
   usePageRefresh(() => load(), {
-    enabled: savingTeacherId === null && !isDeleting && !isExporting,
+    enabled: autoRefresh && savingTeacherId === null && !isDeleting && !isExporting,
     intervalMs: 30_000
   });
 
@@ -641,12 +647,21 @@ export function WorkloadPage() {
           </button>
           <button
             type="button"
+            data-testid="workload-refresh"
             className="rounded-lg bg-amber px-4 py-2 font-semibold text-ink disabled:opacity-50"
             onClick={() => load()}
             disabled={isLoading}
           >
             {isLoading ? "Оновлюємо..." : "Оновити"}
           </button>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(event) => setAutoRefresh(event.target.checked)}
+            />
+            Автооновлення
+          </label>
           {canEditAnnualLoad && (
             <button
               type="button"
