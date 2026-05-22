@@ -218,6 +218,67 @@ def test_teacher_workload_summary_does_not_double_count_journal_hours_for_schedu
     ]
 
 
+def test_teacher_workload_summary_prefers_processed_journal_over_stale_schedule_teacher(db_session):
+    stale_teacher = Teacher(branch_id="main", first_name="Олег Леонідович", last_name="Паращук", is_active=True)
+    current_teacher = Teacher(branch_id="main", first_name="Світлана Зіновіївна", last_name="Паращук", is_active=True)
+    group = Group(branch_id="main", code="94-26", name="Група 94-26", status="active")
+    subject = Subject(branch_id="main", name="Предмет 94-26", hours_total=30)
+    room = Room(branch_id="main", name="Аудиторія 94-26", capacity=20)
+    section = JournalMonitorSection(
+        branch_id="main",
+        name="Журнали 2026",
+        folder_url="https://drive.google.com/drive/folders/root",
+        folder_id="root",
+    )
+    db_session.add_all([stale_teacher, current_teacher, group, subject, room, section])
+    db_session.flush()
+    journal = JournalMonitorEntry(
+        section_id=section.id,
+        branch_id="main",
+        drive_file_id="journal-94-26",
+        journal_name="94-26 Журнал",
+        group_code="94-26",
+        workload_status="processed",
+        workload_year=2026,
+        workload_hours=30,
+    )
+    db_session.add(journal)
+    db_session.flush()
+
+    starts_at = datetime(2026, 4, 1, 9, 30, tzinfo=timezone.utc)
+    db_session.add(
+        ScheduleSlot(
+            group_id=group.id,
+            teacher_id=stale_teacher.id,
+            subject_id=subject.id,
+            room_id=room.id,
+            starts_at=starts_at,
+            ends_at=starts_at + timedelta(minutes=95),
+            academic_hours=30.0,
+            pair_number=1,
+        )
+    )
+    db_session.add(
+        JournalWorkloadEntry(
+            journal_monitor_entry_id=journal.id,
+            branch_id="main",
+            teacher_id=current_teacher.id,
+            subject_name="Предмет 94-26",
+            hours=30,
+        )
+    )
+    db_session.commit()
+
+    rows = {row["teacher_name"]: row for row in collect_teacher_workload_summary(db_session, "main")}
+
+    assert rows["Паращук Олег Леонідович"]["total_hours"] == 0
+    assert rows["Паращук Олег Леонідович"]["groups"] == []
+    assert rows["Паращук Світлана Зіновіївна"]["total_hours"] == 30
+    assert rows["Паращук Світлана Зіновіївна"]["groups"] == [
+        {"group_code": "94-26", "group_name": "Група 94-26", "hours": 30.0},
+    ]
+
+
 def test_teacher_workload_export_uses_card_summary_group_breakdown(db_session):
     teacher = Teacher(
         branch_id="main",

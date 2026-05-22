@@ -1105,43 +1105,15 @@ def collect_teacher_workload_summary(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[dict]:
+    groups_by_code = {
+        _normalize_group_code_key(group.code): group
+        for group in db.query(Group).filter(Group.branch_id == branch_id).all()
+    }
     teachers = (
         db.query(Teacher)
         .filter(Teacher.branch_id == branch_id, Teacher.is_active.is_(True))
         .all()
     )
-    query = (
-        db.query(ScheduleSlot)
-        .join(Group, Group.id == ScheduleSlot.group_id)
-        .filter(Group.branch_id == branch_id)
-    )
-    if date_from:
-        query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
-    if date_to:
-        query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, datetime.max.time(), tzinfo=timezone.utc))
-    slots = query.all()
-
-    totals: dict[int, float] = {}
-    group_totals: dict[int, dict[str, dict]] = defaultdict(dict)
-    scheduled_group_codes: set[str] = set()
-    for slot in slots:
-        totals.setdefault(slot.teacher_id, 0.0)
-        if slot.academic_hours is not None:
-            hours = float(slot.academic_hours)
-        else:
-            hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
-        totals[slot.teacher_id] += hours
-        group = slot.group
-        group_code = group.code if group else "Без групи"
-        normalized_group_code = _normalize_group_code_key(group_code)
-        if normalized_group_code:
-            scheduled_group_codes.add(normalized_group_code)
-        bucket = group_totals[slot.teacher_id].setdefault(
-            group_code,
-            {"group_code": group_code, "group_name": group.name if group else "", "hours": 0.0},
-        )
-        bucket["hours"] += hours
-
     journal_query = (
         db.query(JournalWorkloadEntry)
         .join(JournalMonitorEntry, JournalMonitorEntry.id == JournalWorkloadEntry.journal_monitor_entry_id)
@@ -1158,15 +1130,54 @@ def collect_teacher_workload_summary(
             JournalMonitorEntry.workload_year >= start_year,
             JournalMonitorEntry.workload_year <= end_year,
         )
-    for journal_entry in journal_query.all():
+    journal_rows = journal_query.all()
+    processed_journal_group_codes = {
+        _normalize_group_code_key(journal.journal_entry.group_code if journal.journal_entry else None)
+        for journal in journal_rows
+        if _normalize_group_code_key(journal.journal_entry.group_code if journal.journal_entry else None)
+    }
+
+    query = (
+        db.query(ScheduleSlot)
+        .join(Group, Group.id == ScheduleSlot.group_id)
+        .filter(Group.branch_id == branch_id)
+    )
+    if date_from:
+        query = query.filter(ScheduleSlot.starts_at >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
+    if date_to:
+        query = query.filter(ScheduleSlot.starts_at <= datetime.combine(date_to, datetime.max.time(), tzinfo=timezone.utc))
+    slots = query.all()
+
+    totals: dict[int, float] = {}
+    group_totals: dict[int, dict[str, dict]] = defaultdict(dict)
+    for slot in slots:
+        totals.setdefault(slot.teacher_id, 0.0)
+        if slot.academic_hours is not None:
+            hours = float(slot.academic_hours)
+        else:
+            hours = (slot.ends_at - slot.starts_at).total_seconds() / 3600
+        group = slot.group
+        group_code = group.code if group else "Без групи"
+        normalized_group_code = _normalize_group_code_key(group_code)
+        if normalized_group_code in processed_journal_group_codes:
+            continue
+        totals[slot.teacher_id] += hours
+        bucket = group_totals[slot.teacher_id].setdefault(
+            group_code,
+            {"group_code": group_code, "group_name": group.name if group else "", "hours": 0.0},
+        )
+        bucket["hours"] += hours
+
+    for journal_entry in journal_rows:
         totals.setdefault(journal_entry.teacher_id, 0.0)
         hours = float(journal_entry.hours or 0)
         journal = journal_entry.journal_entry
         group_code = journal.group_code if journal and journal.group_code else (journal.journal_name if journal else "Журнал")
-        if _normalize_group_code_key(group_code) in scheduled_group_codes:
-            continue
         totals[journal_entry.teacher_id] += hours
         group_name = journal.journal_name if journal else group_code
+        canonical_group = groups_by_code.get(_normalize_group_code_key(group_code))
+        if canonical_group is not None:
+            group_name = canonical_group.name
         bucket = group_totals[journal_entry.teacher_id].setdefault(
             group_code,
             {"group_code": group_code, "group_name": group_name, "hours": 0.0},
