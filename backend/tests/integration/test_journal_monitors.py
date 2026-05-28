@@ -2494,6 +2494,122 @@ def test_background_step_marks_sync_busy_after_repeated_postgres_deadlock(db_ses
     assert "база даних зайнята" in (section.last_sync_message or "")
 
 
+def test_background_step_syncs_drive_even_when_existing_backlog_is_pending(db_session, monkeypatch):
+    section = journal_monitor.JournalMonitorSection(
+        branch_id="main",
+        name="Journals 2026",
+        folder_url="https://drive.google.com/drive/folders/root-folder",
+        folder_id="root-folder",
+        workload_auto_enabled=True,
+        workload_auto_year=2026,
+    )
+    db_session.add(section)
+    db_session.flush()
+    db_session.add(
+        journal_monitor.JournalMonitorEntry(
+            section_id=section.id,
+            branch_id="main",
+            drive_file_id="old-sheet",
+            drive_folder_id="old-folder",
+            drive_url="https://drive.google.com/file/d/old-sheet/view",
+            journal_name="10-26 Existing journal",
+            group_code="10-26",
+            workload_status="pending",
+            trainees_status="processed",
+        )
+    )
+    db_session.commit()
+
+    folder_calls = 0
+
+    def drive_folders(_folder_id, service_account_json=None):
+        nonlocal folder_calls
+        folder_calls += 1
+        return [
+            {
+                "id": "old-folder",
+                "name": "10-26 Existing journal",
+                "url": "https://drive.google.com/drive/folders/old-folder",
+                "created_time": "2026-05-20T06:00:00Z",
+                "modified_time": "2026-05-20T06:00:00Z",
+            },
+            {
+                "id": "new-folder-102",
+                "name": "102-26 Technologies",
+                "url": "https://drive.google.com/drive/folders/new-folder-102",
+                "created_time": "2026-05-28T12:21:00Z",
+                "modified_time": "2026-05-28T12:21:00Z",
+            },
+        ]
+
+    def workbook_files(folder_id, service_account_json=None):
+        if folder_id == "old-folder":
+            return [
+                {
+                    "id": "old-sheet",
+                    "name": "10-26 Existing journal",
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "webViewLink": "https://drive.google.com/file/d/old-sheet/view",
+                    "createdTime": "2026-05-20T06:00:00Z",
+                    "modifiedTime": "2026-05-20T06:00:00Z",
+                }
+            ]
+        return [
+            {
+                "id": "new-sheet-102",
+                "name": "102-26 Technologies",
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "webViewLink": "https://drive.google.com/file/d/new-sheet-102/view",
+                "createdTime": "2026-05-28T12:21:00Z",
+                "modifiedTime": "2026-05-28T12:21:00Z",
+            }
+        ]
+
+    monkeypatch.setattr(journal_monitor, "list_drive_journal_workbook_files", workbook_files, raising=False)
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_next_journal_workload",
+        lambda *args, **kwargs: {"processed": 0, "failed": 0, "skipped_year": 0},
+    )
+    monkeypatch.setattr(
+        journal_monitor,
+        "process_journal_trainees_for_section",
+        lambda *args, **kwargs: {"processed": 0, "no_data": 0, "failed": 0},
+    )
+
+    result = journal_monitor.process_journal_monitor_background_step(
+        db_session,
+        section,
+        folder_lister=drive_folders,
+        target_year=2026,
+        sync_before=True,
+        workload_limit=1,
+        trainees_limit=1,
+    )
+
+    db_session.expire_all()
+    entries = {
+        entry.drive_file_id: entry
+        for entry in db_session.query(journal_monitor.JournalMonitorEntry)
+        .filter(journal_monitor.JournalMonitorEntry.section_id == section.id)
+        .all()
+    }
+    created_event = (
+        db_session.query(journal_monitor.JournalMonitorEvent)
+        .filter(
+            journal_monitor.JournalMonitorEvent.section_id == section.id,
+            journal_monitor.JournalMonitorEvent.drive_file_id == "new-sheet-102",
+            journal_monitor.JournalMonitorEvent.action == "created",
+        )
+        .one_or_none()
+    )
+
+    assert folder_calls == 1
+    assert result["workload"] == {"processed": 0, "failed": 0, "skipped_year": 0}
+    assert entries["new-sheet-102"].group_code == "102-26"
+    assert created_event is not None
+
+
 def test_section_step_locks_section_before_processing(db_session, monkeypatch):
     section = journal_monitor.JournalMonitorSection(
         branch_id="main",

@@ -2652,22 +2652,7 @@ def process_journal_monitor_background_step(
     sync_deferred = False
     retry_failed = False
     priority_entry_ids = set(_section_priority_entry_ids(section))
-    initial_target_year = (
-        section.priority_queue_year
-        if priority_entry_ids
-        else (target_year if target_year is not None else section.workload_auto_year)
-    )
-    has_actionable_backlog = (
-        _next_background_journal_entry(
-            db,
-            section,
-            initial_target_year,
-            entry_ids=priority_entry_ids or None,
-            retry_failed=bool(priority_entry_ids),
-        )
-        is not None
-    )
-    if sync_before and not priority_entry_ids and not has_actionable_backlog:
+    if sync_before and not priority_entry_ids:
         for attempt in range(2):
             try:
                 section = sync_journal_monitor_section(
